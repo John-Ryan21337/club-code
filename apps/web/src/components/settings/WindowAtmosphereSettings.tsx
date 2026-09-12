@@ -225,23 +225,31 @@ export function WindowAtmosphereSettings() {
         <>
           <SettingsRow
             title="Matrix color mode"
-            description="Rainbow Extra gives every falling stream its own deterministic color phase."
-            control={
+            description="Extra gives each stream its own color phase. Music uses approved local playback or explicitly shared audio. Quiet or unavailable audio keeps the fixed color."
+            children={
               <RadioGroup
                 value={settings.fallingEffectMatrixColorMode}
                 onValueChange={(value) => {
-                  if (value === "fixed" || value === "rainbow" || value === "rainbow-extra") {
+                  if (
+                    value === "fixed" ||
+                    value === "rainbow" ||
+                    value === "rainbow-extra" ||
+                    value === "music-reactive" ||
+                    value === "music-reactive-extra"
+                  ) {
                     updateSettings({ fallingEffectMatrixColorMode: value });
                   }
                 }}
                 aria-label="Matrix color mode"
-                className="flex-row flex-wrap gap-4"
+                className="mt-3 flex-row flex-wrap gap-4 pb-3.5"
               >
                 {(
                   [
                     ["fixed", "Fixed"],
                     ["rainbow", "Rainbow"],
                     ["rainbow-extra", "Rainbow Extra"],
+                    ["music-reactive", "Music"],
+                    ["music-reactive-extra", "Music Extra"],
                   ] as const
                 ).map(([value, label]) => (
                   <label

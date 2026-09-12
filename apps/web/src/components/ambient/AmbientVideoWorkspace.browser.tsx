@@ -17,20 +17,29 @@ const fixture = vi.hoisted(() => ({
   artwork: vi.fn(async () => null),
 }));
 vi.mock("../../hooks/useSettings", () => ({
-  useSettings: () =>
-    useSyncExternalStore(
+  getClientSettings: () => fixture.settings,
+  useSettings: <T,>(selector?: (settings: UnifiedSettings) => T) => {
+    const settings = useSyncExternalStore(
       (listener) => {
         fixture.listeners.add(listener);
         return () => fixture.listeners.delete(listener);
       },
       () => fixture.settings,
-    ),
+    );
+    return selector ? selector(settings) : settings;
+  },
   useUpdateSettings: () => ({
     updateSettings: (patch: Partial<UnifiedSettings>) => {
       fixture.settings = { ...fixture.settings, ...patch };
       for (const listener of fixture.listeners) listener();
     },
   }),
+}));
+vi.mock("../../hooks/clientSettingsState", () => ({
+  subscribeClientSettingsSnapshot: (listener: () => void) => {
+    fixture.listeners.add(listener);
+    return () => fixture.listeners.delete(listener);
+  },
 }));
 vi.mock("../../ambientVideoGlow", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../ambientVideoGlow")>()),

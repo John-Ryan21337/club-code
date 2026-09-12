@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { MAX_ATMOSPHERE_CANVAS_PIXELS } from "../windowAtmosphere";
+import { localMediaAudioSignalStore } from "../localMediaAudioSignal";
 import { WindowAtmosphere } from "./WindowAtmosphere";
 
 const testState = vi.hoisted(() => ({
@@ -321,6 +322,43 @@ describe("WindowAtmosphere", () => {
     expect(context.clearRect).toHaveBeenCalled();
 
     await screen.unmount();
+  });
+
+  it("uses the fixed static color when reduced motion precedes audio publisher cleanup", async () => {
+    testState.settings = {
+      ...testState.settings!,
+      fallingEffectMatrixColorMode: "music-reactive",
+      fallingEffectColor: "#123456",
+    };
+    const owner = {};
+    localMediaAudioSignalStore.claim(owner);
+    const clock = vi.spyOn(performance, "now").mockReturnValue(1_000);
+    const screen = await render(<WindowAtmosphere />);
+    try {
+      localMediaAudioSignalStore.publish(
+        owner,
+        { level: 0.7, bass: 0.5, mid: 0.3, treble: 0.2, beat: 0.1 },
+        1_000,
+      );
+      const frame = Array.from(frames.values())[0]!;
+      frames.clear();
+      frame(1_000);
+      expect(context.fillStyle).toMatch(/^hsl\(/);
+
+      // The atmosphere's listener can run before the publisher sees the same
+      // preference change. Its static frame must not retain this live sample.
+      reducedMotion = true;
+      mediaChange?.();
+      expect(localMediaAudioSignalStore.getSnapshot().active).toBe(true);
+      expect(context.fillStyle).toBe("#123456");
+      expect(frames.size).toBe(0);
+      localMediaAudioSignalStore.release(owner);
+      expect(context.fillStyle).toBe("#123456");
+    } finally {
+      localMediaAudioSignalStore.release(owner);
+      clock.mockRestore();
+      await screen.unmount();
+    }
   });
 
   it("falls back to finite viewport dimensions for invalid layout measurements", async () => {

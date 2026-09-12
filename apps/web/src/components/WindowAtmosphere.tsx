@@ -6,6 +6,11 @@ import { MatrixGpuFrameCollector } from "../matrixGpuFrameCollector";
 import { createMatrixWebGl2Renderer, type MatrixWebGl2Renderer } from "../matrixWebGlRenderer";
 import { useServerConfig } from "../rpc/serverState";
 import {
+  EMPTY_LOCAL_MEDIA_AUDIO_SIGNAL,
+  localMediaAudioSignalStore,
+} from "../localMediaAudioSignal";
+import { createMatrixAudioColorState } from "../matrixAudioColor";
+import {
   advanceAtmosphereSceneInPlace,
   createAtmosphereScene,
   createSeededRandom,
@@ -184,6 +189,7 @@ export function WindowAtmosphere() {
     let animationFrame: number | null = null;
     let resizeFrame: number | null = null;
     let lastFrameTime: number | null = null;
+    const audioColorState = createMatrixAudioColorState();
 
     // One policy source for both the animation loop and an out-of-band repaint.
     const atmosphereState = () => ({
@@ -277,6 +283,12 @@ export function WindowAtmosphere() {
               resolvedTheme === "dark",
               timestamp,
               matrixColorCycleSpeed,
+              // A static reduced-motion frame can precede publisher cleanup.
+              // Resolve its fixed fallback here without relying on listener order.
+              reducedMotion.matches
+                ? EMPTY_LOCAL_MEDIA_AUDIO_SIGNAL
+                : localMediaAudioSignalStore.getSnapshot(),
+              audioColorState,
             )
           : undefined;
       const color =

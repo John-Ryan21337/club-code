@@ -2,6 +2,9 @@ import { ShuffleIcon, SkipBackIcon, SkipForwardIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { cn } from "../../lib/utils";
+import { getClientSettings, useSettings } from "../../hooks/useSettings";
+import { subscribeClientSettingsSnapshot } from "../../hooks/clientSettingsState";
+import { getServerConfig, onServerConfigUpdated, useServerConfig } from "../../rpc/serverState";
 import {
   DEFAULT_LOCAL_MEDIA_VISUALIZER_SETTINGS,
   LocalMediaAudioVisualizerController,
@@ -11,6 +14,21 @@ import {
 } from "../../localMediaAudioVisualizer";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+
+function matrixAudioRequested(): boolean {
+  try {
+    const settings = getClientSettings();
+    return (
+      getServerConfig()?.ambientExperienceCapabilities.atmosphere === true &&
+      settings.fallingEffectsEnabled &&
+      settings.fallingEffectKind === "matrix" &&
+      (settings.fallingEffectMatrixColorMode === "music-reactive" ||
+        settings.fallingEffectMatrixColorMode === "music-reactive-extra")
+    );
+  } catch {
+    return false;
+  }
+}
 
 export interface LocalMediaAudioVisualizerProps {
   readonly enabled: boolean;
@@ -73,6 +91,10 @@ function LocalMediaAudioVisualizerSession({
     "Play media to start the visualizer.",
   );
   const controllerRef = useRef<LocalMediaAudioVisualizerController | null>(null);
+  const musicMode = useSettings((settings) => settings.fallingEffectMatrixColorMode);
+  const atmosphereEnabled = useSettings((settings) => settings.fallingEffectsEnabled);
+  const atmosphereKind = useSettings((settings) => settings.fallingEffectKind);
+  const atmosphereAvailable = useServerConfig()?.ambientExperienceCapabilities.atmosphere === true;
   const enabledRef = useRef(enabled);
   const settingsRef = useRef({
     style,
@@ -132,7 +154,12 @@ function LocalMediaAudioVisualizerSession({
           autoCycle: settings.autoCycle,
           cycleSeconds: settings.cycleSeconds,
           blendSeconds: settings.blendSeconds,
-          publishMatrixSignal: false,
+          publishMatrixSignal: shouldVisualizeLocalMedia({
+            enabled: matrixAudioRequested(),
+            reducedMotion: motionQuery.matches,
+            visible: document.visibilityState === "visible",
+            focused: document.hasFocus(),
+          }),
           onMilkdropState: (state) => {
             if (disposed) return;
             setMilkdropState(state);
@@ -171,6 +198,8 @@ function LocalMediaAudioVisualizerSession({
     window.addEventListener("blur", sync);
     window.addEventListener("resize", sync);
     motionQuery.addEventListener("change", sync);
+    const releaseSettings = subscribeClientSettingsSnapshot(sync);
+    const releaseConfig = onServerConfigUpdated(sync);
     resizeObserver?.observe(spectrumCanvas);
     resizeObserver?.observe(milkdropCanvas);
     scheduleInitialSync();
@@ -195,6 +224,8 @@ function LocalMediaAudioVisualizerSession({
       window.removeEventListener("blur", sync);
       window.removeEventListener("resize", sync);
       motionQuery.removeEventListener("change", sync);
+      releaseSettings();
+      releaseConfig();
       resizeObserver?.disconnect();
       setMilkdropState(IDLE_MILKDROP_STATE);
       void controller.destroy();
@@ -203,7 +234,18 @@ function LocalMediaAudioVisualizerSession({
 
   useEffect(() => {
     syncRef.current();
-  }, [autoCycle, blendSeconds, cycleSeconds, enabled, presetName, style]);
+  }, [
+    autoCycle,
+    blendSeconds,
+    cycleSeconds,
+    enabled,
+    presetName,
+    style,
+    musicMode,
+    atmosphereEnabled,
+    atmosphereKind,
+    atmosphereAvailable,
+  ]);
 
   const navigate = (operation: "next" | "previous" | "random") => {
     const controller = controllerRef.current;

@@ -29,6 +29,15 @@ import {
   type FallingEffectMatrixColorMode,
   type FallingEffectMatrixMotionMode,
 } from "@cafecode/contracts/settings";
+import {
+  EMPTY_LOCAL_MEDIA_AUDIO_SIGNAL,
+  type LocalMediaAudioSignal,
+} from "./localMediaAudioSignal";
+import {
+  createMatrixAudioColorState,
+  resolveMatrixAudioColor,
+  type MatrixAudioColorState,
+} from "./matrixAudioColor";
 
 export const MAX_ATMOSPHERE_DPR = 2;
 /** Keep the backing canvas bounded even on an ultra-wide high-DPI display. */
@@ -589,10 +598,8 @@ function hslColor(hue: number, saturation: number, lightness: number): string {
 /**
  * Resolves one Matrix frame palette from the atmosphere's existing clock.
  *
- * This adoption slice ships the fixed and rainbow palettes only. Club Code's
- * music-reactive palettes depend on an approved local-media audio analyser that
- * this base does not provide, so no music mode is offered here rather than
- * exposing a control with no live signal behind it.
+ * Music modes consume only the supplied fresh approved audio sample. Missing
+ * samples retain the fixed color; this function never acquires audio.
  */
 export function resolveMatrixAtmosphereColorFrame(
   mode: FallingEffectMatrixColorMode,
@@ -600,10 +607,23 @@ export function resolveMatrixAtmosphereColorFrame(
   darkTheme: boolean,
   timestamp: number,
   requestedColorCycleSpeed = DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  signal: LocalMediaAudioSignal = EMPTY_LOCAL_MEDIA_AUDIO_SIGNAL,
+  audioState: MatrixAudioColorState = createMatrixAudioColorState(),
 ): MatrixColorFrame {
   const fallback = resolveAtmosphereColor("matrix", configuredColor, darkTheme);
   const safeTimestamp = Number.isFinite(timestamp) ? Math.max(0, timestamp) : 0;
   const colorCycleSpeed = clampMatrixColorCycleSpeed(requestedColorCycleSpeed);
+  if (mode === "music-reactive" || mode === "music-reactive-extra") {
+    return resolveMatrixAudioColor(
+      fallback,
+      darkTheme,
+      safeTimestamp,
+      signal,
+      audioState,
+      colorCycleSpeed,
+      mode === "music-reactive-extra",
+    );
+  }
   if (mode === "fixed") {
     return { color: fallback, perStream: false, baseHue: null, saturation: null, lightness: null };
   }
