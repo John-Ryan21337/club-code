@@ -143,6 +143,10 @@ SQLite snapshot comparison: [Club #118](https://github.com/John-Ryan21337/club-c
 
 日本語：Club #118 は表示 #114 を前提とし、検索 #116 とは兄弟の差分です。省略・マスキングがなく、型付き主キー情報が対応する表示を比較し、今回のみ・前回のみの行と表示文字列の変化を最大 40 件示します。任意の 10 秒更新は既定でオフで、非表示やフォーカスがない間は休止します。合成 SQLite・認証済み RPC・ブラウザーで検査しました。表示の差であり、追加・削除の監査ログではありません。アプリケーション全体の状態データベースへのアクセスは別です。
 
+Operational application state: [Club #119](https://github.com/John-Ryan21337/club-code/pull/119), `80705e08`, is based on #118. Explicit reads expose only fixed counter/date fields from `usage_stats_days` and known projector status from `projection_state`. Each read checks current owner authority and a backend-observed loopback peer before and after the worker; a local proxy can forward a remote browser, so this is not local-client attestation. Synthetic SQLite, authenticated RPC and browser checks passed. No polling, comparison, arbitrary SQL or raw forensic state dump is included; full raw-state parity is intentionally excluded.
+
+日本語：Club #119 は #118 を前提とし、`usage_stats_days` の固定カウンター・日付と、`projection_state` の既知の投影処理状態だけを明示的に読みます。処理の前後で現在の所有者権限と、バックエンドが観測したループバック接続を確認します。ローカルプロキシは遠隔ブラウザーを中継できるため、元のクライアントがローカルである証明ではありません。合成 SQLite・認証済み RPC・ブラウザーで検査しました。定期更新・比較・任意 SQL・フォレンジック用の生データ全体は含みません。状態全体の生データへの同等アクセスは意図的に対象外です。
+
 ## Browser adoption order
 
 1. [Cafe #63](https://github.com/cafeai/cafe-code/pull/63) defines bounded contracts;
@@ -203,13 +207,13 @@ The following remain separate from the published ports above:
 - Claude console interpretation is now #106. Codex still requires a verified containment boundary before it can be called supported.
 - Routed live work vocabulary is #105, optional cat AA/kana enrichment is #108, the fixed provider-observation producer is #110, and the activity overlay is #113. [Cafe issue #102](https://github.com/cafeai/cafe-code/issues/102) links both activity slices. Historical Club fork #4/#7/#18 proposed pieces on older lineages; neither those proposals nor individually green sibling PRs establish combined console/privacy/profile integration.
 - The bundled visualizer engine is #109, local-player activation is #112, the native current-frame capture grant is #111, renderer capture controls are #115, and Matrix music colors are #117. Combining shared capture with music colors and the other sibling atmosphere features remains separate integration work. Synthetic capture checks do not qualify live service audio or every operating system.
-- Project SQLite previews are #114 on the file-only observatory Cafe #94, with bounded explicit discovery in #116 and snapshot comparison/refresh in #118. Owner-scoped global application-state database access remains separate. Cafe intentionally retired its diff viewer and worker-pool caller in `a4d4e3768e38f9c967f4715a4a4e9cbdc5c66992`; a pool-only transplant would be inert, and a diff-viewer return needs its own product proposal. Any further enrichment or collaboration claim needs concrete production-caller and existing-PR reconciliation.
+- Project SQLite previews are #114 on the file-only observatory Cafe #94, with bounded explicit discovery in #116, snapshot comparison/refresh in #118, and owner-scoped operational application-state fields in #119. Full raw forensic state access is intentionally excluded. Cafe intentionally retired its diff viewer and worker-pool caller in `a4d4e3768e38f9c967f4715a4a4e9cbdc5c66992`; a pool-only transplant would be inert, and a diff-viewer return needs its own product proposal. Any further enrichment or collaboration claim needs concrete production-caller and existing-PR reconciliation.
 
 日本語：Club の全実装機能が現行 dev 向け PR になったという主張ではありません。
 公開 YouTube 検索・ローカル所有者のアカウント接続・Claude によるコンソール解釈・選択スレッドの作業語彙は、上の新しいドラフトにあります。
 永続的なアカウントライブラリや Google への実接続を確認したという意味ではありません。
 猫AA装飾は #108、固定の活動分類は #110、活動表示は #113、描画エンジンは #109、ローカルプレーヤーでの有効化は #112、フレーム音声取得のネイティブ基盤は #111、取得操作は #115、Matrix の音楽反応色は #117 として公開済みです。共有音声・音楽反応色・他の兄弟機能の統合は別です。合成検査は実サービスの音声や全 OS の取得を保証しません。
-アプリケーション全体の状態データベースなどには、別の移植・確認作業が残っています。選択プロジェクトの SQLite 表示は #114、上限付きの明示的な検索は #116、スナップショット比較・更新は #118 として公開済みです。
+選択プロジェクトの SQLite 表示は #114、上限付きの明示的な検索は #116、スナップショット比較・更新は #118、所有者向けの運用状態の項目は #119 として公開済みです。フォレンジック用の状態全体の生データへのアクセスは意図的に対象外です。
 古い系統の提案が存在しても、現行 dev で統合済みとは扱いません。Codex の解釈機能には、
 安全な実行制限の確認が必要です。
 
