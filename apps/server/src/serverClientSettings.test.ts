@@ -5,10 +5,12 @@ import {
   MAX_SIDEBAR_STAR_SPEED,
 } from "@cafecode/contracts";
 import { assert, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
@@ -134,6 +136,47 @@ it.layer(NodeServices.layer)("server client settings", (it) => {
       if (event._tag === "Some") {
         assert.equal(event.value.brandWordmarkPrefix, "Streamed");
       }
+    }).pipe(Effect.provide(makeServerClientSettingsLayer())),
+  );
+
+  it.effect("holds settings writes while a reference lock is open", () =>
+    Effect.gen(function* () {
+      const service = yield* ServerClientSettingsService;
+      yield* service.start;
+
+      const opened = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const order = yield* Ref.make<ReadonlyArray<string>>([]);
+
+      // This is the property the ambient image delete guard and startup
+      // maintenance both rest on: no settings write can land between reading a
+      // reference set and acting on it.
+      const holder = yield* Effect.forkScoped(
+        service.withReferenceLock(() =>
+          Effect.gen(function* () {
+            yield* Deferred.succeed(opened, undefined);
+            yield* Deferred.await(release);
+            yield* Ref.update(order, (entries) => [...entries, "lock-released"]);
+          }),
+        ),
+      );
+      yield* Deferred.await(opened);
+
+      const writer = yield* Effect.forkScoped(
+        service
+          .updateSettings({ brandWordmarkPrefix: "Locked" })
+          .pipe(Effect.tap(() => Ref.update(order, (entries) => [...entries, "write-applied"]))),
+      );
+      // Give the writer every chance to run ahead of the lock holder.
+      for (let attempt = 0; attempt < 20; attempt++) yield* Effect.yieldNow;
+      assert.deepStrictEqual(yield* Ref.get(order), []);
+
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(holder);
+      yield* Fiber.join(writer);
+
+      assert.deepStrictEqual(yield* Ref.get(order), ["lock-released", "write-applied"]);
+      assert.equal((yield* service.getSettings).brandWordmarkPrefix, "Locked");
     }).pipe(Effect.provide(makeServerClientSettingsLayer())),
   );
 });

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { lstat, opendir } from "node:fs/promises";
 
 import {
   MAX_AMBIENT_IMAGE_DIMENSION,
@@ -7,11 +8,13 @@ import {
   type AmbientImageAsset,
   type AmbientImageMimeType,
 } from "@cafecode/contracts/settings";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Random from "effect/Random";
 import * as Semaphore from "effect/Semaphore";
@@ -32,6 +35,24 @@ const AMBIENT_IMAGE_SUBDIR = "ambient-media/images";
  */
 export const MAX_AMBIENT_IMAGE_PROFILE_BYTES = 160 * 1024 * 1024;
 const MAX_AMBIENT_IMAGE_PROFILE_ASSETS = 256;
+/**
+ * Startup maintenance bounds.
+ *
+ * The grace period is the whole safety argument for deleting bytes nothing
+ * references: an upload writes the file before the renderer can save the
+ * settings document that points at it, and a folder replacement writes a whole
+ * cycle before one settings write adopts it. Any file younger than the grace
+ * period may simply be a reference that has not landed yet, so maintenance
+ * never looks at it. A crashed upload's bytes become reclaimable a day later,
+ * which is the entire point of the feature and is not time-critical.
+ */
+export const AMBIENT_IMAGE_ORPHAN_GRACE_PERIOD_MS = 24 * 60 * 60 * 1000;
+/** Owned-asset names examined per run, so one run cannot walk an unbounded directory. */
+export const AMBIENT_IMAGE_SWEEP_MAX_CANDIDATES = 256;
+/** All entries, including foreign files, count toward the directory-read budget. */
+export const AMBIENT_IMAGE_SWEEP_MAX_SCANNED = 512;
+/** Deletions attempted per run. Recovery is deliberately incremental across restarts. */
+export const AMBIENT_IMAGE_SWEEP_MAX_DELETIONS = 32;
 const AMBIENT_IMAGE_ID_PATTERN = /^sha256-[a-f0-9]{64}\.(?:gif|jpe?g|png|webp)$/;
 const MAX_GIF_FRAMES = 240;
 const MAX_GIF_CUMULATIVE_PIXELS = 64_000_000;
@@ -72,6 +93,47 @@ export interface StoredAmbientImage {
   readonly mimeType: AmbientImageMimeType;
 }
 
+/** Why each examined owned-asset name was kept. Everything here is a retention. */
+export interface AmbientImageSweepRetentionCounts {
+  /** The name is not a minted id, or the entry is not a plain owned file. */
+  readonly foreign: number;
+  /** Younger than the grace period, or carrying an unusable modification time. */
+  readonly withinGrace: number;
+  /** The locked settings snapshot still points at it. */
+  readonly referenced: number;
+  /** A probe or unlink failed. The bytes are kept; the run continues. */
+  readonly failed: number;
+}
+
+export interface AmbientImageSweepResult {
+  /** Directory entries examined, including foreign names. */
+  readonly scanned: number;
+  /** Minted-id entries examined. Bounded by `maxCandidates`. */
+  readonly candidates: number;
+  readonly removed: number;
+  readonly reclaimedBytes: number;
+  readonly retained: AmbientImageSweepRetentionCounts;
+  readonly stoppedBecause: "scan-complete" | "scan-limit" | "candidate-limit" | "deletion-limit";
+}
+
+export interface AmbientImageSweepInput {
+  /**
+   * Ids the settings document references. The caller must read this from a
+   * snapshot it is holding still (see `ServerClientSettings.withReferenceLock`);
+   * the store deliberately cannot read settings itself, so there is no way for
+   * a sweep to run against a reference set that may already be stale.
+   */
+  readonly referencedIds: ReadonlySet<string>;
+  /** Epoch milliseconds. Defaults to the ambient clock. */
+  readonly now?: number;
+  /** Test seam. Clamped to at least zero; production uses the constant. */
+  readonly gracePeriodMs?: number;
+  /** Clamped down to `AMBIENT_IMAGE_SWEEP_MAX_CANDIDATES`; never up. */
+  readonly maxCandidates?: number;
+  /** Clamped down to `AMBIENT_IMAGE_SWEEP_MAX_DELETIONS`; never up. */
+  readonly maxDeletions?: number;
+}
+
 export interface AmbientImageStoreShape {
   readonly storeUploadedImage: (input: {
     readonly bytes: Uint8Array;
@@ -80,6 +142,20 @@ export interface AmbientImageStoreShape {
   readonly resolveStoredImage: (id: string) => Effect.Effect<StoredAmbientImage, AmbientImageError>;
   /** Removal is only exposed through the HTTP route after a settings-reference check. */
   readonly removeStoredImage: (id: string) => Effect.Effect<void, AmbientImageError>;
+  /**
+   * Bounded recovery of owned bytes nothing references.
+   *
+   * This does not decide *when* it is safe to run. The caller supplies a
+   * reference set it is holding still and is responsible for the ordering and
+   * the lock; see `apps/server/src/ambientMedia/AmbientImageMaintenance.ts`.
+   *
+   * Every failure mode retains bytes. A directory that cannot be listed, an
+   * entry that cannot be probed, and an unlink that fails all leave the asset
+   * in place and the rest of the run intact.
+   */
+  readonly sweepUnreferencedImages: (
+    input: AmbientImageSweepInput,
+  ) => Effect.Effect<AmbientImageSweepResult, AmbientImageError>;
 }
 
 export class AmbientImageStore extends Context.Service<AmbientImageStore, AmbientImageStoreShape>()(
@@ -369,6 +445,47 @@ function normalizeMime(value: string | undefined): AmbientImageMimeType | null {
     : null;
 }
 
+/**
+ * Clamp a caller-supplied bound down to the compiled-in maximum.
+ *
+ * A caller may only ask for *less* work than the bound. A missing or
+ * nonsensical value falls back to the maximum rather than to "unbounded".
+ */
+const clampBound = (requested: number | undefined, maximum: number): number => {
+  if (requested === undefined || !Number.isFinite(requested)) return maximum;
+  return Math.min(maximum, Math.max(0, Math.floor(requested)));
+};
+
+/**
+ * Effect's portable `FileSystem` has no `lstat`, and its `stat` follows links.
+ * Maintenance must never read the type, size or modification time of whatever
+ * a link points at: a link dropped into the profile directory under a minted
+ * name would otherwise be aged against a foreign file's timestamp and counted
+ * as reclaimed quota it never occupied. Windows junctions and directory
+ * symlinks report as `isSymbolicLink()` here too, so both are refused.
+ */
+const probeOwnedFile = (filePath: string) =>
+  Effect.tryPromise({
+    try: () => lstat(filePath),
+    catch: (cause) => cause,
+  });
+
+const readBoundedImageDirectory = (directory: string) =>
+  Effect.tryPromise({
+    try: async () => {
+      const entries: string[] = [];
+      // The async iterator closes its handle on normal completion and early return.
+      for await (const entry of await opendir(directory, { bufferSize: 32 })) {
+        if (entries.length === AMBIENT_IMAGE_SWEEP_MAX_SCANNED) {
+          return { entries: entries.sort(), truncated: true };
+        }
+        entries.push(entry.name);
+      }
+      return { entries: entries.sort(), truncated: false };
+    },
+    catch: (cause) => cause,
+  });
+
 function makeStore() {
   return Effect.gen(function* () {
     const config = yield* ServerConfig;
@@ -541,6 +658,131 @@ function makeStore() {
             );
           }),
         ),
+      sweepUnreferencedImages: (input) =>
+        mutationSemaphore
+          .withPermits(1)(
+            Effect.gen(function* () {
+              const now = input.now ?? (yield* Clock.currentTimeMillis);
+              const gracePeriodMs =
+                input.gracePeriodMs === undefined || !Number.isFinite(input.gracePeriodMs)
+                  ? AMBIENT_IMAGE_ORPHAN_GRACE_PERIOD_MS
+                  : Math.max(0, Math.floor(input.gracePeriodMs));
+              const maxCandidates = clampBound(
+                input.maxCandidates,
+                AMBIENT_IMAGE_SWEEP_MAX_CANDIDATES,
+              );
+              const maxDeletions = clampBound(
+                input.maxDeletions,
+                AMBIENT_IMAGE_SWEEP_MAX_DELETIONS,
+              );
+
+              let scanned = 0;
+              let candidates = 0;
+              let removed = 0;
+              let deletionAttempts = 0;
+              let reclaimedBytes = 0;
+              let foreign = 0;
+              let withinGrace = 0;
+              let referenced = 0;
+              let failed = 0;
+              let stoppedBecause: AmbientImageSweepResult["stoppedBecause"] = "scan-complete";
+              const result = (): AmbientImageSweepResult => ({
+                scanned,
+                candidates,
+                removed,
+                reclaimedBytes,
+                retained: { foreign, withinGrace, referenced, failed },
+                stoppedBecause,
+              });
+
+              if (!Number.isFinite(now)) {
+                return yield* new AmbientImageError({
+                  code: "storage-failed",
+                  status: 500,
+                  message: "Ambient image maintenance clock is unusable.",
+                });
+              }
+
+              // A directory that cannot be listed produces a no-op run. There is
+              // no path from a failed read to a deletion.
+              const listed = yield* readBoundedImageDirectory(directory).pipe(Effect.option);
+              if (Option.isNone(listed)) return result();
+              if (listed.value.truncated) stoppedBecause = "scan-limit";
+
+              for (const entry of listed.value.entries) {
+                if (!AMBIENT_IMAGE_ID_PATTERN.test(entry)) {
+                  // Anything the store did not mint belongs to somebody else.
+                  scanned += 1;
+                  foreign += 1;
+                  continue;
+                }
+                if (candidates >= maxCandidates) {
+                  stoppedBecause = "candidate-limit";
+                  break;
+                }
+                scanned += 1;
+                candidates += 1;
+
+                const filePath = resolvePath(entry);
+                const probed = yield* probeOwnedFile(filePath).pipe(Effect.option);
+                if (Option.isNone(probed)) {
+                  failed += 1;
+                  continue;
+                }
+                const info = probed.value;
+                if (!info.isFile()) {
+                  foreign += 1;
+                  continue;
+                }
+                const mtimeMs = info.mtimeMs;
+                // A missing, unparseable or future modification time is not
+                // evidence of age, so it is not evidence of an orphan either.
+                if (!Number.isFinite(mtimeMs) || mtimeMs > now || now - mtimeMs < gracePeriodMs) {
+                  withinGrace += 1;
+                  continue;
+                }
+                if (input.referencedIds.has(entry)) {
+                  referenced += 1;
+                  continue;
+                }
+                if (deletionAttempts >= maxDeletions) {
+                  stoppedBecause = "deletion-limit";
+                  break;
+                }
+
+                const sizeBytes = Number.isFinite(info.size) ? info.size : 0;
+                deletionAttempts += 1;
+                // Uninterruptible: an interrupt arriving mid-unlink must not let
+                // the caller's lock be released while the syscall is still in
+                // flight. Interruption is observed on the next iteration, so a
+                // cancelled run stops starting deletions instead of abandoning
+                // one that is already running.
+                const unlinked = yield* Effect.uninterruptible(
+                  fs.remove(filePath, { force: true }),
+                ).pipe(Effect.option);
+                if (Option.isNone(unlinked)) {
+                  failed += 1;
+                  continue;
+                }
+                removed += 1;
+                reclaimedBytes += sizeBytes;
+              }
+
+              return result();
+            }),
+          )
+          .pipe(
+            Effect.mapError((cause) =>
+              cause instanceof AmbientImageError
+                ? cause
+                : new AmbientImageError({
+                    code: "storage-failed",
+                    status: 500,
+                    message: "Ambient image maintenance could not run.",
+                    cause,
+                  }),
+            ),
+          ),
     } satisfies AmbientImageStoreShape;
   });
 }

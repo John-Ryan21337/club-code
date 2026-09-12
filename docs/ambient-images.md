@@ -173,6 +173,11 @@ instead of dropping the count on the floor and looking clean.
 6. `apps/web/src/components/settings/AmbientImageSettings.tsx` mounted inside the
    existing Ambiance settings page — upload, library, folder picker, removal,
    cycling and presentation controls.
+7. `apps/server/src/ambientMedia/AmbientImageMaintenance.ts` +
+   `ServerClientSettings.withReferenceLock` — bounded startup orphan recovery
+   and the atomic delete guard. Documented separately in
+   [ambient-image-maintenance.md](ambient-image-maintenance.md); it depends only
+   on steps 1–3 and adds no renderer surface.
 
 ## Tested behavior
 
@@ -244,19 +249,24 @@ media, not coverage: it is off the test path and asserts nothing.
 
 ## Honest limitations
 
-- **Orphaned bytes are still possible, and nothing rediscovers them.** Pruning
-  is best-effort and scoped to the ids one mutation replaces, and it only runs
-  while the renderer is alive to run it. Bytes are left behind if Cafe or the
-  tab dies between an upload and its settings write, or between a settings write
-  and the follow-up DELETE, or if the DELETE fails for a reason a retry would
-  not fix. Nothing sweeps them later, so they occupy the profile's 256-asset /
-  160 MiB quota until a mutation happens to replace them — and once that quota
-  is reached, further uploads are refused. The failure paths now _report_ the
-  situation instead of hiding it, which is not the same as fixing it. The
-  upstream store had a bounded startup sweep; it is deliberately not ported
-  here, because nothing in Cafe currently calls it and wiring it is a separate
-  slice with its own safety argument (it must key off the settings document and
-  must not race an in-flight upload). **Follow-up: startup orphan sweep.**
+- **Orphaned bytes are recovered at startup, bounded, and not immediately.**
+  Renderer pruning is still best-effort and scoped to the ids one mutation
+  replaces, and it only runs while the renderer is alive to run it. Bytes are
+  still left behind if Cafe or the tab dies between an upload and its settings
+  write, or between a settings write and the follow-up DELETE, or if the DELETE
+  fails for a reason a retry would not fix. Those bytes are now reclaimed by a
+  bounded startup pass — at most 32 deletions and 256 owned-asset candidates per
+  server start, and only for store-minted files that are at least 24 hours old
+  and unreferenced by the locked settings document. See
+  [ambient-image-maintenance.md](ambient-image-maintenance.md) for the ordering
+  argument, the lock order, the failure policy and the remaining limits, which
+  include a portable TOCTOU race against a hostile local process and an `unlink`
+  that never returns. Recovery is incremental by design: a profile holding
+  hundreds of orphans clears over several restarts, not on the next one.
+- **The DELETE reference guard is no longer snapshot-only.** The reference check
+  and the unlink now run in one critical section under the settings write
+  permit, so a concurrent settings write cannot adopt an id between the check
+  and the deletion.
 - **No renderer panel chrome.** Upstream's `AmbientImagePanel` (drag/resize,
   glow, preset placement, layout modes) is not ported; presentation is limited to
   the two modes above. The corresponding glow/layout settings keys were left out
