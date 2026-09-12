@@ -81,6 +81,15 @@ export const logWebSocketEventsFlag = Flag.boolean("log-websocket-events").pipe(
 );
 
 const EnvServerConfig = Config.all({
+  youtubeAccountConnectionEnabled: cafeCodeConfigWithDefault(
+    "CAFE_CODE_YOUTUBE_ACCOUNT_CONNECTION_ENABLED",
+    Config.boolean,
+    false,
+  ),
+  youtubeOAuthDesktopClientId: cafeCodeOptionalValueConfig(
+    "CAFE_CODE_YOUTUBE_OAUTH_DESKTOP_CLIENT_ID",
+    Config.string,
+  ),
   youtubePublicDiscoveryEnabled: cafeCodeConfigWithDefault(
     "CAFE_CODE_YOUTUBE_PUBLIC_DISCOVERY_ENABLED",
     Config.boolean,
@@ -380,6 +389,10 @@ export const resolveServerConfig = (
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
       ...(env.youtubePublicDiscoveryEnabled ? { youtubePublicDiscoveryEnabled: true } : {}),
+      ...(env.youtubeAccountConnectionEnabled ? { youtubeAccountConnectionEnabled: true } : {}),
+      ...(env.youtubeOAuthDesktopClientId
+        ? { youtubeOAuthDesktopClientId: env.youtubeOAuthDesktopClientId }
+        : {}),
       ...(env.youtubePublicDiscoveryApiKey
         ? { youtubePublicDiscoveryApiKey: env.youtubePublicDiscoveryApiKey }
         : {}),

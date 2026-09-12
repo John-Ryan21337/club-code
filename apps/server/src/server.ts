@@ -1,5 +1,10 @@
 import { YouTubePublicDiscoveryLive } from "./ambientMedia/YouTubePublicDiscovery.ts";
 import { youTubePublicDiscoveryRouteLayer } from "./ambientMedia/youtubeDiscoveryHttp.ts";
+import { YouTubeAccountConnectionLive } from "./ambientMedia/YouTubeAccountConnection.ts";
+import {
+  youTubeAccountRoutesLayer,
+  youTubeAccountTracePrivacyLayer,
+} from "./ambientMedia/youtubeAccountHttp.ts";
 import * as NodeHttp from "node:http";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -334,6 +339,7 @@ const RuntimeServicesLive = ServerRuntimeStartupLive.pipe(
 );
 
 export const makeRoutesLayer = Layer.mergeAll(
+  youTubeAccountRoutesLayer,
   youTubePublicDiscoveryRouteLayer,
   authAdminPasswordClearRouteLayer,
   authAdminPasswordSetRouteLayer,
@@ -408,7 +414,7 @@ export const makeServerLayer = Layer.unwrap(
     const serverApplicationLayer = Layer.mergeAll(
       HttpRouter.serve(makeRoutesLayer, {
         disableLogger: !config.logWebSocketEvents,
-      }),
+      }).pipe(Layer.provide(youTubeAccountTracePrivacyLayer)),
       httpListeningLayer,
       httpsSiblingLayer,
       runtimeStateLayer,
@@ -418,6 +424,12 @@ export const makeServerLayer = Layer.unwrap(
       Layer.provideMerge(RuntimeServicesLive),
       Layer.provideMerge(BrandingImageStoreLive),
       Layer.provideMerge(YouTubePublicDiscoveryLive),
+      Layer.provideMerge(
+        YouTubeAccountConnectionLive.pipe(
+          Layer.provide(AuthLayerLive),
+          Layer.provide(ExternalLauncher.layer),
+        ),
+      ),
       Layer.provideMerge(ThreadDetailSubscriptionRegistryLive),
       Layer.provideMerge(HttpServerLive),
       Layer.provide(ObservabilityLive),

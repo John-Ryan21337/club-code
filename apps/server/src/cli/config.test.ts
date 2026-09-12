@@ -91,6 +91,34 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     }),
   );
 
+  it.effect("requires a separate opt-in for the YouTube Desktop OAuth client", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "cafe-youtube-account-config-" });
+      for (const enabled of [false, true]) {
+        const resolved = yield* resolveCliAuthConfig(
+          { baseDir: Option.some(baseDir) },
+          Option.none(),
+        ).pipe(
+          Effect.provide(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: {
+                  CAFE_CODE_YOUTUBE_OAUTH_DESKTOP_CLIENT_ID: "synthetic.apps.googleusercontent.com",
+                  ...(enabled ? { CAFE_CODE_YOUTUBE_ACCOUNT_CONNECTION_ENABLED: "true" } : {}),
+                },
+              }),
+            ),
+          ),
+          Effect.provide(NetService.layer),
+        );
+        expect(resolved.youtubeAccountConnectionEnabled === true).toBe(enabled);
+        expect(resolved.youtubeOAuthDesktopClientId).toBe("synthetic.apps.googleusercontent.com");
+        expect(resolved.youtubePublicDiscoveryEnabled === true).toBe(false);
+      }
+    }),
+  );
+
   it.effect("defaults Cafe Code home to ~/.cafe-code", () =>
     Effect.gen(function* () {
       const { join } = yield* Path.Path;

@@ -3,6 +3,11 @@ import {
   YouTubePublicDiscoveryLive,
   type YouTubePublicDiscoveryShape,
 } from "./ambientMedia/YouTubePublicDiscovery.ts";
+import {
+  YouTubeAccountConnection,
+  YouTubeAccountConnectionLive,
+  type YouTubeAccountConnectionShape,
+} from "./ambientMedia/YouTubeAccountConnection.ts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -70,6 +75,8 @@ const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 import type { ServerConfigShape } from "./config.ts";
 import { deriveServerPaths, ServerConfig } from "./config.ts";
 import { makeRoutesLayer } from "./server.ts";
+import * as Tracer from "effect/Tracer";
+import { youTubeAccountTracePrivacyLayer } from "./ambientMedia/youtubeAccountHttp.ts";
 import { WebPushNotificationsTest } from "./notifications/WebPushNotifications.ts";
 import * as NodeHttpServerCompression from "./nodeHttpServerCompression.ts";
 import { resolveAttachmentRelativePath } from "./attachmentPaths.ts";
@@ -453,6 +460,7 @@ const buildAppUnderTest = (options?: {
   config?: Partial<ServerConfigShape>;
   layers?: {
     youtubeDiscovery?: YouTubePublicDiscoveryShape;
+    youtubeAccount?: YouTubeAccountConnectionShape;
     keybindings?: Partial<KeybindingsShape>;
     providerRegistry?: Partial<ProviderRegistryShape>;
     providerService?: Partial<ProviderServiceShape>;
@@ -784,9 +792,15 @@ const buildAppUnderTest = (options?: {
         ),
       ),
       Layer.provide(
-        Layer.mock(ExternalLauncher.ExternalLauncher)({
-          ...options?.layers?.externalLauncher,
-        }),
+        (options?.layers?.youtubeAccount
+          ? Layer.succeed(YouTubeAccountConnection, options.layers.youtubeAccount)
+          : YouTubeAccountConnectionLive
+        ).pipe(
+          Layer.provideMerge(
+            Layer.mock(ExternalLauncher.ExternalLauncher)({ ...options?.layers?.externalLauncher }),
+          ),
+          Layer.provideMerge(youTubeAccountTracePrivacyLayer),
+        ),
       ),
       Layer.provide(
         Layer.mock(ProcessDiagnostics.ProcessDiagnostics)({
@@ -1443,6 +1457,199 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(response.status, 401);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("keeps YouTube account access disabled by default", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const token = yield* getAuthenticatedBearerSessionToken();
+      const response = yield* HttpClient.get("/api/ambient-media/youtube/account/status", {
+        headers: { authorization: "Bearer " + token },
+      });
+      assert.equal(response.status, 503);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "restricts YouTube account actions to the direct local owner and returns only selection data",
+    () =>
+      Effect.gen(function* () {
+        const calls: string[] = [];
+        const account: YouTubeAccountConnectionShape = {
+          start: (id) =>
+            Effect.sync(() => {
+              calls.push("start:" + id);
+              return { status: "pending" as const };
+            }),
+          status: () =>
+            Effect.sync(() => {
+              calls.push("status");
+              return { status: "connected" as const };
+            }),
+          listOwnedPlaylists: () =>
+            Effect.sync(() => {
+              calls.push("playlists");
+              return [{ id: "PL1234567890", title: "Private selection", itemCount: 2 }];
+            }),
+          disconnect: () =>
+            Effect.sync(() => {
+              calls.push("disconnect");
+            }),
+          complete: () => Effect.void,
+          shutdown: () => Effect.void,
+        };
+        yield* buildAppUnderTest({
+          config: { youtubeAccountConnectionEnabled: true },
+          layers: { youtubeAccount: account },
+        });
+        assert.equal(
+          (yield* HttpClient.get("/api/ambient-media/youtube/account/status")).status,
+          401,
+        );
+        const token = yield* getAuthenticatedBearerSessionToken();
+        const headers = { authorization: "Bearer " + token, "content-type": "application/json" };
+        for (const header of [
+          "forwarded",
+          "x-forwarded-for",
+          "x-forwarded-proto",
+          "x-cafe-code-https-proxy",
+        ]) {
+          assert.equal(
+            (yield* HttpClient.get("/api/ambient-media/youtube/account/status", {
+              headers: { ...headers, [header]: "127.0.0.1" },
+            })).status,
+            403,
+          );
+        }
+        assert.equal(
+          (yield* HttpClient.post("/api/ambient-media/youtube/account/start", {
+            headers: { authorization: "Bearer " + token },
+          })).status,
+          400,
+        );
+        assert.equal(
+          (yield* HttpClient.post("/api/ambient-media/youtube/account/start", {
+            headers,
+            body: HttpBody.jsonUnsafe({ clientId: "override" }),
+          })).status,
+          400,
+        );
+        assert.equal(
+          (yield* HttpClient.get("/api/ambient-media/youtube/account/status?session=override", {
+            headers,
+          })).status,
+          400,
+        );
+        const pairing = yield* HttpClient.post("/api/auth/pairing-token", { headers });
+        const paired = (yield* pairing.json) as { credential: string };
+        const pairedHeaders = {
+          cookie: yield* getAuthenticatedSessionCookieHeader(paired.credential),
+          "content-type": "application/json",
+        };
+        for (const path of ["status", "playlists"])
+          assert.equal(
+            (yield* HttpClient.get("/api/ambient-media/youtube/account/" + path, {
+              headers: pairedHeaders,
+            })).status,
+            403,
+          );
+        assert.equal(
+          (yield* HttpClient.post("/api/ambient-media/youtube/account/start", {
+            headers: pairedHeaders,
+          })).status,
+          403,
+        );
+        assert.equal(
+          (yield* HttpClient.del("/api/ambient-media/youtube/account", { headers: pairedHeaders }))
+            .status,
+          403,
+        );
+        assert.deepEqual(calls, []);
+        const started = yield* HttpClient.post("/api/ambient-media/youtube/account/start", {
+          headers,
+        });
+        assert.equal(started.status, 202);
+        assert.deepEqual(yield* started.json, { status: "pending" });
+        const loaded = yield* HttpClient.get("/api/ambient-media/youtube/account/playlists", {
+          headers,
+        });
+        assert.equal(loaded.status, 200);
+        assert.equal(loaded.headers["cache-control"], "no-store");
+        assert.deepEqual(yield* loaded.json, {
+          playlists: [{ id: "PL1234567890", title: "Private selection", itemCount: 2 }],
+        });
+        assert.equal(
+          (yield* HttpClient.del("/api/ambient-media/youtube/account", { headers })).status,
+          204,
+        );
+        assert.equal(calls.length, 3);
+        assert.match(calls[0]!, /^start:.+/);
+        assert.notInclude(calls[0]!, token);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect(
+    "handles the private OAuth origin callback without sending its code to the development UI",
+    () =>
+      Effect.gen(function* () {
+        const serverSpans: Tracer.Span[] = [];
+        const tracer = Tracer.make({
+          span: (options) => {
+            const span = new Tracer.NativeSpan(options);
+            if (options.kind === "server") serverSpans.push(span);
+            return span;
+          },
+        });
+        const completed: Array<{ state: string; code: string }> = [];
+        yield* buildAppUnderTest({
+          config: {
+            youtubeAccountConnectionEnabled: true,
+            devUrl: new URL("http://localhost:5173"),
+          },
+          layers: {
+            youtubeAccount: {
+              start: () => Effect.succeed({ status: "pending" }),
+              status: () => Effect.succeed({ status: "disconnected" }),
+              listOwnedPlaylists: () => Effect.succeed([]),
+              disconnect: () => Effect.void,
+              shutdown: () => Effect.void,
+              complete: (input) =>
+                Effect.sync(() => {
+                  completed.push(input);
+                }),
+            },
+          },
+        }).pipe(Effect.withTracer(tracer));
+        const state = "s".repeat(43);
+        const valid = yield* HttpClient.get(
+          "/?state=" + state + "&code=private-authorization-code",
+        );
+        assert.equal(valid.status, 200);
+        assert.equal(valid.headers["location"], undefined);
+        assert.equal(valid.headers["referrer-policy"], "no-referrer");
+        assert.equal(valid.headers["cache-control"], "no-store");
+        assert.notInclude(yield* valid.text, "private-authorization-code");
+        const invalid = yield* HttpClient.get(
+          "/?state=" + state + "&state=duplicate&code=private-code",
+        );
+        assert.equal(invalid.status, 400);
+        assert.equal(invalid.headers["location"], undefined);
+        const forwarded = yield* HttpClient.get("/?state=" + state + "&code=private-code", {
+          headers: { "x-forwarded-for": "127.0.0.1" },
+        });
+        assert.equal(forwarded.status, 400);
+        assert.deepEqual(completed, [{ state, code: "private-authorization-code" }]);
+        const rootUrl = yield* getHttpServerUrl("/");
+        const ordinary = yield* Effect.promise(() => fetch(rootUrl, { redirect: "manual" }));
+        assert.equal(ordinary.status, 302);
+        assert.equal(ordinary.headers.get("location"), "http://localhost:5173/");
+        yield* Effect.yieldNow;
+        assert.isTrue(serverSpans.some((span) => span.attributes.get("url.full") === rootUrl));
+        const attributes = JSON.stringify(serverSpans.map((span) => [...span.attributes]));
+        assert.notInclude(attributes, "private-authorization-code");
+        assert.notInclude(attributes, state);
+        assert.notInclude(attributes, "private-code");
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("keeps public YouTube discovery disabled by default", () =>

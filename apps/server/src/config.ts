@@ -80,6 +80,8 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly logWebSocketEvents: boolean;
   /** Explicit server opt-in; the API key is never part of renderer settings. */
   readonly youtubePublicDiscoveryEnabled?: boolean | undefined;
+  readonly youtubeAccountConnectionEnabled?: boolean | undefined;
+  readonly youtubeOAuthDesktopClientId?: string | undefined;
   readonly youtubePublicDiscoveryApiKey?: Redacted.Redacted<string> | undefined;
   readonly providerDaemon?: ProviderDaemonClientConfig | undefined;
   readonly providerSupervisor?: ProviderDaemonClientConfig | undefined;
