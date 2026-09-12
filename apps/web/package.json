@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:browser": "vitest run --config vitest.browser.config.ts",
+    "capture:matrix": "vitest run --config vitest.matrix-capture.config.ts",
     "test:browser:install": "playwright install --with-deps chromium"
   },
   "dependencies": {
