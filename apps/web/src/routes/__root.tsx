@@ -14,6 +14,7 @@ import { QueryClient, useQueryClient } from "@tanstack/react-query";
 import { AmbianceLayer } from "../ambiance/AmbianceLayer";
 import { TaskAtriumOverlay } from "../components/atrium/TaskAtriumOverlay";
 import { APP_DISPLAY_NAME } from "../branding";
+import { IdleThreadGuardCoordinator } from "../components/IdleThreadGuardCoordinator";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
 import { InitialBackendBootstrapSurface } from "../components/InitialBackendBootstrapSurface";
@@ -166,6 +167,7 @@ function RootRouteView() {
         <AmbianceLayer />
         <PowerSaveBlockerSync />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
+        {primaryEnvironmentAuthenticated ? <IdleThreadGuardCoordinator /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
         {primaryEnvironmentAuthenticated ? <DesktopNotificationWatcher /> : null}
         {primaryEnvironmentAuthenticated ? <WebSocketConnectionCoordinator /> : null}

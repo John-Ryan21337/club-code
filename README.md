@@ -399,6 +399,8 @@ yarn test
 
 Interface language: [English, Japanese, and bilingual setup](docs/interface-language.md).
 
+Optional running-turn status requests: [Idle Thread Guard](docs/idle-thread-guard.md).
+
 ## License
 
 Cafe Code is AGPL-3.0-or-later.

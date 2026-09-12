@@ -181,6 +181,7 @@ import { resolveEffectiveEnvMode, resolveEnvironmentOptionLabel } from "./Branch
 import { ProviderStatusBanner } from "./chat/ProviderStatusBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
+import { IdleThreadGuardControl } from "./chat/IdleThreadGuardControl";
 import {
   buildLocalDraftThread,
   collectUserMessageBlobPreviewUrls,
@@ -6484,6 +6485,16 @@ export default function ChatView(props: ChatViewProps) {
             <div className="relative isolate">
               <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
               <div className="relative z-10">
+                <div className="mx-auto w-full min-w-0 max-w-208">
+                  <IdleThreadGuardControl
+                    scope={
+                      isServerThread && activeThread
+                        ? { environmentId: activeThread.environmentId, threadId: activeThread.id }
+                        : null
+                    }
+                    disabled={!isServerThread || !activeThread}
+                  />
+                </div>
                 <ChatComposer
                   composerRef={composerRef}
                   composerDraftTarget={composerDraftTarget}
