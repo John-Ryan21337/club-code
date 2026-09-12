@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { symlink } from "node:fs/promises";
 import {
   ClientSettingsPatch,
   DEFAULT_CLIENT_SETTINGS,
@@ -177,6 +178,67 @@ it.layer(NodeServices.layer)("server client settings", (it) => {
 
       assert.deepStrictEqual(yield* Ref.get(order), ["lock-released", "write-applied"]);
       assert.equal((yield* service.getSettings).brandWordmarkPrefix, "Locked");
+    }).pipe(Effect.provide(makeServerClientSettingsLayer())),
+  );
+
+  for (const [name, document] of [
+    ["malformed JSON", "{ unfinished"],
+    ["invalid settings", '{"ambientImageAsset": "not-an-asset"}'],
+  ] as const) {
+    it.effect(
+      `refuses destructive reference reads after ${name} while preserving UI defaults`,
+      () =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const config = yield* ServerConfig;
+          yield* fs.writeFileString(config.clientSettingsPath, document);
+          const service = yield* ServerClientSettingsService;
+          assert.deepEqual(yield* service.getSettings, DEFAULT_CLIENT_SETTINGS);
+          let called = false;
+          const result = yield* service
+            .withReferenceLock(() =>
+              Effect.sync(() => {
+                called = true;
+              }),
+            )
+            .pipe(Effect.exit);
+          assert.equal(result._tag, "Failure");
+          assert.isFalse(called);
+          // An explicit valid settings write restores a verified reference source.
+          yield* service.updateSettings({ brandWordmarkPrefix: "Repaired" });
+          yield* service.withReferenceLock(() =>
+            Effect.sync(() => {
+              called = true;
+            }),
+          );
+          assert.isTrue(called);
+        }).pipe(Effect.provide(makeServerClientSettingsLayer())),
+    );
+  }
+
+  it.effect("does not treat a dangling settings link as a fresh empty profile", () =>
+    Effect.gen(function* () {
+      const config = yield* ServerConfig;
+      // A directory junction needs no symlink privilege on Windows. Both host
+      // forms leave a present settings entry whose target cannot be read.
+      yield* Effect.promise(() =>
+        symlink(
+          `${config.clientSettingsPath}.missing-target`,
+          config.clientSettingsPath,
+          "junction",
+        ),
+      );
+      const service = yield* ServerClientSettingsService;
+      let called = false;
+      const result = yield* service
+        .withReferenceLock(() =>
+          Effect.sync(() => {
+            called = true;
+          }),
+        )
+        .pipe(Effect.exit);
+      assert.equal(result._tag, "Failure");
+      assert.isFalse(called);
     }).pipe(Effect.provide(makeServerClientSettingsLayer())),
   );
 });

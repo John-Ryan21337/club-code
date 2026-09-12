@@ -51,6 +51,13 @@ which takes the same single write permit as `updateSettings` and as the settings
 file watcher's revalidation. Order alone would still race the file watcher,
 which can fire at any time and is not gated by anything in the layer graph.
 
+The reference lock also requires a verified settings load or write. A malformed
+or schema-invalid document can still give the UI its normal default settings,
+but those defaults cannot authorize image deletion. An unreadable document also
+fails the reference read. A missing document in a fresh profile permits an empty
+reference set only after a no-follow file check confirms absence. A dangling
+settings link does not qualify. An explicit valid settings write restores verified references.
+
 `ServerRuntimeStartup` forks its startup phases, so placing the sweep inside one
 of them would **not** have ordered it ahead of the router. That is why this
 slice does not reuse the upstream placement. See "Divergence from upstream".
@@ -134,14 +141,15 @@ Directory enumeration reads at most 512 entries, including foreign names, using 
 Every failure mode retains bytes. There is no path from a failed read to a
 deletion.
 
-| Failure                                        | Result                                                                                                                                                    |
-| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Settings runtime fails to start                | Sweep is skipped. Nothing is deleted. Server starts.                                                                                                      |
-| Settings runtime does not become ready in 10 s | Sweep is skipped. Nothing is deleted. Shared settings startup continues; the maintenance gate releases.                                                   |
-| Profile directory cannot be listed             | No-op run. Server starts.                                                                                                                                 |
-| One entry cannot be probed                     | That entry is retained, counted in `retained.failed`, and the run continues.                                                                              |
-| One unlink fails                               | Same. The remaining assets are untouched.                                                                                                                 |
-| Sweep does not finish in 15 s                  | Startup stops waiting and the server starts. The sweep keeps the settings write permit, so ambient image reference writes stay blocked until it finishes. |
+| Failure                                                | Result                                                                                                                                                    |
+| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Settings runtime fails to start                        | Sweep is skipped. Nothing is deleted. Server starts.                                                                                                      |
+| Settings load used defaults after a malformed document | The reference lock rejects the operation. Maintenance reports failure and deletes nothing. Ordinary UI defaults remain available.                         |
+| Settings runtime does not become ready in 10 s         | Sweep is skipped. Nothing is deleted. Shared settings startup continues; the maintenance gate releases.                                                   |
+| Profile directory cannot be listed                     | No-op run. Server starts.                                                                                                                                 |
+| One entry cannot be probed                             | That entry is retained, counted in `retained.failed`, and the run continues.                                                                              |
+| One unlink fails                                       | Same. The remaining assets are untouched.                                                                                                                 |
+| Sweep does not finish in 15 s                          | Startup stops waiting and the server starts. The sweep keeps the settings write permit, so ambient image reference writes stay blocked until it finishes. |
 
 That last row is the shape the requirement asks for from both sides. A wedged
 filesystem must not hold the whole server hostage, and it must also not let

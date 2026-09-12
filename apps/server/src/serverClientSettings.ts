@@ -6,6 +6,7 @@
  * `client-settings.json` location so existing desktop customization becomes
  * the backend-owned value on first server startup.
  */
+import { lstat } from "node:fs/promises";
 import {
   ClientSettingsError,
   ClientSettingsSchema,
@@ -151,6 +152,9 @@ const makeServerClientSettings = Effect.gen(function* () {
   const changesPubSub = yield* PubSub.unbounded<ClientSettings>();
   const startedRef = yield* Ref.make(false);
   const startedDeferred = yield* Deferred.make<void, ClientSettingsError>();
+  // UI defaults after a malformed document are not evidence that no images
+  // are referenced. Destructive callers require a verified load or write.
+  const referencesVerified = yield* Ref.make(false);
   const watcherScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(watcherScope, Exit.void));
 
@@ -228,7 +232,24 @@ const makeServerClientSettings = Effect.gen(function* () {
   );
 
   const loadSettingsFromDisk = Effect.gen(function* () {
+    yield* Ref.set(referencesVerified, false);
     if (!(yield* readConfigExists)) {
+      // `exists` follows links: a dangling settings link looks absent there,
+      // but cannot establish that this is a fresh profile with no references.
+      const actuallyMissing = yield* Effect.promise(async () => {
+        try {
+          await lstat(clientSettingsPath);
+          return false;
+        } catch (cause) {
+          return (
+            typeof cause === "object" &&
+            cause !== null &&
+            "code" in cause &&
+            cause.code === "ENOENT"
+          );
+        }
+      });
+      yield* Ref.set(referencesVerified, actuallyMissing);
       return DEFAULT_CLIENT_SETTINGS;
     }
 
@@ -245,6 +266,7 @@ const makeServerClientSettings = Effect.gen(function* () {
     if (migrated !== decoded.value) {
       yield* writeSettingsAtomically(migrated);
     }
+    yield* Ref.set(referencesVerified, true);
     return migrated;
   });
 
@@ -321,7 +343,17 @@ const makeServerClientSettings = Effect.gen(function* () {
     ready: Deferred.await(startedDeferred),
     getSettings: getSettingsFromCache,
     withReferenceLock: (use) =>
-      writeSemaphore.withPermits(1)(Effect.flatMap(getSettingsFromCache, use)),
+      writeSemaphore.withPermits(1)(
+        Effect.gen(function* () {
+          const settings = yield* getSettingsFromCache;
+          if (!(yield* Ref.get(referencesVerified))) {
+            return yield* Effect.fail(
+              toSettingsError("client settings references could not be verified", undefined),
+            );
+          }
+          return yield* use(settings);
+        }),
+      ),
     updateSettings: (patch) =>
       writeSemaphore.withPermits(1)(
         Effect.gen(function* () {
@@ -332,6 +364,7 @@ const makeServerClientSettings = Effect.gen(function* () {
           const next = yield* migrateLegacySidebarBrandImage(normalized);
           yield* writeSettingsAtomically(next);
           yield* Cache.set(settingsCache, cacheKey, next);
+          yield* Ref.set(referencesVerified, true);
           yield* emitChange(next);
           return next;
         }),
