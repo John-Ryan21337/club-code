@@ -6,6 +6,7 @@ import {
   BarChart3Icon,
   BellIcon,
   BotIcon,
+  Clock3Icon,
   CloudDrizzleIcon,
   FileTextIcon,
   GitBranchIcon,
@@ -34,6 +35,7 @@ import {
 export type SettingsSectionPath =
   | "/settings/appearance"
   | "/settings/ambiance"
+  | "/settings/world-clock"
   | "/settings/chat-threads"
   | "/settings/files"
   | "/settings/general"
@@ -72,6 +74,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
         activePaths: ["/settings/general"],
       },
       { label: "Ambiance", to: "/settings/ambiance", icon: CloudDrizzleIcon },
+      { label: "World Clock", to: "/settings/world-clock", icon: Clock3Icon },
       { label: "Chat & Threads", to: "/settings/chat-threads", icon: MessageSquareIcon },
       { label: "Notifications", to: "/settings/notifications", icon: BellIcon },
       { label: "Files", to: "/settings/files", icon: FileTextIcon },

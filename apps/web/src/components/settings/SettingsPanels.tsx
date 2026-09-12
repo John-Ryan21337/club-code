@@ -411,6 +411,15 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.ambianceColor !== DEFAULT_UNIFIED_SETTINGS.ambianceColor
         ? ["Ambiance"]
         : []),
+      ...(settings.worldClockEnabled !== DEFAULT_UNIFIED_SETTINGS.worldClockEnabled ||
+      settings.worldClockStyle !== DEFAULT_UNIFIED_SETTINGS.worldClockStyle ||
+      settings.worldClockLocationIds.length !==
+        DEFAULT_UNIFIED_SETTINGS.worldClockLocationIds.length ||
+      settings.worldClockLocationIds.some(
+        (locationId, index) => locationId !== DEFAULT_UNIFIED_SETTINGS.worldClockLocationIds[index],
+      )
+        ? ["World clock"]
+        : []),
       ...(settings.appAccentColor !== DEFAULT_UNIFIED_SETTINGS.appAccentColor
         ? ["Accent color"]
         : []),

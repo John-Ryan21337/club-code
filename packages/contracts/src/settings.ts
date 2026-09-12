@@ -129,6 +129,59 @@ export const ModelPricingOverrides = Schema.Record(TrimmedNonEmptyString, ModelR
 export type ModelPricingOverrides = typeof ModelPricingOverrides.Type;
 export const DEFAULT_MODEL_PRICING_OVERRIDES: ModelPricingOverrides = {};
 
+// ── World clock (optional multi-city overlay) ──────────────────────
+//
+// A decorative, operator-controlled overlay panel that shows the current time
+// for a small set of selected cities. It is off by default, so a fresh install
+// keeps the current chrome exactly as it is today.
+//
+// These three keys are ordinary client settings, so every renderer connected to
+// one backend shows the same clock. The separate weather consent is deliberately
+// NOT a client setting: it lives only in the renderer that gave it, because it
+// authorizes an outbound third-party request from that device. See
+// `apps/web/src/worldClockWeatherConsent.ts`.
+export const WorldClockStyle = Schema.Literals(["rainbow", "nixie", "analog", "led"]);
+export type WorldClockStyle = typeof WorldClockStyle.Type;
+// Each selectable city carries an explicit IANA time zone in the renderer
+// catalog (`apps/web/src/worldClock.ts`), so daylight-saving transitions follow
+// the platform time-zone database instead of a stored UTC offset.
+export const WorldClockLocationId = Schema.Literals([
+  "tokyo",
+  "los-angeles",
+  "new-york",
+  "london",
+  "paris",
+  "berlin",
+  "seoul",
+  "singapore",
+  "sydney",
+  "honolulu",
+  "dubai",
+  "sao-paulo",
+]);
+export type WorldClockLocationId = typeof WorldClockLocationId.Type;
+// The selection is bounded at the contract boundary: the panel renders one card
+// per city and one weather request covers the whole selection, so an unbounded
+// list would grow both render cost and request size.
+export const MAX_WORLD_CLOCK_LOCATIONS = 6;
+export const WorldClockLocationIds = Schema.Array(WorldClockLocationId).check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(MAX_WORLD_CLOCK_LOCATIONS),
+  Schema.makeFilter((locationIds) =>
+    new Set(locationIds).size === locationIds.length
+      ? undefined
+      : "must not contain duplicate clock locations",
+  ),
+);
+export type WorldClockLocationIds = typeof WorldClockLocationIds.Type;
+export const DEFAULT_WORLD_CLOCK_ENABLED = false;
+export const DEFAULT_WORLD_CLOCK_STYLE: WorldClockStyle = "rainbow";
+export const DEFAULT_WORLD_CLOCK_LOCATION_IDS: WorldClockLocationIds = [
+  "tokyo",
+  "los-angeles",
+  "london",
+];
+
 // ── Ambiance (decorative weather layer) ────────────────────────────
 //
 // Purely cosmetic renderer state: an animated weather canvas drawn over the
@@ -356,6 +409,15 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   ambianceAtriumColor: TrimmedString.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIANCE_ATRIUM_COLOR)),
+  ),
+  worldClockEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORLD_CLOCK_ENABLED)),
+  ),
+  worldClockStyle: WorldClockStyle.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORLD_CLOCK_STYLE)),
+  ),
+  worldClockLocationIds: WorldClockLocationIds.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORLD_CLOCK_LOCATION_IDS)),
   ),
   dismissedTaskAtriumErrors: TaskAtriumErrorDismissals.pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
@@ -1042,6 +1104,9 @@ export const ClientSettingsPatch = Schema.Struct({
   ambianceColor: Schema.optionalKey(TrimmedString),
   ambianceAtriumEnabled: Schema.optionalKey(Schema.Boolean),
   ambianceAtriumColor: Schema.optionalKey(TrimmedString),
+  worldClockEnabled: Schema.optionalKey(Schema.Boolean),
+  worldClockStyle: Schema.optionalKey(WorldClockStyle),
+  worldClockLocationIds: Schema.optionalKey(WorldClockLocationIds),
   modelPricingOverrides: Schema.optionalKey(ModelPricingOverrides),
   dismissedTaskAtriumErrors: Schema.optionalKey(TaskAtriumErrorDismissals),
   themeAccentColor: Schema.optionalKey(TrimmedString),

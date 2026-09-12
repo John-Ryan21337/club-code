@@ -13,6 +13,7 @@ import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as PairRouteImport } from './routes/pair'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
+import { Route as SettingsWorldClockRouteImport } from './routes/settings.world-clock'
 import { Route as SettingsSystemRouteImport } from './routes/settings.system'
 import { Route as SettingsStatsRouteImport } from './routes/settings.stats'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
@@ -50,6 +51,11 @@ const ChatIndexRoute = ChatIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => ChatRoute,
+} as any)
+const SettingsWorldClockRoute = SettingsWorldClockRouteImport.update({
+  id: '/world-clock',
+  path: '/world-clock',
+  getParentRoute: () => SettingsRoute,
 } as any)
 const SettingsSystemRoute = SettingsSystemRouteImport.update({
   id: '/system',
@@ -163,6 +169,7 @@ export interface FileRoutesByFullPath {
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/stats': typeof SettingsStatsRoute
   '/settings/system': typeof SettingsSystemRoute
+  '/settings/world-clock': typeof SettingsWorldClockRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
 }
@@ -185,6 +192,7 @@ export interface FileRoutesByTo {
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/stats': typeof SettingsStatsRoute
   '/settings/system': typeof SettingsSystemRoute
+  '/settings/world-clock': typeof SettingsWorldClockRoute
   '/': typeof ChatIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
@@ -210,6 +218,7 @@ export interface FileRoutesById {
   '/settings/source-control': typeof SettingsSourceControlRoute
   '/settings/stats': typeof SettingsStatsRoute
   '/settings/system': typeof SettingsSystemRoute
+  '/settings/world-clock': typeof SettingsWorldClockRoute
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
@@ -236,6 +245,7 @@ export interface FileRouteTypes {
     | '/settings/source-control'
     | '/settings/stats'
     | '/settings/system'
+    | '/settings/world-clock'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
   fileRoutesByTo: FileRoutesByTo
@@ -258,6 +268,7 @@ export interface FileRouteTypes {
     | '/settings/source-control'
     | '/settings/stats'
     | '/settings/system'
+    | '/settings/world-clock'
     | '/'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
@@ -282,6 +293,7 @@ export interface FileRouteTypes {
     | '/settings/source-control'
     | '/settings/stats'
     | '/settings/system'
+    | '/settings/world-clock'
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
@@ -322,6 +334,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/'
       preLoaderRoute: typeof ChatIndexRouteImport
       parentRoute: typeof ChatRoute
+    }
+    '/settings/world-clock': {
+      id: '/settings/world-clock'
+      path: '/world-clock'
+      fullPath: '/settings/world-clock'
+      preLoaderRoute: typeof SettingsWorldClockRouteImport
+      parentRoute: typeof SettingsRoute
     }
     '/settings/system': {
       id: '/settings/system'
@@ -483,6 +502,7 @@ interface SettingsRouteChildren {
   SettingsSourceControlRoute: typeof SettingsSourceControlRoute
   SettingsStatsRoute: typeof SettingsStatsRoute
   SettingsSystemRoute: typeof SettingsSystemRoute
+  SettingsWorldClockRoute: typeof SettingsWorldClockRoute
 }
 
 const SettingsRouteChildren: SettingsRouteChildren = {
@@ -502,6 +522,7 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsSourceControlRoute: SettingsSourceControlRoute,
   SettingsStatsRoute: SettingsStatsRoute,
   SettingsSystemRoute: SettingsSystemRoute,
+  SettingsWorldClockRoute: SettingsWorldClockRoute,
 }
 
 const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
