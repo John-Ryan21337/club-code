@@ -1,3 +1,13 @@
+import {
+  AgentBrowserCompleteInputSchema,
+  AgentBrowserCompleteResultSchema,
+  AgentBrowserRpcError,
+  AgentBrowserGrantInputSchema,
+  AgentBrowserGrantStateSchema,
+  AgentBrowserPollResultSchema,
+  AgentBrowserRevokeInputSchema,
+  AgentBrowserSessionContextSchema,
+} from "./embeddedBrowser.ts";
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
@@ -111,6 +121,10 @@ import { UsageStatsGetResult, UsageStatsSnapshot } from "./usageStats.ts";
 import { VcsError } from "./vcs.ts";
 
 export const WS_METHODS = {
+  agentBrowserGrant: "agentBrowser.grant",
+  agentBrowserRevoke: "agentBrowser.revoke",
+  agentBrowserPoll: "agentBrowser.poll",
+  agentBrowserComplete: "agentBrowser.complete",
   providerRespondToInteraction: "provider.respondToInteraction",
   providerResolveInteractionUrl: "provider.resolveInteractionUrl",
   // Project registry methods
@@ -584,7 +598,35 @@ export const WsSubscribeUsageStatsRpc = Rpc.make(WS_METHODS.subscribeUsageStats,
   stream: true,
 });
 
+export const WsAgentBrowserGrantRpc = Rpc.make(WS_METHODS.agentBrowserGrant, {
+  payload: AgentBrowserGrantInputSchema,
+  success: AgentBrowserGrantStateSchema,
+  error: AgentBrowserRpcError,
+});
+
+export const WsAgentBrowserRevokeRpc = Rpc.make(WS_METHODS.agentBrowserRevoke, {
+  payload: AgentBrowserRevokeInputSchema,
+  success: AgentBrowserGrantStateSchema,
+  error: AgentBrowserRpcError,
+});
+
+export const WsAgentBrowserPollRpc = Rpc.make(WS_METHODS.agentBrowserPoll, {
+  payload: AgentBrowserSessionContextSchema,
+  success: AgentBrowserPollResultSchema,
+  error: AgentBrowserRpcError,
+});
+
+export const WsAgentBrowserCompleteRpc = Rpc.make(WS_METHODS.agentBrowserComplete, {
+  payload: AgentBrowserCompleteInputSchema,
+  success: AgentBrowserCompleteResultSchema,
+  error: AgentBrowserRpcError,
+});
+
 export const WsRpcGroup = RpcGroup.make(
+  WsAgentBrowserGrantRpc,
+  WsAgentBrowserRevokeRpc,
+  WsAgentBrowserPollRpc,
+  WsAgentBrowserCompleteRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerLoginProviderRpc,
