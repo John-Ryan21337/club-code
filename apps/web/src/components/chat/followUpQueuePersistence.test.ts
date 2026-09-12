@@ -9,6 +9,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import { createMemoryStorage, type StateStorage } from "../../lib/storage";
+import { recoverEphemeralBrowserDraft } from "../../embeddedBrowserChatHandoff";
 import {
   createFollowUpQueuePersistence,
   FOLLOW_UP_QUEUE_STORAGE_KEY,
@@ -20,6 +21,28 @@ import {
 const environmentA = EnvironmentId.make("environment-a");
 const environmentB = EnvironmentId.make("environment-b");
 const threadId = ThreadId.make("thread-1");
+
+it("retains a bounded browser-context suffix through queue reload for private draft restoration", async () => {
+  const storage = createMemoryStorage();
+  const queue = createFollowUpQueuePersistence(storage);
+  const queued = { ...item(), promptText: "draft\n\nEdited page context", browserContextStart: 7 };
+  expect((await queue.save(environmentA, [queued])).ok).toBe(true);
+  const loaded = createFollowUpQueuePersistence(storage).load(environmentA);
+  expect(loaded.ok).toBe(true);
+  if (!loaded.ok) return;
+  const restored = loaded.value.pending[0]!;
+  expect(recoverEphemeralBrowserDraft(restored.promptText, restored.browserContextStart)).toEqual({
+    persistedDraftPrompt: "draft",
+    ephemeralBrowserContext: "Edited page context",
+  });
+  expect(
+    (
+      await queue.save(environmentA, [
+        { ...queued, browserContextStart: queued.promptText.length + 1 },
+      ])
+    ).ok,
+  ).toBe(false);
+});
 
 function item(id = "queued-item-1", environmentId = environmentA): FollowUpQueuePersistenceItem {
   return {

@@ -17,11 +17,16 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_TOTAL_ATTACHMENT_BYTES,
 } from "@cafecode/contracts";
 import { createModelSelection, normalizeModelSlug } from "@cafecode/shared/model";
+import {
+  EMBEDDED_BROWSER_DRAFT_HANDOFF_EVENT,
+  readEmbeddedBrowserDraftHandoff,
+} from "../../embeddedBrowserChatHandoff";
 import {
   memo,
   useCallback,
@@ -350,6 +355,7 @@ export interface ChatComposerHandle {
   /** Get the current prompt/effort/model state for use in send. */
   getSendContext: () => {
     prompt: string;
+    ephemeralBrowserContext: string;
     images: ComposerImageAttachment[];
     files: ComposerFileAttachment[];
     selectedPromptEffort: string | null;
@@ -359,6 +365,8 @@ export interface ChatComposerHandle {
     selectedModel: string;
     selectedProviderModels: ReadonlyArray<ServerProvider["models"][number]>;
   };
+  clearEphemeralBrowserContext: () => void;
+  restoreEphemeralBrowserContext: (text: string) => void;
 }
 
 export interface FollowUpQueueViewItem {
@@ -1252,6 +1260,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
+  const [ephemeralBrowserContext, setEphemeralBrowserContext] = useState("");
+  useEffect(() => {
+    setEphemeralBrowserContext("");
+  }, [activeThreadId, draftId, environmentId]);
   const [composerFocusRequestRevision, setComposerFocusRequestRevision] = useState(0);
   const [postSubmitInterruptGuardActive, setPostSubmitInterruptGuardActive] = useState(false);
   // Touch capability, not viewport width: foldables and tablets can be wider
@@ -1305,11 +1317,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerSendState = useMemo(
     () =>
       deriveComposerSendState({
-        prompt,
+        prompt: `${prompt}${ephemeralBrowserContext}`,
         imageCount: composerImages.length,
         fileCount: composerFiles.length,
       }),
-    [composerImages.length, composerFiles.length, prompt],
+    [composerImages.length, composerFiles.length, prompt, ephemeralBrowserContext],
   );
   const postSubmitInterruptGuardTarget =
     routeKind === "draft"
@@ -1646,6 +1658,66 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     },
     [composerDraftTarget, addComposerDraftImages],
   );
+
+  useEffect(() => {
+    const composerForm = composerFormRef.current;
+    if (!composerForm) return;
+
+    const handleBrowserSnapshotHandoff = (event: Event) => {
+      const handoff = readEmbeddedBrowserDraftHandoff(event);
+      if (!handoff) return;
+      if (activePendingApproval || activePendingProgress || pendingUserInputs.length > 0) {
+        toastManager.add({
+          type: "warning",
+          title: "Browser snapshot not added",
+          description: "Finish the current approval or question before adding browser context.",
+        });
+        return;
+      }
+
+      const currentPrompt = promptRef.current.trimEnd();
+      const currentContext = ephemeralBrowserContext.trimEnd();
+      const separator = currentContext.length > 0 ? "\n\n" : "";
+      const availableChars =
+        PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
+        currentPrompt.length -
+        currentContext.length -
+        separator.length;
+      if (availableChars <= 0) {
+        toastManager.add({
+          type: "warning",
+          title: "Browser snapshot not added",
+          description: "The current draft is already at the message size limit.",
+        });
+        return;
+      }
+      const boundedHandoff = handoff.text.slice(0, availableChars);
+      setEphemeralBrowserContext(`${currentContext}${separator}${boundedHandoff}`);
+      handoff.accepted = true;
+      toastManager.add({
+        type: "success",
+        title: "One-time browser context added",
+        description: "Review it before sending. It is not saved with the composer draft.",
+      });
+    };
+
+    composerForm.addEventListener(
+      EMBEDDED_BROWSER_DRAFT_HANDOFF_EVENT,
+      handleBrowserSnapshotHandoff,
+    );
+    return () => {
+      composerForm.removeEventListener(
+        EMBEDDED_BROWSER_DRAFT_HANDOFF_EVENT,
+        handleBrowserSnapshotHandoff,
+      );
+    };
+  }, [
+    activePendingApproval,
+    activePendingProgress,
+    ephemeralBrowserContext,
+    pendingUserInputs.length,
+    promptRef,
+  ]);
 
   const removeComposerImageFromDraft = useCallback(
     (imageId: string) => {
@@ -2776,6 +2848,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       },
       getSendContext: () => ({
         prompt: promptRef.current,
+        ephemeralBrowserContext,
         images: composerImagesRef.current,
         files: useComposerDraftStore.getState().getComposerDraft(composerDraftTarget)?.files ?? [],
         selectedPromptEffort,
@@ -2785,11 +2858,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         selectedModel,
         selectedProviderModels,
       }),
+      clearEphemeralBrowserContext: () => setEphemeralBrowserContext(""),
+      restoreEphemeralBrowserContext: (text: string) => setEphemeralBrowserContext(text),
     }),
     [
       promptRef,
       composerImagesRef,
       composerDraftTarget,
+      ephemeralBrowserContext,
       activeThreadId,
       composerEditorDisabled,
       composerFocusRequestRevision,
@@ -2832,6 +2908,42 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       className="mx-auto w-full min-w-0 max-w-208"
       data-chat-composer-form="true"
     >
+      {ephemeralBrowserContext ? (
+        <div
+          className="mb-2 rounded-xl border border-primary/30 bg-primary/5 p-2.5"
+          data-ephemeral-browser-context="true"
+        >
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <label className="text-xs font-medium" htmlFor="ephemeral-browser-context">
+              One-time browser context - not saved as draft
+            </label>
+            <button
+              className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+              onClick={() => setEphemeralBrowserContext("")}
+              type="button"
+            >
+              Remove
+            </button>
+          </div>
+          <textarea
+            aria-describedby="ephemeral-browser-context-help"
+            autoComplete="off"
+            className="max-h-40 min-h-20 w-full resize-y rounded-lg border border-input bg-background p-2 font-mono text-xs"
+            id="ephemeral-browser-context"
+            maxLength={PROVIDER_SEND_TURN_MAX_INPUT_CHARS}
+            onChange={(event) => setEphemeralBrowserContext(event.currentTarget.value)}
+            spellCheck={false}
+            value={ephemeralBrowserContext}
+          />
+          <p
+            className="mt-1 text-[11px] leading-4 text-muted-foreground"
+            id="ephemeral-browser-context-help"
+          >
+            Review or edit this redacted page context. It stays in memory before you send or queue
+            it. Sending or queueing uses normal message and queue history.
+          </p>
+        </div>
+      ) : null}
       <FollowUpQueueShelf
         items={followUpQueueItems}
         steeringItems={steeringFollowUpItems}

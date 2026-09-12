@@ -58,7 +58,12 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
 
   return (
     <SidebarProvider
-      className="h-dvh! min-h-0!"
+      className="h-[var(--cafe-browser-chat-height,100dvh)]! min-h-0! [&_[data-slot=sidebar-inset]]:h-full!"
+      style={{
+        contain: "var(--cafe-browser-chat-contain, none)",
+        width: "var(--cafe-browser-chat-width, 100%)",
+        minWidth: "var(--cafe-browser-chat-min-width, auto)",
+      }}
       open={navigationSidebarOpen}
       onOpenChange={setNavigationSidebarOpen}
     >

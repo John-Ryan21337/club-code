@@ -12,6 +12,7 @@ import { QueryClient, useQueryClient } from "@tanstack/react-query";
 
 import { AmbianceLayer } from "../ambiance/AmbianceLayer";
 import { TaskAtriumOverlay } from "../components/atrium/TaskAtriumOverlay";
+import { EmbeddedBrowserWorkspace } from "../components/EmbeddedBrowserWorkspace";
 import { APP_DISPLAY_NAME } from "../branding";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { CommandPalette } from "../components/CommandPalette";
@@ -171,7 +172,10 @@ function RootRouteView() {
         {primaryEnvironmentAuthenticated ? (
           <WebSocketConnectionSurface>
             <InitialBackendBootstrapSurface>
-              <OnboardingSurface>{appShell}</OnboardingSurface>
+              <OnboardingSurface>
+                {appShell}
+                <EmbeddedBrowserWorkspace />
+              </OnboardingSurface>
             </InitialBackendBootstrapSurface>
           </WebSocketConnectionSurface>
         ) : (

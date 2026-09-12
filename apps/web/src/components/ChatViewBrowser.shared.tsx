@@ -37,6 +37,7 @@ import { render } from "vitest-browser-react";
 
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import { useComposerDraftStore, DraftId } from "../composerDraftStore";
+import { EMBEDDED_BROWSER_DRAFT_HANDOFF_EVENT } from "../embeddedBrowserChatHandoff";
 import { __resetEnvironmentApiOverridesForTests } from "../environmentApi";
 import { isMacPlatform } from "../lib/utils";
 import { resetSourceControlDiscoveryStateForTests } from "../lib/sourceControlDiscoveryState";
@@ -3579,6 +3580,86 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
         await mounted.cleanup();
       }
     });
+
+    it.each(["Read this page", ""])(
+      "keeps browser handoff private before sending and restores it separately after a rejected send (%s)",
+      async (draftPrompt) => {
+        const context =
+          "[User-approved embedded browser snapshot]\nSynthetic browser handoff marker\n[End embedded browser snapshot]";
+        const sent: string[] = [];
+        const mounted = await mountChatView({
+          viewport: DEFAULT_VIEWPORT,
+          snapshot: createSnapshotForTargetUser({
+            targetMessageId: "msg-browser-handoff" as MessageId,
+            targetText: "Handoff fixture",
+          }),
+          resolveRpc: (body) => {
+            if (
+              body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              body.type === "thread.turn.start"
+            ) {
+              sent.push(String((body.message as { text: string }).text));
+              if (sent.length === 1)
+                return failBrowserWsRpc(
+                  new OrchestrationDispatchCommandError({ message: "Synthetic rejection" }),
+                );
+            }
+            if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand)
+              return { sequence: fixture.snapshot.snapshotSequence + sent.length + 1 };
+            return undefined;
+          },
+        });
+        try {
+          useComposerDraftStore.getState().setPrompt(THREAD_REF, draftPrompt);
+          await waitForLayout();
+          const handoff = { text: context, accepted: false };
+          document
+            .querySelector('[data-chat-composer-form="true"]')!
+            .dispatchEvent(
+              new CustomEvent(EMBEDDED_BROWSER_DRAFT_HANDOFF_EVENT, { detail: handoff }),
+            );
+          expect(handoff.accepted).toBe(true);
+          await vi.waitFor(() =>
+            expect(
+              document.querySelector<HTMLTextAreaElement>("#ephemeral-browser-context")?.value,
+            ).toBe(context),
+          );
+          expect(useComposerDraftStore.getState().getComposerDraft(THREAD_REF)?.prompt ?? "").toBe(
+            draftPrompt,
+          );
+          expect(
+            Object.keys(localStorage)
+              .map((key) => localStorage.getItem(key))
+              .join("\n"),
+          ).not.toContain("Synthetic browser handoff marker");
+          (await waitForSendButton()).click();
+          await vi.waitFor(
+            () => {
+              expect(sent).toHaveLength(1);
+              expect(
+                document.querySelector<HTMLTextAreaElement>("#ephemeral-browser-context")?.value,
+              ).toBe(context);
+              expect(
+                useComposerDraftStore.getState().getComposerDraft(THREAD_REF)?.prompt ?? "",
+              ).toBe(draftPrompt);
+            },
+            { timeout: 8_000, interval: 16 },
+          );
+          expect(sent[0]).toBe(`${draftPrompt ? `${draftPrompt}\n\n` : ""}${context}`);
+          (await waitForSendButton()).click();
+          await vi.waitFor(
+            () => {
+              expect(sent).toHaveLength(2);
+              expect(document.querySelector("#ephemeral-browser-context")).toBeNull();
+            },
+            { timeout: 8_000, interval: 16 },
+          );
+          expect(sent[1]).toBe(sent[0]);
+        } finally {
+          await mounted.cleanup();
+        }
+      },
+    );
 
     it("restores rejected direct sends and reports every delivery attempt before a successful retry", async () => {
       const messageText = "Retry this exact direct message";
@@ -8105,6 +8186,80 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
           },
           { timeout: 8_000, interval: 16 },
         );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("keeps the real composer inside split chat and above retained browser tabs", async () => {
+      const sourceUpdateState: DesktopSourceUpdateState = {
+        status: "behind",
+        branch: "dev",
+        trackedBranch: "dev",
+        runtimeHash: "1111111111111111111111111111111111111111",
+        localHash: "1111111111111111111111111111111111111111",
+        remoteHash: "2222222222222222222222222222222222222222",
+        mergeBaseHash: "1111111111111111111111111111111111111111",
+        dirty: false,
+        checkedAt: "2026-06-02T00:00:00.000Z",
+        message: null,
+      };
+      const state = {
+        status: "open" as const,
+        tabId: "layout-tab",
+        displayUrl: "https://example.test/",
+        title: "Layout fixture",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+        shared: false,
+        sharedOrigin: null,
+      };
+      const close = vi.fn(async () => ({ ...state, status: "closed" as const, tabId: null }));
+      window.desktopBridge = {
+        ...createDesktopBridgeForChatViewTests(sourceUpdateState),
+        openEmbeddedBrowser: async () => state,
+        setEmbeddedBrowserBounds: async () => state,
+        closeEmbeddedBrowser: close,
+      };
+      const mounted = await mountChatView({
+        viewport: { ...WIDE_FOOTER_VIEWPORT, width: 1440, height: 900 },
+        snapshot: createSnapshotWithPlanFollowUpPrompt(),
+        configureFixture: (next) => {
+          next.serverConfig = {
+            ...next.serverConfig,
+            clientSettings: { ...next.serverConfig.clientSettings, autoOpenPlanSidebar: false },
+          };
+        },
+      });
+      try {
+        await page.getByRole("button", { name: "Open isolated browser" }).click();
+        await page.getByRole("button", { name: "Split chat and browser" }).click();
+        const shell = () =>
+          document
+            .querySelector<HTMLElement>('[data-slot="sidebar-wrapper"]')!
+            .getBoundingClientRect();
+        const composer = () =>
+          document
+            .querySelector<HTMLElement>('[data-chat-composer-form="true"]')!
+            .getBoundingClientRect();
+        await vi.waitFor(() => {
+          expect(shell().width).toBe(716);
+          expect(shell().height).toBe(852);
+          expect(composer().width).toBeGreaterThan(300);
+          expect(composer().right).toBeLessThanOrEqual(shell().right + 1);
+          expect(composer().bottom).toBeLessThanOrEqual(shell().bottom + 1);
+        });
+        await expectComposerActionsContained();
+        useUiStateStore.getState().setThreadPlanSidebarOpen(THREAD_KEY, true);
+        await expect.element(page.getByRole("dialog")).toBeInTheDocument();
+        await userEvent.keyboard("{Escape}");
+        await page.getByRole("button", { name: "Minimize Agent Browser" }).click();
+        await vi.waitFor(() => {
+          expect(shell().height).toBe(852);
+          expect(composer().bottom).toBeLessThanOrEqual(852);
+        });
+        expect(close).not.toHaveBeenCalled();
       } finally {
         await mounted.cleanup();
       }
