@@ -36,18 +36,21 @@ workspace test graph, and a forced desktop build before publication. Focused
 runtime evidence is scoped separately in each PR. Synthetic fixtures do not
 qualify every physical device or provider account.
 
-| Feature / 機能                                                           | PR and head                                                                 | Adoption boundary                                                                                                                                                                           |
-| ------------------------------------------------------------------------ | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Provider daemon scheduling / デーモン優先度                              | [Cafe #74](https://github.com/cafeai/cafe-code/pull/74), `573cd9b6`         | Direct to dev. Lower scheduling priority for the daemon and ordinary descendants; not a RAM/GPU limit.                                                                                      |
-| Desktop IPC authority / IPCの送信元検証                                  | [Cafe #75](https://github.com/cafeai/cafe-code/pull/75), `cadc2e7f`         | Direct to dev. Exact owner frame and main-frame navigation checks.                                                                                                                          |
-| App Claude access check / アプリ内Claude接続確認                         | [Club #69](https://github.com/John-Ryan21337/club-code/pull/69), `ffe937dd` | Direct to the Cafe adoption base. Checks the selected model through the current SDK; does not certify every saved account. [Cafe issue #69](https://github.com/cafeai/cafe-code/issues/69). |
-| External CLI access check / 外部CLI接続確認                              | [Club #71](https://github.com/John-Ryan21337/club-code/pull/71), `77a6a51d` | Direct to the Cafe adoption base. Isolated Claude preflight with bounded execution. Codex is explicitly unverified when safe probe isolation is unsupported.                                |
-| Native browser tabs / ネイティブブラウザーのタブ                         | [Club #70](https://github.com/John-Ryan21337/club-code/pull/70), `53ba65fb` | Requires Cafe #63, #64 and #75. Native lifecycle passed 12 real Electron checks. Renderer and broker integration are separate units.                                                        |
-| Browser broker and provider transport / ブラウザー仲介とプロバイダー接続 | [Club #72](https://github.com/John-Ryan21337/club-code/pull/72), `19eba5d1` | Based on browser foundations #63/#64. Requires native runtime and renderer to provide an end-to-end browser. [Cafe issue #70](https://github.com/cafeai/cafe-code/issues/70).               |
-| Meeting privacy / 会議中の表示保護                                       | [Club #75](https://github.com/John-Ryan21337/club-code/pull/75), `baf86b58` | Direct to the Cafe adoption base. Presentation masking; no content redaction. Web Push/history limits and local manual-queue behavior are documented.                                       |
-| World clock and optional weather / 世界時計と任意の天気表示              | [Club #76](https://github.com/John-Ryan21337/club-code/pull/76), `57e79752` | Direct to the Cafe adoption base. One to six cities; weather uses separate device-local consent and bounded fixed-endpoint requests.                                                        |
-| Native window opacity / ウィンドウ透明度                                 | [Club #77](https://github.com/John-Ryan21337/club-code/pull/77), `5362eaad` | Direct to the Cafe adoption base. Native API values verified; compositor capture inconclusive. Packaged-release capability gate stays empty until visual qualification.                     |
-| Packaged update-target audit / 更新先の検証                              | [Cafe #84](https://github.com/cafeai/cafe-code/pull/84), `01bd7908`         | Direct to dev. Bind the packaged audit to the actual artifact manifest, including fork update targets.                                                                                      |
+| Feature / 機能                                                           | PR and head                                                                 | Adoption boundary                                                                                                                                                                               |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Provider daemon scheduling / デーモン優先度                              | [Cafe #74](https://github.com/cafeai/cafe-code/pull/74), `573cd9b6`         | Direct to dev. Lower scheduling priority for the daemon and ordinary descendants; not a RAM/GPU limit.                                                                                          |
+| Desktop IPC authority / IPCの送信元検証                                  | [Cafe #75](https://github.com/cafeai/cafe-code/pull/75), `cadc2e7f`         | Direct to dev. Exact owner frame and main-frame navigation checks.                                                                                                                              |
+| App Claude access check / アプリ内Claude接続確認                         | [Club #69](https://github.com/John-Ryan21337/club-code/pull/69), `ffe937dd` | Direct to the Cafe adoption base. Checks the selected model through the current SDK; does not certify every saved account. [Cafe issue #69](https://github.com/cafeai/cafe-code/issues/69).     |
+| External CLI access check / 外部CLI接続確認                              | [Club #71](https://github.com/John-Ryan21337/club-code/pull/71), `77a6a51d` | Direct to the Cafe adoption base. Isolated Claude preflight with bounded execution. Codex is explicitly unverified when safe probe isolation is unsupported.                                    |
+| Native browser tabs / ネイティブブラウザーのタブ                         | [Club #70](https://github.com/John-Ryan21337/club-code/pull/70), `53ba65fb` | Requires Cafe #63, #64 and #75. Native lifecycle passed 12 real Electron checks. Renderer and broker integration are separate units.                                                            |
+| Browser broker and provider transport / ブラウザー仲介とプロバイダー接続 | [Club #72](https://github.com/John-Ryan21337/club-code/pull/72), `19eba5d1` | Based on browser foundations #63/#64. Requires native runtime and renderer to provide an end-to-end browser. [Cafe issue #70](https://github.com/cafeai/cafe-code/issues/70).                   |
+| Meeting privacy / 会議中の表示保護                                       | [Club #75](https://github.com/John-Ryan21337/club-code/pull/75), `baf86b58` | Direct to the Cafe adoption base. Presentation masking; no content redaction. Web Push/history limits and local manual-queue behavior are documented.                                           |
+| World clock and optional weather / 世界時計と任意の天気表示              | [Club #76](https://github.com/John-Ryan21337/club-code/pull/76), `57e79752` | Direct to the Cafe adoption base. One to six cities; weather uses separate device-local consent and bounded fixed-endpoint requests.                                                            |
+| Native window opacity / ウィンドウ透明度                                 | [Club #77](https://github.com/John-Ryan21337/club-code/pull/77), `5362eaad` | Direct to the Cafe adoption base. Native API values verified; compositor capture inconclusive. Packaged-release capability gate stays empty until visual qualification.                         |
+| Packaged update-target audit / 更新先の検証                              | [Cafe #84](https://github.com/cafeai/cafe-code/pull/84), `01bd7908`         | Direct to dev. Bind the packaged audit to the actual artifact manifest, including fork update targets.                                                                                          |
+| Browser workspace and context handoff / ブラウザー画面とコンテキスト送信 | [Club #79](https://github.com/John-Ryan21337/club-code/pull/79), `7fcd074a` | Requires native runtime and broker at combined base `28cd002c`. Split, resize, minimize, retained tabs and explicit review before Send/Queue. 321 browser tests passed.                         |
+| Offline English/Japanese OCR / 英語・日本語のオフラインOCR               | [Club #80](https://github.com/John-Ryan21337/club-code/pull/80), `20bbf313` | Based on native runtime `53ba65fb`. Visible-document checks before capture and after async recognition; packaged ASAR verified with 14 synthetic checks.                                        |
+| English/Japanese/bilingual UI / 英語・日本語・二言語のUI                 | [Club #81](https://github.com/John-Ryan21337/club-code/pull/81), `a12e553c` | Direct to the Cafe adoption base. 673 supported authored labels; device-local language preference. User messages, code, and project names retain their original text. 309 browser tests passed. |
 
 日本語：上の新規ソフトウェアPRは、公開前に整形・lint・型検査・全ワークスペースのテスト・
 強制デスクトップビルドを通過しています。実行時の証拠と制限は各PRを確認してください。
@@ -62,10 +65,15 @@ qualify every physical device or provider account.
    Native prerequisite base: `adoption/browser-native-prerequisites-20260911` at `73204da1`.
 3. Add native runtime [Club #70](https://github.com/John-Ryan21337/club-code/pull/70)
    and broker/provider transport [Club #72](https://github.com/John-Ryan21337/club-code/pull/72).
-4. Add the renderer workspace and one-time composer handoff when its PR is published.
+4. Add [Club #79](https://github.com/John-Ryan21337/club-code/pull/79), `7fcd074a`,
+   for the renderer workspace and one-time composer handoff.
    It provides move, resize, split, minimize, retained tabs, sharing controls, and
    explicit context review before Send or Queue.
-5. Offline English/Japanese OCR is an optional native-runtime extension.
+   Its combined prerequisite branch is `adoption/browser-workspace-prerequisites-20260911`
+   at `28cd002c`.
+5. Add optional offline English/Japanese OCR with
+   [Club #80](https://github.com/John-Ryan21337/club-code/pull/80), `20bbf313`,
+   based on native runtime `53ba65fb`. The packaged ASAR passed 14 synthetic checks.
 
 日本語：ブラウザーは上の順序で基盤、IPC検証、ネイティブ実装、仲介、画面UIを取り込みます。
 英語・日本語のオフラインOCRは任意の追加機能です。基盤だけではブラウザーは起動しません。
@@ -102,7 +110,7 @@ These target Club `main`, not Cafe dev:
 ## Work still awaiting publication
 
 The following are implementation or review work, not published feature PRs yet:
-browser workspace and OCR; English/Japanese/bilingual UI; Idle Thread Guard;
+Idle Thread Guard;
 bundled audit skill installation; image/GIF runtime; completion audio and speech;
 GPU/temperature/network telemetry; embedded media playback; advanced GPU Matrix;
 image panel controls and orphan cleanup; local media and visualization;
