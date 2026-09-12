@@ -99,6 +99,22 @@ required checks and forced desktop build before publication; the PR records the 
 | Workspace file observatory / ワークスペースのファイル表示                        | [Cafe #94](https://github.com/cafeai/cafe-code/pull/94), `67d19445`           | Direct to dev. Bounded read-only selected-project file panes, opt-in refresh and snapshot differences. No database inspector or writer attribution; masking is best effort.                                                                                                                                                     |
 | Recorded workflow observatory / 記録された作業フロー表示                         | [Cafe #95](https://github.com/cafeai/cafe-code/pull/95), `b39a169b`           | Direct to dev. Reported task list/graph and observed update spans. No invented relationships, provider runtime duration or new event collector.                                                                                                                                                                                 |
 
+Additional Matrix appearance slice: [Club #108](https://github.com/John-Ryan21337/club-code/pull/108), `d3dcb18b`, is based on #105. It adds default-off fixed cat AA and half-width kana to Japanese streams, preserves work-label priority and clears text without reseeding. Console/profile integration remains separate.
+
+日本語：追加の Matrix 外観差分は Club #108（#105 が前提）です。既定でオフの固定猫AAと半角カナを日本語の流れに追加し、作業語彙の優先と、動きを初期化しない文字消去を維持します。コンソール・プロファイルとの統合は別です。
+
+Bundled visualizer prerequisite: [Club #109](https://github.com/John-Ryan21337/club-code/pull/109), `c6d1d1e5`, is based on local player #90. It supplies the MilkDrop engine and 395 bundled presets. Silent synthetic browser checks verified pixels and targeted analyser cleanup while preserving the caller's audio graph, without external requests. Product activation, capture and music-reactive integration remain separate.
+
+日本語：Club #109 はローカルプレーヤー #90 を前提とする描画基盤です。MilkDrop エンジンと395個の同梱プリセットを提供します。無音の合成ブラウザー検査で描画と対象アナライザーの後始末を確認し、呼び出し側の音声グラフを維持しました。外部通信は使っていません。製品での有効化、音声取得、音楽反応は別です。
+
+Provider observations: [Club #110](https://github.com/John-Ryan21337/club-code/pull/110), `d6e1d0f7`, is based on vocabulary #105. Bounded classification adds fixed category observations through current Cafe ingestion; the vocabulary consumes BUILD/DATABASE labels. Provider versions and asynchronous-question handling are preserved. The visual route overlay is not part of this draft.
+
+日本語：Club #110 は作業語彙 #105 を前提とし、長さを制限した分類から固定の活動分類を現行 Cafe の取り込み処理へ追加します。作業語彙は構築・データベースの固定ラベルを使えます。現行プロバイダーと非同期質問の処理を維持します。経路の描画はこのドラフトに含みません。
+
+Native frame-audio prerequisite: [Club #111](https://github.com/John-Ryan21337/club-code/pull/111), `2a82499f`, is based on Cafe IPC #75 (`cadc2e7f`). It admits explicit capture only from the exact live, visible, focused Cafe main frame and selects that frame's audio/video. An isolated Electron 42.5.1 probe obtained and stopped synthetic tracks. It adds no product Start/Stop control and grants no system-wide loopback source; live media-source audio and other platforms remain unqualified.
+
+日本語：Club #111 は Cafe IPC #75 を前提とする、フレーム音声取得のネイティブ基盤です。明示された要求を、表示・フォーカス中の正確な Cafe メインフレームからだけ受け付け、そのフレームの音声・映像を選びます。分離した Electron 42.5.1 の検査で合成トラックの取得と停止を確認しました。製品の開始・停止ボタンは追加せず、システム全体の音声取得は許可しません。実メディアの音声や他のOSは未確認です。
+
 ## Browser adoption order
 
 1. [Cafe #63](https://github.com/cafeai/cafe-code/pull/63) defines bounded contracts;
@@ -157,17 +173,19 @@ The following remain separate from the published ports above:
 
 - Public YouTube discovery is #104 and the separate local-owner account/OAuth port is #107. These do not imply persistent account libraries or verified live access to Google.
 - Claude console interpretation is now #106. Codex still requires a verified containment boundary before it can be called supported.
-- Routed live work vocabulary is now #105. The full Matrix activity overlay remains a current-dev gap. Historical Club fork #4/#7/#18 proposed pieces on older lineages; they do not establish a complete current-dev integration. Optional cat AA/kana enrichment is in review under [Cafe issue #100](https://github.com/cafeai/cafe-code/issues/100).
-- Ambient audio capture, music-reactive integration and visualizers remain follow-ups. The local/streaming players do not imply those capabilities.
-- SQLite/database observatory views and additional attribution are outside the file-only observatory #94. Any further enrichment, diff-pool or collaboration claim needs concrete production-caller and existing-PR reconciliation.
+- Routed live work vocabulary is #105, optional cat AA/kana enrichment is #108, and the fixed provider-observation producer is #110. The full Matrix activity overlay remains under implementation and review at [Cafe issue #102](https://github.com/cafeai/cafe-code/issues/102). Historical Club fork #4/#7/#18 proposed pieces on older lineages; they do not establish a complete current-dev integration.
+- The bundled visualizer engine is #109 and the native current-frame capture grant is #111. Renderer capture controls, music-reactive integration and product visualizer activation remain follow-ups. The local/streaming players and prerequisites do not imply those capabilities.
+- SQLite/database observatory views and additional attribution are outside the file-only observatory #94. Cafe intentionally retired its diff viewer and worker-pool caller in `a4d4e3768e38f9c967f4715a4a4e9cbdc5c66992`; a pool-only transplant would be inert, and a diff-viewer return needs its own product proposal. Any further enrichment or collaboration claim needs concrete production-caller and existing-PR reconciliation.
 
 日本語：Club の全実装機能が現行 dev 向け PR になったという主張ではありません。
 公開 YouTube 検索・ローカル所有者のアカウント接続・Claude によるコンソール解釈・選択スレッドの作業語彙は、上の新しいドラフトにあります。
 永続的なアカウントライブラリや Google への実接続を確認したという意味ではありません。
-Matrix 活動表示、猫AA装飾、音声取得、音楽反応、ビジュアライザー、
+猫AA装飾は #108、固定の活動分類は #110、描画エンジン基盤は #109、フレーム音声取得のネイティブ基盤は #111 として公開済みです。Matrix 活動表示、画面からの音声取得操作、音楽反応、製品内のビジュアライザー有効化、
 データベース表示などには、別の移植・確認作業が残っています。
 古い系統の提案が存在しても、現行 dev で統合済みとは扱いません。Codex の解釈機能には、
 安全な実行制限の確認が必要です。
+
+Cafe は差分ビューとワーカープールの呼び出し元を意図的に削除しました。プールだけを移しても使われないため、差分ビューの復帰には独立した製品提案が必要です。
 
 Collaboration authorization/journal modules are excluded from runnable-feature
 claims: the audited source wires contracts and a migration, while runtime
