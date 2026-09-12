@@ -1,13 +1,20 @@
+import * as NodeFs from "node:fs/promises";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as TestClock from "effect/testing/TestClock";
 import { MAX_AMBIENT_IMAGE_FILE_BYTES } from "@cafecode/contracts/settings";
 
 import { ServerConfig } from "../config.ts";
 import {
+  AMBIENT_IMAGE_ORPHAN_GRACE_PERIOD_MS,
+  AMBIENT_IMAGE_SWEEP_MAX_CANDIDATES,
+  AMBIENT_IMAGE_SWEEP_MAX_SCANNED,
+  AMBIENT_IMAGE_SWEEP_MAX_DELETIONS,
   AmbientImageStore,
   AmbientImageStoreLive,
   MAX_AMBIENT_IMAGE_PROFILE_BYTES,
@@ -279,6 +286,293 @@ it.layer(NodeServices.layer)("ambient image store", (it) => {
       }
     }).pipe(Effect.provide(layer())),
   );
+
+  // ── Bounded orphan maintenance ───────────────────────────────────────
+  //
+  // These run against a real temporary directory with real modification times.
+  // Age is made real with `utimes` rather than by shortening the grace period,
+  // because the grace period is the safety property under test.
+
+  const AMBIENT_IMAGE_DIR = "ambient-media/images";
+  const ORPHAN_AGE_MS = AMBIENT_IMAGE_ORPHAN_GRACE_PERIOD_MS + 60_000;
+
+  /**
+   * `it.effect` supplies a TestClock that starts at the epoch, while the files
+   * these tests create carry real modification times. Aligning the test clock
+   * with the wall clock lets the sweep run on its production code path — the
+   * ambient `Clock` — instead of having the age injected around it.
+   */
+  const alignClockWithFileTimes = TestClock.setTime(Date.now());
+
+  const imageDirectory = Effect.gen(function* () {
+    const config = yield* ServerConfig;
+    const path = yield* Path.Path;
+    const fs = yield* FileSystem.FileSystem;
+    const directory = path.join(config.stateDir, AMBIENT_IMAGE_DIR);
+    yield* fs.makeDirectory(directory, { recursive: true });
+    return directory;
+  });
+
+  const idFor = (index: number, extension = "png") =>
+    `sha256-${index.toString(16).padStart(64, "0")}.${extension}`;
+
+  /** Write a file and age it, so the sweep sees a genuinely old modification time. */
+  const writeAged = (directory: string, name: string, bytes: Uint8Array, ageMs: number) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const filePath = path.join(directory, name);
+      yield* fs.writeFile(filePath, bytes);
+      if (ageMs > 0) {
+        const at = new Date(Date.now() - ageMs);
+        yield* Effect.promise(() => NodeFs.utimes(filePath, at, at));
+      }
+      return filePath;
+    });
+
+  const directorySizeBytes = (directory: string) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const entries = yield* fs.readDirectory(directory, { recursive: false });
+      let total = 0;
+      for (const entry of entries) {
+        const info = yield* fs.stat(path.join(directory, entry)).pipe(Effect.option);
+        if (info._tag === "Some" && info.value.type === "File") total += Number(info.value.size);
+      }
+      return total;
+    });
+
+  it.effect("reclaims quota from aged unreferenced bytes and keeps everything else", () =>
+    Effect.gen(function* () {
+      yield* alignClockWithFileTimes;
+      const store = yield* AmbientImageStore;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* imageDirectory;
+
+      const orphanBytes = new Uint8Array(4096).fill(7);
+      const referencedId = idFor(1);
+      const orphanId = idFor(2);
+      const freshId = idFor(3);
+      const foreignName = "not-a-minted-id.png";
+
+      yield* writeAged(directory, referencedId, orphanBytes, ORPHAN_AGE_MS);
+      yield* writeAged(directory, orphanId, orphanBytes, ORPHAN_AGE_MS);
+      yield* writeAged(directory, freshId, orphanBytes, 0);
+      yield* writeAged(directory, foreignName, orphanBytes, ORPHAN_AGE_MS);
+
+      const before = yield* directorySizeBytes(directory);
+      const result = yield* store.sweepUnreferencedImages({
+        referencedIds: new Set([referencedId]),
+      });
+      const after = yield* directorySizeBytes(directory);
+
+      assert.equal(result.removed, 1);
+      assert.equal(result.reclaimedBytes, orphanBytes.byteLength);
+      assert.equal(result.retained.referenced, 1);
+      assert.equal(result.retained.withinGrace, 1);
+      assert.equal(result.retained.foreign, 1);
+      assert.equal(result.retained.failed, 0);
+      assert.equal(result.stoppedBecause, "scan-complete");
+
+      // Quota recovery is observed on storage, not just reported.
+      assert.equal(before - after, orphanBytes.byteLength);
+      assert.isFalse(yield* fs.exists(path.join(directory, orphanId)));
+      assert.isTrue(yield* fs.exists(path.join(directory, referencedId)));
+      assert.isTrue(yield* fs.exists(path.join(directory, freshId)));
+      assert.isTrue(yield* fs.exists(path.join(directory, foreignName)));
+    }).pipe(Effect.provide(layer())),
+  );
+
+  it.effect("holds the 24 hour grace period at its boundary", () =>
+    Effect.gen(function* () {
+      yield* alignClockWithFileTimes;
+      const store = yield* AmbientImageStore;
+      const directory = yield* imageDirectory;
+      const bytes = new Uint8Array(64).fill(1);
+      const justInside = idFor(10);
+      const justOutside = idFor(11);
+
+      yield* writeAged(directory, justInside, bytes, AMBIENT_IMAGE_ORPHAN_GRACE_PERIOD_MS - 5_000);
+      yield* writeAged(directory, justOutside, bytes, AMBIENT_IMAGE_ORPHAN_GRACE_PERIOD_MS + 5_000);
+
+      // The only test that injects `now`, covering the seam the ambient clock
+      // fills in everywhere else.
+      const result = yield* store.sweepUnreferencedImages({
+        referencedIds: new Set<string>(),
+        now: Date.now(),
+      });
+      assert.equal(result.removed, 1);
+      assert.equal(result.retained.withinGrace, 1);
+
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      assert.isTrue(yield* fs.exists(path.join(directory, justInside)));
+      assert.isFalse(yield* fs.exists(path.join(directory, justOutside)));
+    }).pipe(Effect.provide(layer())),
+  );
+
+  it.effect("never follows a link planted under a minted name", () =>
+    Effect.gen(function* () {
+      yield* alignClockWithFileTimes;
+      const store = yield* AmbientImageStore;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* imageDirectory;
+
+      // The target is a file this test owns, inside the same temporary tree.
+      const targetPath = yield* writeAged(
+        directory,
+        "link-target.bin",
+        new Uint8Array(2048).fill(9),
+        ORPHAN_AGE_MS,
+      );
+      const linkName = idFor(20);
+      const linkPath = path.join(directory, linkName);
+      const linked = yield* Effect.promise(() =>
+        NodeFs.symlink(targetPath, linkPath).then(
+          () => true,
+          // Windows refuses symlink creation without the right privilege. The
+          // assertion below is skipped rather than silently reported as a pass.
+          () => false,
+        ),
+      );
+
+      const result = yield* store.sweepUnreferencedImages({ referencedIds: new Set<string>() });
+
+      assert.equal(result.removed, 0);
+      assert.isTrue(yield* fs.exists(targetPath));
+      if (linked) {
+        assert.equal(result.retained.foreign, 2);
+        assert.isTrue(yield* Effect.promise(() => NodeFs.lstat(linkPath).then(() => true)));
+      }
+    }).pipe(Effect.provide(layer())),
+  );
+
+  it.effect("bounds deletions and candidates per run and resumes on the next run", () =>
+    Effect.gen(function* () {
+      yield* alignClockWithFileTimes;
+      const store = yield* AmbientImageStore;
+      const directory = yield* imageDirectory;
+      const bytes = new Uint8Array(16).fill(3);
+      const total = AMBIENT_IMAGE_SWEEP_MAX_DELETIONS + 5;
+      for (let index = 0; index < total; index++) {
+        yield* writeAged(directory, idFor(100 + index), bytes, ORPHAN_AGE_MS);
+      }
+
+      const first = yield* store.sweepUnreferencedImages({ referencedIds: new Set<string>() });
+      assert.equal(first.removed, AMBIENT_IMAGE_SWEEP_MAX_DELETIONS);
+      assert.equal(first.stoppedBecause, "deletion-limit");
+
+      const second = yield* store.sweepUnreferencedImages({ referencedIds: new Set<string>() });
+      assert.equal(second.removed, 5);
+      assert.equal(second.stoppedBecause, "scan-complete");
+
+      const third = yield* store.sweepUnreferencedImages({ referencedIds: new Set<string>() });
+      assert.equal(third.removed, 0);
+      assert.equal(third.scanned, 0);
+    }).pipe(Effect.provide(layer())),
+  );
+
+  it.effect("clamps a caller asking for more work than the compiled bounds allow", () =>
+    Effect.gen(function* () {
+      yield* alignClockWithFileTimes;
+      const store = yield* AmbientImageStore;
+      const directory = yield* imageDirectory;
+      const bytes = new Uint8Array(8).fill(5);
+      const total = AMBIENT_IMAGE_SWEEP_MAX_CANDIDATES + 3;
+      for (let index = 0; index < total; index++) {
+        yield* writeAged(directory, idFor(1_000 + index), bytes, ORPHAN_AGE_MS);
+      }
+
+      // Every asset is referenced, so nothing is deleted and the candidate
+      // bound is the one that ends the run rather than the deletion bound.
+      const referencedIds = new Set<string>();
+      for (let index = 0; index < total; index++) referencedIds.add(idFor(1_000 + index));
+      const capped = yield* store.sweepUnreferencedImages({
+        referencedIds,
+        maxCandidates: Number.POSITIVE_INFINITY,
+        maxDeletions: 10_000,
+      });
+      assert.equal(capped.candidates, AMBIENT_IMAGE_SWEEP_MAX_CANDIDATES);
+      assert.equal(capped.removed, 0);
+      assert.equal(capped.retained.referenced, AMBIENT_IMAGE_SWEEP_MAX_CANDIDATES);
+      assert.equal(capped.stoppedBecause, "candidate-limit");
+
+      const unreferenced = yield* store.sweepUnreferencedImages({
+        referencedIds: new Set<string>(),
+        maxDeletions: 10_000,
+      });
+      assert.equal(unreferenced.removed, AMBIENT_IMAGE_SWEEP_MAX_DELETIONS);
+      assert.equal(unreferenced.stoppedBecause, "deletion-limit");
+    }).pipe(Effect.provide(layer())),
+  );
+
+  it.effect("retains every other asset when one entry cannot be read or unlinked", () =>
+    Effect.gen(function* () {
+      yield* alignClockWithFileTimes;
+      const store = yield* AmbientImageStore;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* imageDirectory;
+      const bytes = new Uint8Array(32).fill(4);
+
+      // A directory wearing a minted name cannot be unlinked as a file. It
+      // stands in for any unlink that fails: the run must continue and the rest
+      // of the assets must survive, and nothing may escalate to a blanket wipe.
+      const wedgedName = idFor(200);
+      yield* fs.makeDirectory(path.join(directory, wedgedName), { recursive: true });
+      yield* fs.writeFile(path.join(directory, wedgedName, "inner"), bytes);
+      const deletableName = idFor(201);
+      yield* writeAged(directory, deletableName, bytes, ORPHAN_AGE_MS);
+
+      const result = yield* store.sweepUnreferencedImages({ referencedIds: new Set<string>() });
+
+      assert.equal(result.removed, 1);
+      assert.equal(result.retained.foreign, 1);
+      assert.isTrue(yield* fs.exists(path.join(directory, wedgedName, "inner")));
+      assert.isFalse(yield* fs.exists(path.join(directory, deletableName)));
+    }).pipe(Effect.provide(layer())),
+  );
+
+  it.effect("does nothing when the profile directory cannot be listed", () =>
+    Effect.gen(function* () {
+      yield* alignClockWithFileTimes;
+      const store = yield* AmbientImageStore;
+      const result = yield* store.sweepUnreferencedImages({ referencedIds: new Set<string>() });
+      assert.deepStrictEqual(result, {
+        scanned: 0,
+        candidates: 0,
+        removed: 0,
+        reclaimedBytes: 0,
+        retained: { foreign: 0, withinGrace: 0, referenced: 0, failed: 0 },
+        stoppedBecause: "scan-complete",
+      });
+    }).pipe(Effect.provide(layer())),
+  );
+
+  it.effect("bounds directory enumeration even when every entry is foreign", () =>
+    Effect.gen(function* () {
+      const store = yield* AmbientImageStore;
+      const directory = yield* imageDirectory;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      for (let index = 0; index < AMBIENT_IMAGE_SWEEP_MAX_SCANNED + 4; index++) {
+        yield* fs.writeFile(path.join(directory, `foreign-${index}.txt`), Uint8Array.of(1));
+      }
+      const result = yield* store.sweepUnreferencedImages({ referencedIds: new Set() });
+      assert.equal(result.scanned, AMBIENT_IMAGE_SWEEP_MAX_SCANNED);
+      assert.equal(result.retained.foreign, AMBIENT_IMAGE_SWEEP_MAX_SCANNED);
+      assert.equal(result.removed, 0);
+      assert.equal(result.stoppedBecause, "scan-limit");
+      assert.equal(
+        (yield* fs.readDirectory(directory)).length,
+        AMBIENT_IMAGE_SWEEP_MAX_SCANNED + 4,
+      );
+    }).pipe(Effect.provide(layer())),
+  );
+
   it.effect("refuses changed content and oversized files at the authenticated read boundary", () =>
     Effect.gen(function* () {
       const store = yield* AmbientImageStore;

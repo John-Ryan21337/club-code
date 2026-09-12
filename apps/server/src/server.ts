@@ -72,6 +72,7 @@ import {
   ambientImageUploadRouteLayer,
 } from "./ambientMedia/http.ts";
 import { AmbientImageStoreLive } from "./ambientMedia/AmbientImageStore.ts";
+import { withAmbientImageMaintenanceGate } from "./ambientMedia/AmbientImageMaintenance.ts";
 import { BrandingImageStoreLive } from "./branding/BrandingImageStore.ts";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver.ts";
 import { RepositoryIdentityResolverLive } from "./project/Layers/RepositoryIdentityResolver.ts";
@@ -420,7 +421,12 @@ export const makeServerLayer = Layer.unwrap(
       runtimeStateLayer,
     );
 
-    return serverApplicationLayer.pipe(
+    // The gate is applied here, outside every route layer and outside the HTTPS
+    // sibling listener, and inside the services it needs. Ambient image orphan
+    // recovery finishes before any of them exist; see
+    // `ambientMedia/AmbientImageMaintenance.ts` for why order alone is not
+    // enough and what the lock adds.
+    return withAmbientImageMaintenanceGate(serverApplicationLayer).pipe(
       Layer.provideMerge(RuntimeServicesLive),
       Layer.provideMerge(BrandingImageStoreLive),
       Layer.provideMerge(AmbientImageStoreLive),

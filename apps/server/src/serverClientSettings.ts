@@ -6,6 +6,7 @@
  * `client-settings.json` location so existing desktop customization becomes
  * the backend-owned value on first server startup.
  */
+import { lstat } from "node:fs/promises";
 import {
   ClientSettingsError,
   ClientSettingsSchema,
@@ -75,6 +76,27 @@ export interface ServerClientSettingsShape {
     patch: ClientSettingsPatch,
   ) => Effect.Effect<ClientSettings, ClientSettingsError>;
 
+  /**
+   * Run `use` against a settings snapshot that cannot change underneath it.
+   *
+   * This takes the same single write permit as `updateSettings` and as the
+   * file-watcher revalidation, so no reference in the document can be added or
+   * removed while `use` runs. It exists because a read-then-delete decision
+   * about bytes the document references is only sound if the read and the
+   * deletion are one critical section; two fresh reads around a delete are not
+   * atomic against a write that lands between the second read and the unlink.
+   *
+   * The permit is not reentrant. `use` must never call `updateSettings` or
+   * `withReferenceLock`, and must be bounded: everything that writes client
+   * settings waits behind it.
+   *
+   * Lock order is settings-write permit first, then any store-level mutation
+   * permit. Nothing may take them the other way round.
+   */
+  readonly withReferenceLock: <A, E, R>(
+    use: (settings: ClientSettings) => Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E | ClientSettingsError, R>;
+
   /** Stream of settings change events. */
   readonly streamChanges: Stream.Stream<ClientSettings>;
 }
@@ -93,20 +115,27 @@ export class ServerClientSettingsService extends Context.Service<
         });
         const currentSettingsRef = yield* Ref.make<ClientSettings>(initialSettings);
         const changesPubSub = yield* PubSub.unbounded<ClientSettings>();
+        // The test layer carries a real write permit so reference-lock callers
+        // are serialized against writes here exactly as they are in production.
+        const writeSemaphore = yield* Semaphore.make(1);
 
         return {
           start: Effect.void,
           ready: Effect.void,
           getSettings: Ref.get(currentSettingsRef),
           updateSettings: (patch) =>
-            Ref.get(currentSettingsRef).pipe(
-              Effect.map((currentSettings) => applyClientSettingsPatch(currentSettings, patch)),
-              Effect.flatMap(normalizeClientSettings),
-              Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
-              Effect.tap((nextSettings) =>
-                PubSub.publish(changesPubSub, nextSettings).pipe(Effect.asVoid),
+            writeSemaphore.withPermits(1)(
+              Ref.get(currentSettingsRef).pipe(
+                Effect.map((currentSettings) => applyClientSettingsPatch(currentSettings, patch)),
+                Effect.flatMap(normalizeClientSettings),
+                Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
+                Effect.tap((nextSettings) =>
+                  PubSub.publish(changesPubSub, nextSettings).pipe(Effect.asVoid),
+                ),
               ),
             ),
+          withReferenceLock: (use) =>
+            writeSemaphore.withPermits(1)(Effect.flatMap(Ref.get(currentSettingsRef), use)),
           streamChanges: Stream.fromPubSub(changesPubSub),
         } satisfies ServerClientSettingsShape;
       }),
@@ -123,6 +152,9 @@ const makeServerClientSettings = Effect.gen(function* () {
   const changesPubSub = yield* PubSub.unbounded<ClientSettings>();
   const startedRef = yield* Ref.make(false);
   const startedDeferred = yield* Deferred.make<void, ClientSettingsError>();
+  // UI defaults after a malformed document are not evidence that no images
+  // are referenced. Destructive callers require a verified load or write.
+  const referencesVerified = yield* Ref.make(false);
   const watcherScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(watcherScope, Exit.void));
 
@@ -200,7 +232,24 @@ const makeServerClientSettings = Effect.gen(function* () {
   );
 
   const loadSettingsFromDisk = Effect.gen(function* () {
+    yield* Ref.set(referencesVerified, false);
     if (!(yield* readConfigExists)) {
+      // `exists` follows links: a dangling settings link looks absent there,
+      // but cannot establish that this is a fresh profile with no references.
+      const actuallyMissing = yield* Effect.promise(async () => {
+        try {
+          await lstat(clientSettingsPath);
+          return false;
+        } catch (cause) {
+          return (
+            typeof cause === "object" &&
+            cause !== null &&
+            "code" in cause &&
+            cause.code === "ENOENT"
+          );
+        }
+      });
+      yield* Ref.set(referencesVerified, actuallyMissing);
       return DEFAULT_CLIENT_SETTINGS;
     }
 
@@ -217,6 +266,7 @@ const makeServerClientSettings = Effect.gen(function* () {
     if (migrated !== decoded.value) {
       yield* writeSettingsAtomically(migrated);
     }
+    yield* Ref.set(referencesVerified, true);
     return migrated;
   });
 
@@ -292,6 +342,18 @@ const makeServerClientSettings = Effect.gen(function* () {
     start,
     ready: Deferred.await(startedDeferred),
     getSettings: getSettingsFromCache,
+    withReferenceLock: (use) =>
+      writeSemaphore.withPermits(1)(
+        Effect.gen(function* () {
+          const settings = yield* getSettingsFromCache;
+          if (!(yield* Ref.get(referencesVerified))) {
+            return yield* Effect.fail(
+              toSettingsError("client settings references could not be verified", undefined),
+            );
+          }
+          return yield* use(settings);
+        }),
+      ),
     updateSettings: (patch) =>
       writeSemaphore.withPermits(1)(
         Effect.gen(function* () {
@@ -302,6 +364,7 @@ const makeServerClientSettings = Effect.gen(function* () {
           const next = yield* migrateLegacySidebarBrandImage(normalized);
           yield* writeSettingsAtomically(next);
           yield* Cache.set(settingsCache, cacheKey, next);
+          yield* Ref.set(referencesVerified, true);
           yield* emitChange(next);
           return next;
         }),

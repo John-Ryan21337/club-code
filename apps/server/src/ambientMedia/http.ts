@@ -22,6 +22,7 @@ import { respondToAuthError } from "../auth/http.ts";
 import { ServerAuth, AuthError } from "../auth/Services/ServerAuth.ts";
 import { browserApiCorsHeaders } from "../httpCors.ts";
 import { ServerClientSettingsService } from "../serverClientSettings.ts";
+import { referencedAmbientImageIds } from "./AmbientImageMaintenance.ts";
 import {
   AMBIENT_IMAGE_ROUTE_PREFIX,
   AmbientImageError,
@@ -218,30 +219,41 @@ export const ambientImageDeleteRouteLayer = HttpRouter.add(
         message: "Ambient image was not found.",
       });
     }
-    // This slice checks the current settings snapshot before deletion. It is
-    // not atomic with a concurrent settings write; the maintenance follow-up
-    // adds a shared reference lock around both the check and unlink.
-    const settings = yield* (yield* ServerClientSettingsService).getSettings.pipe(
-      Effect.mapError(
-        (cause) =>
-          new AmbientImageError({
-            code: "storage-failed",
-            status: 500,
-            message: "Ambient image references could not be read.",
-            cause,
-          }),
-      ),
-    );
-    const referenced =
-      settings.ambientImageAsset?.id === id ||
-      settings.ambientImageCycleAssets.some((asset) => asset.id === id);
-    if (referenced) {
+    // Deletion is only allowed for bytes the settings document no longer
+    // references, so one renderer removing a library entry can never revoke an
+    // asset another view is still displaying.
+    //
+    // The check and the unlink share one critical section. A snapshot read
+    // followed by an unlink is not enough: a settings write that adopts this id
+    // between the two would leave the document pointing at bytes that were
+    // verified unreferenced and then deleted anyway. Holding the settings write
+    // permit makes the concurrent write land strictly before the check (409) or
+    // strictly after the unlink (the id was already gone when it was adopted).
+    const store = yield* AmbientImageStore;
+    const removed = yield* (yield* ServerClientSettingsService)
+      .withReferenceLock((settings) =>
+        referencedAmbientImageIds(settings).has(id)
+          ? Effect.succeed(false)
+          : store.removeStoredImage(id).pipe(Effect.as(true)),
+      )
+      .pipe(
+        Effect.mapError((cause) =>
+          cause instanceof AmbientImageError
+            ? cause
+            : new AmbientImageError({
+                code: "storage-failed",
+                status: 500,
+                message: "Ambient image references could not be read.",
+                cause,
+              }),
+        ),
+      );
+    if (!removed) {
       return HttpServerResponse.jsonUnsafe(
         { error: "referenced", message: "Ambient image is still in use." },
         { status: 409, headers },
       );
     }
-    yield* (yield* AmbientImageStore).removeStoredImage(id);
     return HttpServerResponse.jsonUnsafe({ removed: true }, { status: 200, headers });
   }).pipe(
     Effect.catchTag("AuthError", respondToAuthError),

@@ -4,6 +4,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "node:crypto";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - The compression test must construct the production Node HTTP server layer directly.
 import * as NodeHttp from "node:http";
+import * as NodeFsPromises from "node:fs/promises";
 import * as NodeNet from "node:net";
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 
@@ -32,6 +33,7 @@ import {
   type ServerRuntimeLayerDiagnosticsInput,
   type ServerRuntimeLayerDiagnosticsResult,
   DEFAULT_CLIENT_SETTINGS,
+  ClientSettingsError,
 } from "@cafecode/contracts";
 import { MAX_AMBIENT_IMAGE_FILE_BYTES } from "@cafecode/contracts/settings";
 import { assert, it } from "@effect/vitest";
@@ -115,7 +117,11 @@ import {
   UsageStatsService,
   type UsageStatsServiceShape,
 } from "./usageStats/Services/UsageStatsService.ts";
-import { AmbientImageStoreLive } from "./ambientMedia/AmbientImageStore.ts";
+import {
+  AMBIENT_IMAGE_ORPHAN_GRACE_PERIOD_MS,
+  AmbientImageStoreLive,
+} from "./ambientMedia/AmbientImageStore.ts";
+import { withAmbientImageMaintenanceGate } from "./ambientMedia/AmbientImageMaintenance.ts";
 import { BrandingImageStoreLive } from "./branding/BrandingImageStore.ts";
 import {
   BrowserTraceCollector,
@@ -640,6 +646,26 @@ const buildAppUnderTest = (options?: {
         })
       : VcsStatusBroadcaster.layer.pipe(Layer.provide(gitWorkflowLayer));
 
+    // One instance, provided to the router and to the maintenance gate alike.
+    // Sharing it is the point: the gate's reference lock is only meaningful if
+    // it is the same write permit the RPC settings writes take.
+    const clientSettingsBase = {
+      start: Effect.void,
+      ready: Effect.void,
+      getSettings: Effect.succeed(DEFAULT_CLIENT_SETTINGS),
+      updateSettings: () => Effect.succeed(DEFAULT_CLIENT_SETTINGS),
+      streamChanges: Stream.empty,
+      ...options?.layers?.clientSettings,
+    } satisfies Omit<ServerClientSettingsShape, "withReferenceLock">;
+    const clientSettingsLayer = Layer.mock(ServerClientSettingsService)({
+      ...clientSettingsBase,
+      // Default the lock to whatever `getSettings` was overridden with, so a
+      // test that stubs the document does not also have to stub the lock.
+      withReferenceLock:
+        options?.layers?.clientSettings?.withReferenceLock ??
+        ((use) => Effect.flatMap(clientSettingsBase.getSettings, use)),
+    });
+
     const servedRoutesLayer = HttpRouter.serve(makeRoutesLayer, {
       disableListenLog: true,
       disableLogger: true,
@@ -716,14 +742,6 @@ const buildAppUnderTest = (options?: {
       ),
       Layer.provide(
         Layer.mergeAll(
-          Layer.mock(ServerClientSettingsService)({
-            start: Effect.void,
-            ready: Effect.void,
-            getSettings: Effect.succeed(DEFAULT_CLIENT_SETTINGS),
-            updateSettings: () => Effect.succeed(DEFAULT_CLIENT_SETTINGS),
-            streamChanges: Stream.empty,
-            ...options?.layers?.clientSettings,
-          }),
           Layer.mock(UsageStatsService)({
             recordAccounting: () => Effect.void,
             get: Effect.succeed({
@@ -973,7 +991,10 @@ const buildAppUnderTest = (options?: {
       ),
     );
 
-    const appLayer = servedRoutesLayer.pipe(
+    // Every server test builds through the real gate, so the ordering claim is
+    // exercised by the whole suite rather than by one bespoke assembly.
+    const appLayer = withAmbientImageMaintenanceGate(servedRoutesLayer).pipe(
+      Layer.provideMerge(clientSettingsLayer),
       Layer.provide(
         Layer.mock(BrowserTraceCollector)({
           record: () => Effect.void,
@@ -3416,6 +3437,171 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(deleteResponse.status, 409);
 
       // The refusal must not have removed bytes another view is still showing.
+      const stillThere = yield* HttpClient.get(`/api/ambient-media/image/${referencedId}`, {
+        headers: { cookie },
+      });
+      assert.equal(stillThere.status, 200);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  // ── Ambient image startup maintenance ─────────────────────────────
+  // These build the app through `withAmbientImageMaintenanceGate`, which is the
+  // same composition `makeServerLayer` uses. They are about ordering: the
+  // assertions are made from the first request a client could possibly send.
+
+  const ambientAsset = (id: string) => ({
+    id,
+    url: `/api/ambient-media/image/${id}`,
+    mimeType: "image/png" as const,
+    width: 1,
+    height: 1,
+    sizeBytes: ambientPngBytes.byteLength,
+  });
+
+  const plantAmbientProfile = Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "t3-ambient-maintenance-",
+    });
+    const paths = yield* deriveServerPaths(baseDir, undefined);
+    const directory = path.join(paths.stateDir, "ambient-media/images");
+    yield* fileSystem.makeDirectory(directory, { recursive: true });
+
+    const referencedId = ambientImageIdFor(ambientPngBytes, "png");
+    const agedOrphanBytes = Uint8Array.from(
+      Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64"),
+    );
+    const freshOrphanBytes = Uint8Array.from(
+      Buffer.from("UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA", "base64"),
+    );
+    const agedOrphanId = ambientImageIdFor(agedOrphanBytes, "gif");
+    const freshOrphanId = ambientImageIdFor(freshOrphanBytes, "webp");
+    const aged = new Date(Date.now() - AMBIENT_IMAGE_ORPHAN_GRACE_PERIOD_MS - 60_000);
+
+    for (const [id, bytes] of [
+      [referencedId, ambientPngBytes],
+      [agedOrphanId, agedOrphanBytes],
+    ] as const) {
+      const filePath = path.join(directory, id);
+      yield* fileSystem.writeFile(filePath, bytes);
+      yield* Effect.promise(() => NodeFsPromises.utimes(filePath, aged, aged));
+    }
+    yield* fileSystem.writeFile(path.join(directory, freshOrphanId), freshOrphanBytes);
+
+    return { baseDir, directory, referencedId, agedOrphanId, freshOrphanId };
+  });
+
+  const ambientFileExists = (directory: string, id: string) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      return yield* fileSystem.exists(path.join(directory, id));
+    });
+
+  it.effect("reclaims orphaned ambient bytes before any route is reachable", () =>
+    Effect.gen(function* () {
+      // The planted files carry real modification times; the test clock starts
+      // at the epoch. Align them so maintenance runs on its production clock.
+      yield* TestClock.setTime(Date.now());
+      const profile = yield* plantAmbientProfile;
+
+      yield* buildAppUnderTest({
+        config: { baseDir: profile.baseDir },
+        layers: {
+          clientSettings: {
+            getSettings: Effect.succeed({
+              ...DEFAULT_CLIENT_SETTINGS,
+              ambientImageCycleAssets: [ambientAsset(profile.referencedId)],
+            } as typeof DEFAULT_CLIENT_SETTINGS),
+          },
+        },
+      });
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+
+      // The very first request a client can make already sees the recovered
+      // state, which is the ordering claim.
+      const referenced = yield* HttpClient.get(`/api/ambient-media/image/${profile.referencedId}`, {
+        headers: { cookie },
+      });
+      const agedOrphan = yield* HttpClient.get(`/api/ambient-media/image/${profile.agedOrphanId}`, {
+        headers: { cookie },
+      });
+      const freshOrphan = yield* HttpClient.get(
+        `/api/ambient-media/image/${profile.freshOrphanId}`,
+        { headers: { cookie } },
+      );
+
+      assert.equal(referenced.status, 200);
+      assert.equal(agedOrphan.status, 404);
+      assert.equal(freshOrphan.status, 200);
+      assert.isTrue(yield* ambientFileExists(profile.directory, profile.referencedId));
+      assert.isFalse(yield* ambientFileExists(profile.directory, profile.agedOrphanId));
+      assert.isTrue(yield* ambientFileExists(profile.directory, profile.freshOrphanId));
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("starts normally and deletes nothing when references cannot be read", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.now());
+      const profile = yield* plantAmbientProfile;
+
+      yield* buildAppUnderTest({
+        config: { baseDir: profile.baseDir },
+        layers: {
+          clientSettings: {
+            start: Effect.fail(
+              new ClientSettingsError({
+                settingsPath: "<test>",
+                detail: "settings runtime refused to start",
+              }),
+            ),
+          },
+        },
+      });
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+
+      // Startup is not blocked by the failure, and no bytes were reclaimed on
+      // the strength of a reference set nobody could confirm.
+      const agedOrphan = yield* HttpClient.get(`/api/ambient-media/image/${profile.agedOrphanId}`, {
+        headers: { cookie },
+      });
+      assert.equal(agedOrphan.status, 200);
+      assert.isTrue(yield* ambientFileExists(profile.directory, profile.agedOrphanId));
+      assert.isTrue(yield* ambientFileExists(profile.directory, profile.referencedId));
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("decides ambient image deletion from the locked document, not a loose read", () =>
+    Effect.gen(function* () {
+      const referencedId = ambientImageIdFor(ambientPngBytes, "png");
+      yield* buildAppUnderTest({
+        layers: {
+          clientSettings: {
+            // A snapshot read says the id is free; the locked document says it
+            // is referenced. Only the locked answer may decide.
+            getSettings: Effect.succeed(DEFAULT_CLIENT_SETTINGS),
+            withReferenceLock: (use) =>
+              use({
+                ...DEFAULT_CLIENT_SETTINGS,
+                ambientImageCycleAssets: [ambientAsset(referencedId)],
+              } as typeof DEFAULT_CLIENT_SETTINGS),
+          },
+        },
+      });
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+
+      const uploadResponse = yield* HttpClient.post("/api/ambient-media/image", {
+        headers: { cookie, "content-type": "image/png" },
+        body: HttpBody.uint8Array(ambientPngBytes, "image/png"),
+      });
+      assert.equal(uploadResponse.status, 200);
+
+      const deleteResponse = yield* HttpClient.del(`/api/ambient-media/image/${referencedId}`, {
+        headers: { cookie },
+      });
+      assert.equal(deleteResponse.status, 409);
+
       const stillThere = yield* HttpClient.get(`/api/ambient-media/image/${referencedId}`, {
         headers: { cookie },
       });
