@@ -224,6 +224,37 @@ export const ServerSystemGpuTelemetry = Schema.Union([
 ]);
 export type ServerSystemGpuTelemetry = typeof ServerSystemGpuTelemetry.Type;
 
+/**
+ * Aggregate host throughput only. Raw adapter counters remain inside the
+ * backend; interface names, addresses, endpoints, and packet contents are
+ * intentionally absent from this contract.
+ */
+export const ServerSystemNetworkTelemetry = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("available"),
+    receiveBytesPerSecond: NonNegativeInt.check(
+      Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
+    ),
+    transmitBytesPerSecond: NonNegativeInt.check(
+      Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
+    ),
+    detail: Schema.Null,
+  }),
+  Schema.Struct({
+    status: Schema.Literal("warming"),
+    receiveBytesPerSecond: Schema.Null,
+    transmitBytesPerSecond: Schema.Null,
+    detail: TrimmedNonEmptyString.check(Schema.isMaxLength(160)),
+  }),
+  Schema.Struct({
+    status: Schema.Literal("unavailable"),
+    receiveBytesPerSecond: Schema.Null,
+    transmitBytesPerSecond: Schema.Null,
+    detail: TrimmedNonEmptyString.check(Schema.isMaxLength(160)),
+  }),
+]);
+export type ServerSystemNetworkTelemetry = typeof ServerSystemNetworkTelemetry.Type;
+
 export const ServerProjectSystemTelemetryResult = Schema.Struct({
   projectId: ProjectId,
   sampledAt: Schema.DateTimeUtc,
@@ -234,6 +265,7 @@ export const ServerProjectSystemTelemetryResult = Schema.Struct({
   memory: ServerSystemMemoryTelemetry,
   // Older remote servers do not provide GPU measurements.
   gpu: Schema.optional(ServerSystemGpuTelemetry),
+  network: Schema.optional(ServerSystemNetworkTelemetry),
   projectVolume: ServerProjectVolumeTelemetry,
 });
 export type ServerProjectSystemTelemetryResult = typeof ServerProjectSystemTelemetryResult.Type;

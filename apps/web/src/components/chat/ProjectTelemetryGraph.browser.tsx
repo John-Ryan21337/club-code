@@ -68,6 +68,88 @@ function telemetryFixture(input: {
 describe("ProjectTelemetryGraph", () => {
   beforeEach(async () => page.viewport(800, 600));
 
+  it("shows aggregate network rates and bounded throughput history", async () => {
+    const measurement: ServerProjectSystemTelemetryResult = {
+      ...telemetryFixture({ projectId: projectA }),
+      network: {
+        status: "available",
+        receiveBytesPerSecond: 2048,
+        transmitBytesPerSecond: 0,
+        detail: null,
+      },
+    };
+    const mounted = await render(
+      <ProjectTelemetryGraph
+        environmentId={environmentA}
+        projectId={projectA}
+        readTelemetry={async () => measurement}
+      />,
+    );
+    try {
+      await page.getByLabelText("Expand Resources").click();
+      await expect
+        .element(page.getByLabelText(/Host receive: 2 KiB\/s.*Host aggregate/))
+        .toBeVisible();
+      await expect
+        .element(page.getByLabelText(/Host transmit: 0 B\/s.*Host aggregate/))
+        .toBeVisible();
+      await expect
+        .element(page.getByRole("img", { name: "Host receive throughput history" }))
+        .toBeVisible();
+      const rate = page.getByText("2 KiB/s", { exact: true }).element();
+      expect(rate.scrollWidth).toBeLessThanOrEqual(rate.clientWidth);
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
+  it("shows warming rates without zeroes and clears measured rates after a failed poll", async () => {
+    const diagnostic = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const next = deferred<ServerProjectSystemTelemetryResult>();
+    const readTelemetry = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...telemetryFixture({ projectId: projectA, minimumSampleIntervalMs: 250 }),
+        network: {
+          status: "warming",
+          receiveBytesPerSecond: null,
+          transmitBytesPerSecond: null,
+          detail: "Waiting for a second network sample.",
+        },
+      })
+      .mockImplementationOnce(() => next.promise)
+      .mockRejectedValue({ _tag: "TelemetryOffline" });
+    const mounted = await render(
+      <ProjectTelemetryGraph
+        environmentId={environmentA}
+        projectId={projectA}
+        pollIntervalMs={250}
+        readTelemetry={readTelemetry}
+      />,
+    );
+    try {
+      await page.getByLabelText("Expand Resources").click();
+      await expect.element(page.getByLabelText(/Host receive: Waiting/)).toBeVisible();
+      expect(document.body.textContent).not.toContain("0 B/s");
+      next.resolve({
+        ...telemetryFixture({ projectId: projectA, minimumSampleIntervalMs: 250 }),
+        network: {
+          status: "available",
+          receiveBytesPerSecond: 2048,
+          transmitBytesPerSecond: 0,
+          detail: null,
+        },
+      });
+      await expect.element(page.getByLabelText(/Host receive: 2 KiB\/s/)).toBeVisible();
+      await expect.element(page.getByLabelText(/Host receive: Unavailable/)).toBeVisible();
+      await expect.element(page.getByLabelText(/Host transmit: Unavailable/)).toBeVisible();
+      expect(document.body.textContent).not.toContain("2 KiB/s");
+    } finally {
+      diagnostic.mockRestore();
+      await mounted.unmount();
+    }
+  });
+
   it("renders measured GPU utilization and combined VRAM from the telemetry response", async () => {
     const measurement: ServerProjectSystemTelemetryResult = {
       ...telemetryFixture({ projectId: projectA }),
@@ -99,9 +181,7 @@ describe("ProjectTelemetryGraph", () => {
       await expect
         .element(page.getByLabelText(/GPU: 62%.*Peak across 1 GPU adapter/))
         .toBeVisible();
-      await expect
-        .element(page.getByLabelText(/VRAM: 25%.*6 GiB available/))
-        .toBeVisible();
+      await expect.element(page.getByLabelText(/VRAM: 25%.*6 GiB available/)).toBeVisible();
     } finally {
       await mounted.unmount();
     }

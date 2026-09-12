@@ -32,6 +32,13 @@ import {
   type HostGpuTelemetrySamplerShape,
 } from "./HostGpuTelemetry.ts";
 import { probeFailedGpuTelemetry } from "./GpuTelemetry.ts";
+import { makeHostNetworkCounterReader } from "./HostNetworkCounterReader.ts";
+import {
+  makeHostNetworkTelemetrySampler,
+  unavailableNetworkTelemetry,
+  type HostNetworkTelemetrySamplerShape,
+  type ClosableHostNetworkCounterReaderShape,
+} from "./HostNetworkTelemetry.ts";
 
 export const PROJECT_SYSTEM_TELEMETRY_MINIMUM_SAMPLE_INTERVAL_MS = 1_000;
 
@@ -63,6 +70,7 @@ export interface ProjectSystemTelemetryDependencies {
   readonly hostSampler: HostSystemTelemetrySamplerShape;
   readonly volumeSampler: ProjectVolumeSamplerShape;
   readonly gpuSampler: HostGpuTelemetrySamplerShape;
+  readonly networkSampler: HostNetworkTelemetrySamplerShape;
   readonly runtime: ProjectSystemTelemetryRuntime;
 }
 
@@ -195,8 +203,11 @@ export function makeProjectSystemTelemetry(
       Promise.resolve()
         .then(() => dependencies.gpuSampler.sample())
         .catch(probeFailedGpuTelemetry),
+      Promise.resolve()
+        .then(() => dependencies.networkSampler.sample())
+        .catch(unavailableNetworkTelemetry),
     ])
-      .then(([projectVolume, gpu]) => ({
+      .then(([projectVolume, gpu, network]) => ({
         projectId: input.projectId,
         sampledAt: DateTime.makeUnsafe(sampledAtMs),
         minimumSampleIntervalMs: PROJECT_SYSTEM_TELEMETRY_MINIMUM_SAMPLE_INTERVAL_MS,
@@ -205,6 +216,7 @@ export function makeProjectSystemTelemetry(
         cpu: host.cpu,
         memory: host.memory,
         gpu,
+        network,
         projectVolume,
       }))
       .then((result) => {
@@ -261,11 +273,15 @@ function makeLiveRuntime(): ProjectSystemTelemetryRuntime {
 function makeLiveService(input: {
   readonly volumeProbe: ProjectVolumeProbeProcessShape;
   readonly gpuProbe: GpuProbeProcessShape;
+  readonly networkReader: ClosableHostNetworkCounterReaderShape;
 }): ProjectSystemTelemetryShape {
   const runtime = makeLiveRuntime();
   return makeProjectSystemTelemetry({
     hostSampler: makeHostSystemTelemetrySampler(makeLiveHostSystemTelemetryRuntime()),
     gpuSampler: makeHostGpuTelemetrySampler(input.gpuProbe, {
+      nowMonotonicMillis: runtime.nowMonotonicMillis,
+    }),
+    networkSampler: makeHostNetworkTelemetrySampler(input.networkReader, {
       nowMonotonicMillis: runtime.nowMonotonicMillis,
     }),
     volumeSampler: makeProjectVolumeSampler(input.volumeProbe, {
@@ -279,10 +295,11 @@ const liveService = Effect.acquireRelease(
   Effect.sync(() => ({
     volumeProbe: makeProjectVolumeProbeProcess(),
     gpuProbe: makeGpuProbeProcess(),
+    networkReader: makeHostNetworkCounterReader(),
   })),
-  ({ volumeProbe, gpuProbe }) =>
+  ({ volumeProbe, gpuProbe, networkReader }) =>
     Effect.promise(async () => {
-      await Promise.allSettled([volumeProbe.close(), gpuProbe.close()]);
+      await Promise.allSettled([volumeProbe.close(), gpuProbe.close(), networkReader.close()]);
     }),
 ).pipe(Effect.map(makeLiveService));
 

@@ -11,6 +11,8 @@ import {
   GaugeIcon,
   HardDriveIcon,
   MemoryStickIcon,
+  ArrowDownIcon,
+  ArrowUpIcon,
 } from "lucide-react";
 import {
   type ComponentType,
@@ -32,6 +34,7 @@ import {
   appendBoundedTelemetryHistory,
   buildTelemetrySparklinePath,
   formatTelemetryBytes,
+  normalizeTelemetryRateHistory,
   PROJECT_TELEMETRY_HISTORY_LIMIT,
   projectTelemetryGpuAdapter,
   type ProjectTelemetryGpuAdapter,
@@ -156,6 +159,8 @@ function telemetryGapPoint(): ProjectTelemetryHistoryPoint {
     projectVolumePercent: null,
     gpuPercent: null,
     vramPercent: null,
+    networkReceiveBytesPerSecond: null,
+    networkTransmitBytesPerSecond: null,
   };
 }
 
@@ -172,6 +177,7 @@ function TelemetrySparkline(props: {
   readonly label: string;
   readonly color: string;
   readonly values: readonly (number | null)[];
+  readonly measurement?: "utilization" | "throughput";
 }) {
   const path = buildTelemetrySparklinePath(props.values);
   const latestIndex = props.values.findLastIndex((value) => value !== null);
@@ -184,12 +190,12 @@ function TelemetrySparkline(props: {
 
   return (
     <svg
-      aria-label={`${props.label} utilization history`}
+      aria-label={`${props.label} ${props.measurement ?? "utilization"} history`}
       className="h-7 w-full overflow-visible"
       role="img"
       viewBox="0 0 100 24"
     >
-      <title>{`${props.label} bounded recent utilization history`}</title>
+      <title>{`${props.label} bounded recent ${props.measurement ?? "utilization"} history`}</title>
       <path d="M 0 6 H 100 M 0 12 H 100 M 0 18 H 100" stroke="currentColor" opacity="0.09" />
       {path ? (
         <path
@@ -215,6 +221,7 @@ function TelemetryCard(props: {
   readonly title?: string | undefined;
   readonly color: string;
   readonly history: readonly (number | null)[];
+  readonly measurement?: "utilization" | "throughput";
 }) {
   const Icon = props.icon;
   return (
@@ -229,11 +236,16 @@ function TelemetryCard(props: {
         <span className="truncate text-xs font-medium uppercase tracking-[0.1em] text-muted-foreground">
           {props.label}
         </span>
-        <span className="ml-auto truncate text-xs font-semibold text-foreground">
+        <span className="ml-auto shrink-0 text-xs font-semibold text-foreground">
           {props.value}
         </span>
       </div>
-      <TelemetrySparkline color={props.color} label={props.label} values={props.history} />
+      <TelemetrySparkline
+        color={props.color}
+        label={props.label}
+        values={props.history}
+        measurement={props.measurement ?? "utilization"}
+      />
       <div className="truncate text-xs text-muted-foreground">{props.detail}</div>
     </div>
   );
@@ -475,6 +487,12 @@ export function ProjectTelemetryGraph({
         (visibleView.status === "unavailable" ? "Telemetry unavailable" : "Waiting"));
   const gpuLoading = visibleView.status === "loading";
   const telemetryUnavailable = visibleView.status === "unavailable";
+  const network = telemetryUnavailable ? undefined : telemetry?.network;
+  const networkAvailable = network?.status === "available";
+  const networkWaiting = visibleView.status === "loading" || network?.status === "warming";
+  const networkDetail = networkAvailable
+    ? "Host aggregate · chart scaled to recent peak"
+    : (network?.detail ?? "Host network throughput is unavailable.");
   const gpuDetail = gpuLoading
     ? "Waiting"
     : telemetryUnavailable
@@ -611,6 +629,40 @@ export function ProjectTelemetryGraph({
                   ? "Waiting"
                   : formatPercent(telemetryUnavailable ? null : visibleView.gpu.vramPercent)
               }
+            />
+            <TelemetryCard
+              color="var(--cafe-project-telemetry-network-receive, #0891b2)"
+              icon={ArrowDownIcon}
+              label="Host receive"
+              measurement="throughput"
+              value={
+                networkAvailable
+                  ? `${formatTelemetryBytes(network.receiveBytesPerSecond)}/s`
+                  : networkWaiting
+                    ? "Waiting"
+                    : "Unavailable"
+              }
+              detail={networkDetail}
+              history={normalizeTelemetryRateHistory(
+                visibleView.history.map((point) => point.networkReceiveBytesPerSecond),
+              )}
+            />
+            <TelemetryCard
+              color="var(--cafe-project-telemetry-network-transmit, #db2777)"
+              icon={ArrowUpIcon}
+              label="Host transmit"
+              measurement="throughput"
+              value={
+                networkAvailable
+                  ? `${formatTelemetryBytes(network.transmitBytesPerSecond)}/s`
+                  : networkWaiting
+                    ? "Waiting"
+                    : "Unavailable"
+              }
+              detail={networkDetail}
+              history={normalizeTelemetryRateHistory(
+                visibleView.history.map((point) => point.networkTransmitBytesPerSecond),
+              )}
             />
           </div>
         </aside>

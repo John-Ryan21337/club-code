@@ -1,4 +1,8 @@
 import { ProjectId } from "@cafecode/contracts";
+import {
+  unavailableNetworkTelemetry,
+  type HostNetworkTelemetrySamplerShape,
+} from "./HostNetworkTelemetry.ts";
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -61,6 +65,7 @@ function makeFixture(input: {
   readonly hostSample?: HostSystemTelemetrySamplerShape["sample"];
   readonly volumeRead?: ProjectVolumeSamplerShape["read"];
   readonly gpuSampler?: HostGpuTelemetrySamplerShape;
+  readonly networkSampler?: HostNetworkTelemetrySamplerShape;
   readonly platform?: () => string;
   readonly architecture?: () => string;
 }) {
@@ -88,6 +93,7 @@ function makeFixture(input: {
   return {
     telemetry: makeProjectSystemTelemetry({
       hostSampler,
+      networkSampler: input.networkSampler ?? { sample: async () => unavailableNetworkTelemetry() },
       volumeSampler,
       gpuSampler: input.gpuSampler ?? { sample: async () => unsupportedGpuTelemetry() },
       runtime,
@@ -98,6 +104,23 @@ function makeFixture(input: {
 }
 
 describe("ProjectSystemTelemetry", () => {
+  it("keeps host and storage measurements when the network reader fails", () =>
+    Effect.gen(function* () {
+      const fixture = makeFixture({
+        networkSampler: {
+          sample: async () => {
+            throw new Error("private network counter error");
+          },
+        },
+      });
+      const result = yield* fixture.telemetry.read({ projectId, workspaceRoot: "/project" });
+      expect(result.network).toEqual(unavailableNetworkTelemetry());
+      expect(result.cpu).toEqual(availableHost.cpu);
+      expect(result.memory).toEqual(availableHost.memory);
+      expect(result.projectVolume).toEqual(availableVolume);
+      expect(JSON.stringify(result)).not.toContain("private");
+    }));
+
   it("shares one GPU probe across projects while retaining their separate volume reads", () =>
     Effect.gen(function* () {
       let gpuReads = 0;

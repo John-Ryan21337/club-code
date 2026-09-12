@@ -7,6 +7,7 @@ import {
   buildTelemetrySparklinePath,
   formatTelemetryBytes,
   projectTelemetryGpuAdapter,
+  normalizeTelemetryRateHistory,
   toProjectTelemetryHistoryPoint,
   type ProjectTelemetryHistoryPoint,
 } from "./ProjectTelemetryGraph.model";
@@ -68,10 +69,24 @@ function historyPoint(sampledAtMs: number): ProjectTelemetryHistoryPoint {
     projectVolumePercent: sampledAtMs,
     gpuPercent: null,
     vramPercent: null,
+    networkReceiveBytesPerSecond: null,
+    networkTransmitBytesPerSecond: null,
   };
 }
 
 describe("ProjectTelemetryGraph model", () => {
+  it("scales throughput to its recent peak without turning missing measurements into zero", () => {
+    expect(normalizeTelemetryRateHistory([0, 500, null, 1000, -1, Number.NaN])).toEqual([
+      0,
+      50,
+      null,
+      100,
+      null,
+      null,
+    ]);
+    expect(normalizeTelemetryRateHistory([0, 0])).toEqual([0, 0]);
+  });
+
   it("keeps history bounded and ordered", () => {
     let history: readonly ProjectTelemetryHistoryPoint[] = [];
     for (let index = 0; index < 12; index += 1) {
