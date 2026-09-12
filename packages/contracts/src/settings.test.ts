@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
 import * as Schema from "effect/Schema";
 
+it("requires explicit Matrix work vocabulary opt-in and preserves a stored disable", () => {
+  const decode = Schema.decodeUnknownSync(ClientSettingsSchema);
+  expect(decode({}).fallingEffectLiveWorkVocabularyEnabled).toBe(false);
+  expect(
+    decode({ fallingEffectLiveWorkVocabularyEnabled: true }).fallingEffectLiveWorkVocabularyEnabled,
+  ).toBe(true);
+  expect(
+    Schema.decodeUnknownSync(ClientSettingsPatch)({
+      fallingEffectLiveWorkVocabularyEnabled: false,
+    }),
+  ).toEqual({ fallingEffectLiveWorkVocabularyEnabled: false });
+  expect(() => decode({ fallingEffectLiveWorkVocabularyEnabled: "true" })).toThrow();
+});
+
 import {
   ClientSettingsPatch,
   ClientSettingsSchema,

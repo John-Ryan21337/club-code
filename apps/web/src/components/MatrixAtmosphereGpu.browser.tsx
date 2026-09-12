@@ -16,6 +16,7 @@ import {
   resolveMatrixAtmosphereColorFrame,
 } from "../windowAtmosphere";
 import { WindowAtmosphere } from "./WindowAtmosphere";
+import type { AppState } from "../store";
 
 const testState = vi.hoisted(() => ({
   settings: null as UnifiedSettings | null,
@@ -45,6 +46,12 @@ vi.mock("../matrixWebGlRenderer", async (importOriginal) => {
 vi.mock("../hooks/useSettings", () => ({
   useSettings: <T,>(selector: (settings: UnifiedSettings) => T) =>
     selector(testState.settings ?? DEFAULT_UNIFIED_SETTINGS),
+}));
+
+// Backend tests have no selected route. Keep the store seam local while the
+// route/privacy suite exercises real vocabulary selection separately.
+vi.mock("../store", () => ({
+  useStore: <T,>(selector: (state: AppState) => T) => selector({} as AppState),
 }));
 
 vi.mock("../hooks/useTheme", () => ({

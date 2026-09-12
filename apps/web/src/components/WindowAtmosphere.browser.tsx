@@ -1,13 +1,20 @@
 import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@cafecode/contracts/settings";
+import { EnvironmentId, ThreadId } from "@cafecode/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { MAX_ATMOSPHERE_CANVAS_PIXELS } from "../windowAtmosphere";
 import { WindowAtmosphere } from "./WindowAtmosphere";
+import type { AppState } from "../store";
 
 const testState = vi.hoisted(() => ({
   settings: null as UnifiedSettings | null,
   atmosphereAvailable: true,
+  state: {} as AppState,
+}));
+
+vi.mock("../store", () => ({
+  useStore: <T,>(selector: (state: AppState) => T) => selector(testState.state),
 }));
 
 vi.mock("../hooks/useSettings", () => ({
@@ -148,6 +155,7 @@ describe("WindowAtmosphere", () => {
       continueBackgroundAnimations: true,
     };
     testState.atmosphereAvailable = true;
+    testState.state = {} as AppState;
     context = createCanvasContext();
     reducedMotion = false;
     mediaChange = null;
@@ -239,6 +247,78 @@ describe("WindowAtmosphere", () => {
     await screen.unmount();
     expect(frames.size).toBe(0);
   });
+
+  it.each([false, true])(
+    "clears routed labels without reseeding (reduced motion %s)",
+    async (staticMode) => {
+      reducedMotion = staticMode;
+      testState.settings = {
+        ...testState.settings!,
+        fallingEffectLiveWorkVocabularyEnabled: true,
+        fallingEffectJapaneseRatio: 0,
+      };
+      const env = EnvironmentId.make("selected");
+      const first = ThreadId.make("first");
+      const second = ThreadId.make("second");
+      const record = (name: string) => ({
+        kind: "tool.completed",
+        tone: "tool",
+        payload: { itemType: "file_change", data: { path: `src/${name}.tsx` } },
+      });
+      testState.state = {
+        environmentStateById: {
+          [env]: {
+            activityIdsByThreadId: { [first]: ["a"], [second]: ["b"] },
+            activityByThreadId: {
+              [first]: { a: record("First") },
+              [second]: { b: record("Second") },
+            },
+          },
+        },
+      } as unknown as AppState;
+      const screen = await render(
+        <WindowAtmosphere selectedThreadRef={{ environmentId: env, threadId: first }} />,
+      );
+      const tick = (time: number) => {
+        const frame = Array.from(frames.values())[0]!;
+        frames.clear();
+        frame(time);
+      };
+      if (!staticMode) {
+        tick(1000);
+        tick(1100);
+      }
+      const calls = () => vi.mocked(context.fillText).mock.calls;
+      expect(calls().some(([text]) => text === "First.tsx")).toBe(true);
+      const geometry = calls()
+        .slice(-calls().length / (staticMode ? 1 : 2))
+        .map(([, x, y]) => [x, y]);
+      vi.mocked(context.fillText).mockClear();
+      await screen.rerender(
+        <WindowAtmosphere selectedThreadRef={{ environmentId: env, threadId: second }} />,
+      );
+      expect(calls().some(([text]) => text === "Second.tsx")).toBe(true);
+      expect(calls().some(([text]) => text === "First.tsx")).toBe(false);
+      // A route update repaints before the pending RAF; its last frame retains the advanced positions.
+      expect(
+        calls()
+          .slice(-geometry.length)
+          .map(([, x, y]) => [x, y]),
+      ).toEqual(geometry);
+      expect(frames.size).toBe(staticMode ? 0 : 1);
+      vi.mocked(context.fillText).mockClear();
+      testState.settings = {
+        ...testState.settings!,
+        fallingEffectLiveWorkVocabularyEnabled: false,
+      };
+      await screen.rerender(
+        <WindowAtmosphere selectedThreadRef={{ environmentId: env, threadId: second }} />,
+      );
+      expect(calls().length).toBeGreaterThan(0);
+      expect(calls().every(([text]) => text.length === 1)).toBe(true);
+      await screen.unmount();
+    },
+  );
 
   it.each([
     [1, 100_000_000],

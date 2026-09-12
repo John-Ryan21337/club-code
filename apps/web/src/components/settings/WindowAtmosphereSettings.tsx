@@ -87,6 +87,7 @@ export function WindowAtmosphereSettings() {
     settings.fallingEffectSpeed !== DEFAULT_FALLING_EFFECT_SPEED ||
     settings.fallingEffectDensity !== DEFAULT_FALLING_EFFECT_DENSITY ||
     settings.fallingEffectJapaneseRatio !== DEFAULT_FALLING_EFFECT_JAPANESE_RATIO ||
+    settings.fallingEffectLiveWorkVocabularyEnabled ||
     settings.fallingEffectMatrixColorCycleSpeed !==
       DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED ||
     settings.fallingEffectMatrixBaseFontSize !== DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE ||
@@ -139,6 +140,7 @@ export function WindowAtmosphereSettings() {
                   fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
                   fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
                   fallingEffectJapaneseRatio: DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
+                  fallingEffectLiveWorkVocabularyEnabled: false,
                 })
               }
             />
@@ -281,6 +283,19 @@ export function WindowAtmosphereSettings() {
                 </NumberField>
                 <span className="text-xs text-muted-foreground">%</span>
               </div>
+            }
+          />
+          <SettingsRow
+            title="Live work vocabulary / 作業語彙"
+            description="Show operation labels and filtered file names from the selected thread. Names can still be private; turn this off before screen sharing. Prompts, command text and file contents are not used. / 選択スレッドの操作名とフィルター済みファイル名を表示します。非公開の名前が残る場合があります。画面共有前にオフにしてください。プロンプト・コマンド本文・ファイル内容は使いません。"
+            control={
+              <Switch
+                checked={settings.fallingEffectLiveWorkVocabularyEnabled}
+                onCheckedChange={(checked) =>
+                  updateSettings({ fallingEffectLiveWorkVocabularyEnabled: Boolean(checked) })
+                }
+                aria-label="Live work vocabulary / 作業語彙"
+              />
             }
           />
           <SettingsRow

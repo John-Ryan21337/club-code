@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { WindowAtmosphereSettings } from "./WindowAtmosphereSettings";
+import "../../index.css";
 
 const testState = vi.hoisted(() => ({
   settings: null as UnifiedSettings | null,
@@ -36,7 +37,7 @@ describe("WindowAtmosphereSettings", () => {
     testState.updateSettings.mockReset();
   });
 
-  it("offers only the base Matrix settings and persists selections", async () => {
+  it("offers the opt-in vocabulary control and persists selections", async () => {
     const screen = await render(<WindowAtmosphereSettings />);
 
     await expect.element(page.getByText("Window atmosphere", { exact: true })).toBeInTheDocument();
@@ -44,7 +45,13 @@ describe("WindowAtmosphereSettings", () => {
     await expect
       .element(page.getByText("Roman / Japanese mix", { exact: true }))
       .toBeInTheDocument();
-    await expect.element(page.getByText("Live work vocabulary")).not.toBeInTheDocument();
+    await expect
+      .element(page.getByRole("switch", { name: "Live work vocabulary / 作業語彙" }))
+      .not.toBeChecked();
+    await page.getByRole("switch", { name: "Live work vocabulary / 作業語彙" }).click();
+    expect(testState.updateSettings).toHaveBeenCalledWith({
+      fallingEffectLiveWorkVocabularyEnabled: true,
+    });
     await expect.element(page.getByText("Provider activity links")).not.toBeInTheDocument();
 
     await page.getByText("Rain", { exact: true }).click();
@@ -104,6 +111,7 @@ describe("WindowAtmosphereSettings", () => {
       fallingEffectSpeed: 1,
       fallingEffectDensity: 1,
       fallingEffectJapaneseRatio: 0.45,
+      fallingEffectLiveWorkVocabularyEnabled: false,
     });
 
     await screen.unmount();

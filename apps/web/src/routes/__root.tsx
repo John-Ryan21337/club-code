@@ -6,6 +6,7 @@ import {
   type ErrorComponentProps,
   useLocation,
   useNavigate,
+  useParams,
 } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { QueryClient, useQueryClient } from "@tanstack/react-query";
@@ -56,6 +57,7 @@ import {
   applySidebarStarSpeed,
 } from "../themeAccent";
 import { applyInterfaceScalePercent } from "../interfaceScale";
+import { resolveThreadRouteRef } from "../threadRoutes";
 import {
   ensureEnvironmentConnectionBootstrapped,
   getPrimaryEnvironmentConnection,
@@ -95,6 +97,10 @@ export const Route = createRootRouteWithContext<{
 
 function RootRouteView() {
   const pathname = useLocation({ select: (location) => location.pathname });
+  const selectedThreadRef = useParams({
+    strict: false,
+    select: (params) => resolveThreadRouteRef(params),
+  });
   const { authGateState } = Route.useRouteContext();
   const primaryEnvironmentAuthenticated = authGateState.status === "authenticated";
   const [shutdownOverlayVisible, setShutdownOverlayVisible] = useState(false);
@@ -165,7 +171,7 @@ function RootRouteView() {
         <TaskAtriumOverlay />
         <AmbianceLayer />
         <PowerSaveBlockerSync />
-        <WindowAtmosphere />
+        <WindowAtmosphere selectedThreadRef={selectedThreadRef} />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
         {primaryEnvironmentAuthenticated ? <DesktopNotificationWatcher /> : null}

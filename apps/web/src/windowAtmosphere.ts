@@ -29,6 +29,7 @@ import {
   type FallingEffectMatrixColorMode,
   type FallingEffectMatrixMotionMode,
 } from "@cafecode/contracts/settings";
+import type { MatrixWorkVocabulary } from "./matrixWorkVocabulary";
 
 export const MAX_ATMOSPHERE_DPR = 2;
 /** Keep the backing canvas bounded even on an ultra-wide high-DPI display. */
@@ -89,6 +90,7 @@ export const MATRIX_JAPANESE_GLYPHS = `アイウエオカキクケコサシス�
 /** Rare, intact, reviewed 2ch-style cat AA tokens; they are never split into pseudo-phrases. */
 export const MAX_MATRIX_TOKEN_FONT_SIZE = 18;
 export const MAX_MATRIX_TOKEN_WIDTH_PX = 144;
+const MATRIX_WORK_TOKEN_PROBABILITY = 0.34;
 const MATRIX_WALK_FADE_START_PROGRESS = 0.72;
 const MATRIX_CENTER_WIND_MAX_SPEED_PX_PER_SECOND = 60;
 const MATRIX_WALK_LABEL_VIEWPORT_WIDTH_RATIO = 0.9;
@@ -143,6 +145,7 @@ export interface AtmosphereParticle {
   glyphOffset: number;
   glyphs: string;
   matrixLanguage: "english" | "japanese" | null;
+  matrixWorkToken: string | null;
   /** Viewport Y where the current bounded Matrix Walk lifecycle began. */
   matrixLifecycleStartY: number;
   /** Normalized 0..1 travel/font lifecycle, independent from viewport Y. */
@@ -265,6 +268,7 @@ export function createAtmosphereScene(
         glyphOffset: 0,
         glyphs: "",
         matrixLanguage: null,
+        matrixWorkToken: null,
         matrixLifecycleStartY: 0,
         matrixLifecycleProgress: 0,
         matrixLifecycleOpacity: 1,
@@ -304,6 +308,7 @@ export function createAtmosphereScene(
         glyphOffset: Math.floor(random() * glyphs.length),
         glyphs,
         matrixLanguage: usesJapanese ? "japanese" : "english",
+        matrixWorkToken: null,
         matrixLifecycleStartY: lifecycleStartY,
         matrixLifecycleProgress: lifecycleProgress,
         matrixLifecycleOpacity: resolveMatrixLifecycleOpacity(lifecycleProgress),
@@ -321,6 +326,7 @@ export function createAtmosphereScene(
       glyphOffset: 0,
       glyphs: "",
       matrixLanguage: null,
+      matrixWorkToken: null,
       matrixLifecycleStartY: 0,
       matrixLifecycleProgress: 0,
       matrixLifecycleOpacity: 1,
@@ -341,6 +347,22 @@ export function clampFallingEffectSpeed(speed: number): number {
     return 1;
   }
   return Math.min(MAX_FALLING_EFFECT_SPEED, Math.max(MIN_FALLING_EFFECT_SPEED, speed));
+}
+
+/** Replace only stream-head labels; keep positions, velocity and lifecycle intact. */
+export function applyMatrixWorkVocabularyInPlace(
+  scene: AtmosphereScene,
+  vocabulary: MatrixWorkVocabulary,
+  random: () => number,
+): void {
+  if (scene.kind !== "matrix") return;
+  for (const particle of scene.particles) {
+    const terms = particle.matrixLanguage === "japanese" ? vocabulary.japanese : vocabulary.english;
+    particle.matrixWorkToken =
+      terms.length > 0 && random() < MATRIX_WORK_TOKEN_PROBABILITY
+        ? (terms[Math.floor(random() * terms.length)] ?? null)
+        : null;
+  }
 }
 
 export function clampMatrixColorCycleSpeed(speed: number): number {
@@ -1210,7 +1232,10 @@ export function drawAtmosphereScene(
                 trailIndex * 7 +
                 Math.floor(Math.max(0, particle.y) / particle.size)) %
               particle.glyphs.length;
-            const glyph = particle.glyphs[glyphIndex] ?? "0";
+            const glyph =
+              (trailIndex === 0 ? particle.matrixWorkToken : null) ??
+              particle.glyphs[glyphIndex] ??
+              "0";
             const textLayout = resolveMatrixWalkTextLayout(glyph, walkFontSize, scene.width);
             const textCenterX = resolveMatrixWalkTextCenterX(
               projectedFrom.x,
@@ -1279,7 +1304,9 @@ export function drawAtmosphereScene(
               ? normalizedOpacity
               : normalizedOpacity * (1 - trailIndex / 8) * 0.7) * lifecycleOpacity;
           context.fillText(
-            particle.glyphs[glyphIndex] ?? "0",
+            (trailIndex === 0 ? particle.matrixWorkToken : null) ??
+              particle.glyphs[glyphIndex] ??
+              "0",
             projectedFrom.x,
             projectedFrom.y,
             MAX_MATRIX_TOKEN_WIDTH_PX * projectedFrom.scale,
