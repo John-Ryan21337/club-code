@@ -386,6 +386,21 @@ export function createFollowUpQueuePersistence(storage?: StateStorage) {
     }
   };
   return {
+    hasForThread(
+      scope: Pick<FollowUpQueueItemScope, "environmentId" | "threadId">,
+    ): FollowUpQueuePersistenceResult<boolean> {
+      try {
+        // Admission needs identities only; do not hydrate attachment files for an idle check.
+        return success(
+          read().some(
+            (item) =>
+              item.environmentId === scope.environmentId && item.threadId === scope.threadId,
+          ),
+        );
+      } catch {
+        return failure(INVALID_QUEUE);
+      }
+    },
     load(environmentId: EnvironmentId): FollowUpQueuePersistenceResult<{
       pending: HydratedFollowUpQueueItem[];
       claimed: HydratedFollowUpQueueItem[];

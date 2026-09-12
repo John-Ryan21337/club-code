@@ -79,6 +79,31 @@ function raw(storage: StateStorage): string {
 }
 
 describe("follow-up queue persistence", () => {
+  it("checks exact-thread admission for pending and claimed items without hydrating files", async () => {
+    const storage = createMemoryStorage();
+    const persistence = createFollowUpQueuePersistence(storage);
+    const scope = { environmentId: environmentA, threadId };
+    expect(persistence.hasForThread(scope)).toEqual({ ok: true, value: false });
+    const queued = { ...item(), images: [image()] };
+    expect(await persistence.save(environmentA, [queued])).toMatchObject({ ok: true });
+    const before = raw(storage);
+    const fileConstructor = vi.spyOn(globalThis, "File");
+    expect(persistence.hasForThread(scope)).toEqual({ ok: true, value: true });
+    expect(persistence.hasForThread({ ...scope, environmentId: environmentB })).toEqual({
+      ok: true,
+      value: false,
+    });
+    expect(persistence.hasForThread({ ...scope, threadId: ThreadId.make("other-thread") })).toEqual(
+      { ok: true, value: false },
+    );
+    expect(fileConstructor).not.toHaveBeenCalled();
+    fileConstructor.mockRestore();
+    expect(raw(storage)).toBe(before);
+    expect(persistence.claim(claim(queued), queued)).toMatchObject({ ok: true });
+    expect(persistence.hasForThread(scope)).toEqual({ ok: true, value: true });
+    storage.setItem(FOLLOW_UP_QUEUE_STORAGE_KEY, "invalid fixture");
+    expect(persistence.hasForThread(scope)).toMatchObject({ ok: false });
+  });
   it("round-trips pending metadata and bounded image data without paths, blobs, or file bodies", async () => {
     const storage = createMemoryStorage();
     const persistence = createFollowUpQueuePersistence(storage);
