@@ -48,6 +48,7 @@ import {
   ProviderSettingsPanel,
   SystemSettingsPanel,
 } from "./SettingsPanels";
+import { NotificationsSettingsPanel } from "./NotificationsSettingsPanel";
 import { SourceControlSettingsPanel } from "./SourceControlSettings";
 
 function renderWithTestRouter(children: ReactNode) {
@@ -962,6 +963,88 @@ describe("settings panels", () => {
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({ powerSaveBlockerMode: "during-chats" });
     });
+  });
+
+  it("persists completion audio preferences from Notifications settings", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <NotificationsSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    // Default state: completion audio is present but entirely opt-in, and the
+    // dual-only stereo control is not rendered yet.
+    await expect.element(page.getByText("Completion audio")).toBeInTheDocument();
+    const soundSwitch = page.getByLabelText("Enable completion alert sound");
+    const speechSwitch = page.getByLabelText("Enable spoken completion alert");
+    await expect.element(soundSwitch).not.toBeChecked();
+    await expect.element(speechSwitch).not.toBeChecked();
+    expect(document.querySelector('[aria-label="Dual completion speech stereo order"]')).toBeNull();
+    // Nothing may be tested until the user opts in, so the button stays off.
+    await expect.element(page.getByText("Test enabled completion alerts")).toBeDisabled();
+
+    // Completion audio is a per-device choice: it is written to this device's
+    // local client settings and must never reach the shared server settings.
+    const persisted = () =>
+      (desktopBridge.setClientSettings as unknown as { mock: { calls: [unknown][] } }).mock.calls
+        .at(-1)
+        ?.at(0) as Record<string, unknown> | undefined;
+
+    await soundSwitch.click();
+    await vi.waitFor(() => {
+      expect(persisted()).toMatchObject({ completionAlertSoundEnabled: true });
+    });
+    await expect.element(soundSwitch).toBeChecked();
+    await expect.element(page.getByText("Test enabled completion alerts")).not.toBeDisabled();
+
+    await speechSwitch.click();
+    await vi.waitFor(() => {
+      expect(persisted()).toMatchObject({ completionAlertSpeechEnabled: true });
+    });
+
+    // Choosing dual language reveals the stereo-order control, which only has
+    // meaning when two languages are requested.
+    await page.getByLabelText("Completion speech language").selectOptions("dual");
+    await vi.waitFor(() => {
+      expect(persisted()).toMatchObject({ completionAlertLanguage: "dual" });
+    });
+    const stereoOrder = page.getByLabelText("Dual completion speech stereo order");
+    await expect.element(stereoOrder).toBeInTheDocument();
+    // Option labels are literal JSX text, so a "\u00B7" source escape would reach the
+    // user as visible backslash characters instead of a separator.
+    const stereoLabels = stereoOrder.element().textContent ?? "";
+    expect(stereoLabels).toContain("Japanese left · English right");
+    expect(stereoLabels).not.toContain("u00B7");
+
+    await stereoOrder.selectOptions("en-left-ja-right");
+    await vi.waitFor(() => {
+      expect(persisted()).toMatchObject({
+        completionAlertDualStereoOrder: "en-left-ja-right",
+      });
+    });
+
+    await page.getByLabelText("Japanese completion voice preference").selectOptions("male");
+    await vi.waitFor(() => {
+      expect(persisted()).toMatchObject({ completionAlertJapaneseVoiceGender: "male" });
+    });
+
+    // Not one audio key may have been pushed to the shared server settings.
+    for (const call of updateClientSettings.mock.calls) {
+      expect(Object.keys(call[0] ?? {}).filter((key) => key.startsWith("completionAlert"))).toEqual(
+        [],
+      );
+    }
+
+    // In a browser-served renderer the speech status must describe Web Speech as
+    // a fallback rather than claiming a native engine.
+    await expect
+      .element(page.getByText(/Browser fallback|Web Speech is unavailable/))
+      .toBeInTheDocument();
   });
 
   it("persists the chat selection copy preference from Chat settings", async () => {

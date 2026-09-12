@@ -370,6 +370,48 @@ describe("client settings", () => {
   });
 });
 
+describe("completion alert client settings", () => {
+  it("defaults both completion audio switches off so an upgrade never starts making noise", () => {
+    expect(DEFAULT_CLIENT_SETTINGS.completionAlertSoundEnabled).toBe(false);
+    expect(DEFAULT_CLIENT_SETTINGS.completionAlertSpeechEnabled).toBe(false);
+    expect(DEFAULT_CLIENT_SETTINGS.completionAlertLanguage).toBe("en");
+    expect(DEFAULT_CLIENT_SETTINGS.completionAlertEnglishVoiceGender).toBe("female");
+    expect(DEFAULT_CLIENT_SETTINGS.completionAlertJapaneseVoiceGender).toBe("female");
+    expect(DEFAULT_CLIENT_SETTINGS.completionAlertDualStereoOrder).toBe("ja-left-en-right");
+  });
+
+  it("accepts only the bounded completion alert enums", () => {
+    const decode = Schema.decodeUnknownSync(ClientSettingsSchema);
+    expect(
+      decode({
+        completionAlertSpeechEnabled: true,
+        completionAlertLanguage: "dual",
+        completionAlertJapaneseVoiceGender: "male",
+        completionAlertDualStereoOrder: "en-left-ja-right",
+      }),
+    ).toMatchObject({
+      completionAlertSpeechEnabled: true,
+      completionAlertLanguage: "dual",
+      completionAlertJapaneseVoiceGender: "male",
+      completionAlertDualStereoOrder: "en-left-ja-right",
+    });
+    expect(() => decode({ completionAlertLanguage: "fr" })).toThrow();
+    expect(() => decode({ completionAlertEnglishVoiceGender: "neutral" })).toThrow();
+    expect(() => decode({ completionAlertDualStereoOrder: "center" })).toThrow();
+  });
+
+  it("exposes every completion alert field as an optional client settings patch key", () => {
+    const decodePatch = Schema.decodeUnknownSync(ClientSettingsPatch);
+    expect(decodePatch({ completionAlertSoundEnabled: true })).toEqual({
+      completionAlertSoundEnabled: true,
+    });
+    expect(decodePatch({ completionAlertLanguage: "ja" })).toEqual({
+      completionAlertLanguage: "ja",
+    });
+    expect(() => decodePatch({ completionAlertLanguage: "de" })).toThrow();
+  });
+});
+
 describe("provider settings", () => {
   it("decodes Grok defaults and its legacy settings patch", () => {
     expect(decodeGrokSettings({})).toEqual({

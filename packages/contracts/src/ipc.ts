@@ -351,6 +351,70 @@ export type DesktopDebugEndpointState = typeof DesktopDebugEndpointStateSchema.T
 export const DesktopRendererDebugSnapshotSchema = Schema.Record(Schema.String, Schema.Unknown);
 export type DesktopRendererDebugSnapshot = typeof DesktopRendererDebugSnapshotSchema.Type;
 
+// --- Completion alert speech -------------------------------------------------
+//
+// The completion-speech contract is deliberately an explicit *speech* language
+// enum rather than a reference to any UI-language setting. Speech output is an
+// audio device concern (which voices are installed on this machine), not a
+// localization concern, so the two can be adopted independently. A future
+// localization feature can map onto this enum without changing the native
+// boundary.
+export const CompletionSpeechLanguageSchema = Schema.Literals(["en", "ja"]);
+export type CompletionSpeechLanguage = typeof CompletionSpeechLanguageSchema.Type;
+
+export const CompletionSpeechGenderSchema = Schema.Literals(["female", "male"]);
+export type CompletionSpeechGender = typeof CompletionSpeechGenderSchema.Type;
+
+// Voice names/cultures come from an OS enumeration we do not control. Bound
+// them so a hostile or broken speech backend cannot push unbounded text across
+// the desktop IPC boundary and into renderer status copy.
+const DesktopCompletionSpeechTextSchema = Schema.String.check(Schema.isMaxLength(512));
+
+export const DesktopCompletionSpeechVoiceSchema = Schema.Struct({
+  name: DesktopCompletionSpeechTextSchema,
+  language: CompletionSpeechLanguageSchema,
+  culture: DesktopCompletionSpeechTextSchema,
+  gender: CompletionSpeechGenderSchema,
+});
+export type DesktopCompletionSpeechVoice = typeof DesktopCompletionSpeechVoiceSchema.Type;
+
+export const DesktopCompletionSpeechCapabilitySchema = Schema.Struct({
+  available: Schema.Boolean,
+  engine: Schema.Literals(["Windows System.Speech"]),
+  voices: Schema.Array(DesktopCompletionSpeechVoiceSchema).check(Schema.isMaxLength(128)),
+  reason: Schema.NullOr(DesktopCompletionSpeechTextSchema),
+});
+export type DesktopCompletionSpeechCapability = typeof DesktopCompletionSpeechCapabilitySchema.Type;
+
+// The renderer never sends text. It selects a language/gender pair and the
+// native side speaks one of two fixed, project-agnostic phrases, so no thread
+// title, prompt, or project name can ever reach a speech engine.
+export const DesktopCompletionSpeechSynthesizeInputSchema = Schema.Struct({
+  language: CompletionSpeechLanguageSchema,
+  gender: CompletionSpeechGenderSchema,
+});
+export type DesktopCompletionSpeechSynthesizeInput =
+  typeof DesktopCompletionSpeechSynthesizeInputSchema.Type;
+
+export const DesktopCompletionSpeechClipSchema = Schema.Struct({
+  language: CompletionSpeechLanguageSchema,
+  requestedGender: CompletionSpeechGenderSchema,
+  voice: DesktopCompletionSpeechVoiceSchema,
+  // Base64 PCM WAV for a single short fixed phrase. The native side caps the
+  // decoded WAV at 1 MB and 15 seconds before encoding; this bound is that cap
+  // plus base64 expansion, so a broken backend cannot push a long clip across
+  // the IPC boundary even if the native check were bypassed.
+  wavBase64: Schema.String.check(Schema.isMaxLength(1_500_000)),
+});
+export type DesktopCompletionSpeechClip = typeof DesktopCompletionSpeechClipSchema.Type;
+
+export const DesktopCompletionSpeechSynthesizeResultSchema = Schema.Struct({
+  clip: Schema.NullOr(DesktopCompletionSpeechClipSchema),
+  reason: Schema.NullOr(DesktopCompletionSpeechTextSchema),
+});
+export type DesktopCompletionSpeechSynthesizeResult =
+  typeof DesktopCompletionSpeechSynthesizeResultSchema.Type;
+
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
   getLocalEnvironmentBootstrap: () => DesktopEnvironmentBootstrap | null;
@@ -391,6 +455,13 @@ export interface DesktopBridge {
   getSourceUpdateState: () => Promise<DesktopSourceUpdateState>;
   checkSourceUpdate: () => Promise<DesktopSourceUpdateState>;
   onSourceUpdateState: (listener: (state: DesktopSourceUpdateState) => void) => () => void;
+  // Optional so a renderer served to an ordinary browser (or an older packaged
+  // desktop build) keeps type-checking and simply falls back to browser speech
+  // instead of claiming a native capability it does not have.
+  getCompletionSpeechCapability?: () => Promise<DesktopCompletionSpeechCapability>;
+  synthesizeCompletionSpeech?: (
+    input: DesktopCompletionSpeechSynthesizeInput,
+  ) => Promise<DesktopCompletionSpeechSynthesizeResult>;
 }
 
 /**

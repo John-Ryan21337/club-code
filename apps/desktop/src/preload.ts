@@ -42,6 +42,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   setServerHttpsEnabled: (enabled) =>
     ipcRenderer.invoke(IpcChannels.SET_SERVER_HTTPS_ENABLED_CHANNEL, enabled),
   getAdvertisedEndpoints: () => ipcRenderer.invoke(IpcChannels.GET_ADVERTISED_ENDPOINTS_CHANNEL),
+  getCompletionSpeechCapability: () =>
+    ipcRenderer.invoke(IpcChannels.GET_COMPLETION_SPEECH_CAPABILITY_CHANNEL),
+  synthesizeCompletionSpeech: (input) =>
+    ipcRenderer.invoke(IpcChannels.SYNTHESIZE_COMPLETION_SPEECH_CHANNEL, input),
   pickFolder: (options) => ipcRenderer.invoke(IpcChannels.PICK_FOLDER_CHANNEL, options),
   confirm: (message) => ipcRenderer.invoke(IpcChannels.CONFIRM_CHANNEL, message),
   setTheme: (theme) => ipcRenderer.invoke(IpcChannels.SET_THEME_CHANNEL, theme),

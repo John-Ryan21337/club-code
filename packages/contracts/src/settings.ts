@@ -287,6 +287,30 @@ export const ClientSettingsSchema = Schema.Struct({
   // (native notifications in the desktop app, Web Push in browsers). Off by
   // default; enabling may prompt for OS-level notification permission.
   notificationsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // Completion audio is deliberately per-device and opt-in: whether a machine
+  // should make noise depends on that machine's speakers and where the person
+  // is sitting, not on a shared server profile. Both switches default off so
+  // an upgrade never starts playing audio on its own. Speech is limited to two
+  // fixed phrases (see `DesktopCompletionSpeechSynthesizeInputSchema`), so no
+  // thread or project text is ever spoken.
+  completionAlertSoundEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  completionAlertSpeechEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  completionAlertLanguage: Schema.Literals(["en", "ja", "dual"]).pipe(
+    Schema.withDecodingDefault(Effect.succeed("en" as const)),
+  ),
+  completionAlertEnglishVoiceGender: Schema.Literals(["female", "male"]).pipe(
+    Schema.withDecodingDefault(Effect.succeed("female" as const)),
+  ),
+  completionAlertJapaneseVoiceGender: Schema.Literals(["female", "male"]).pipe(
+    Schema.withDecodingDefault(Effect.succeed("female" as const)),
+  ),
+  completionAlertDualStereoOrder: Schema.Literals(["ja-left-en-right", "en-left-ja-right"]).pipe(
+    Schema.withDecodingDefault(Effect.succeed("ja-left-en-right" as const)),
+  ),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   dismissedProviderUpdateNotificationKeys: Schema.Array(TrimmedNonEmptyString).pipe(
@@ -1016,6 +1040,14 @@ export const ClientSettingsPatch = Schema.Struct({
   onboardingCompleted: Schema.optionalKey(Schema.Boolean),
   dismissedFirstRunHints: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   notificationsEnabled: Schema.optionalKey(Schema.Boolean),
+  completionAlertSoundEnabled: Schema.optionalKey(Schema.Boolean),
+  completionAlertSpeechEnabled: Schema.optionalKey(Schema.Boolean),
+  completionAlertLanguage: Schema.optionalKey(Schema.Literals(["en", "ja", "dual"])),
+  completionAlertEnglishVoiceGender: Schema.optionalKey(Schema.Literals(["female", "male"])),
+  completionAlertJapaneseVoiceGender: Schema.optionalKey(Schema.Literals(["female", "male"])),
+  completionAlertDualStereoOrder: Schema.optionalKey(
+    Schema.Literals(["ja-left-en-right", "en-left-ja-right"]),
+  ),
   confirmThreadArchive: Schema.optionalKey(Schema.Boolean),
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
   interfaceScalePercent: Schema.optionalKey(InterfaceScalePercent),
