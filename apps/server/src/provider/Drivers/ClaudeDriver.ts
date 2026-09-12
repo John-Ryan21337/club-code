@@ -26,6 +26,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { makeClaudeTextGeneration } from "../../textGeneration/ClaudeTextGeneration.ts";
 import { ServerConfig } from "../../config.ts";
+import { installBundledAuditAndRepairSkill } from "../BundledAuditAndRepairSkill.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeClaudeAdapter } from "../Layers/ClaudeAdapter.ts";
 import {
@@ -55,7 +56,11 @@ import {
   resolveProviderMaintenanceCapabilitiesEffect,
 } from "../providerMaintenance.ts";
 import { resolveProviderRuntimeEnvironment } from "../managedProviderRuntime.ts";
-import { makeClaudeCapabilitiesCacheKey, makeClaudeContinuationGroupKey } from "./ClaudeHome.ts";
+import {
+  makeClaudeCapabilitiesCacheKey,
+  makeClaudeContinuationGroupKey,
+  resolveClaudeConfigDirectory,
+} from "./ClaudeHome.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
@@ -158,6 +163,39 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         binaryPath: runtime.binaryPath,
       } satisfies ClaudeSettings;
       const effectiveEnvironment = runtime.env;
+      if (enabled) {
+        // Provider-home maintenance. Install Cafe's bundled reviewer skill in
+        // the same CLAUDE_CONFIG_DIR that this instance launches the Claude
+        // Agent SDK with, so the skill follows the instance's configured home
+        // instead of the operating-system user home. The install only owns
+        // `<config dir>/skills/audit-and-repair`; user content and content
+        // managed by another tool are preserved. A failure here must not stop
+        // instance creation, because the provider still works without the
+        // skill.
+        const claudeConfigDirectory = yield* resolveClaudeConfigDirectory(
+          effectiveConfig,
+          effectiveEnvironment,
+        );
+        yield* Effect.tryPromise({
+          try: () => installBundledAuditAndRepairSkill(claudeConfigDirectory),
+          catch: (cause) => cause,
+        }).pipe(
+          Effect.tap((result) =>
+            Effect.logInfo("claude.skill.auditAndRepair", {
+              instanceId,
+              result,
+              configDirectory: claudeConfigDirectory,
+            }),
+          ),
+          Effect.catch((cause) =>
+            Effect.logWarning("claude.skill.auditAndRepairFailed", {
+              instanceId,
+              configDirectory: claudeConfigDirectory,
+              cause: cause instanceof Error ? cause.message : String(cause),
+            }),
+          ),
+        );
+      }
       const maintenanceCapabilities =
         effectiveConfig.runtimeSource === "bundled"
           ? runtime.maintenanceCapabilities

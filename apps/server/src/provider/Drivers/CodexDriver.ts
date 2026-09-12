@@ -42,6 +42,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { makeCodexTextGeneration } from "../../textGeneration/CodexTextGeneration.ts";
 import { ServerConfig } from "../../config.ts";
+import { installBundledAuditAndRepairSkill } from "../BundledAuditAndRepairSkill.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeCodexAdapter } from "../Layers/CodexAdapter.ts";
 import {
@@ -189,7 +190,43 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
             ? { login: true }
             : undefined,
       });
+      // Provider-home maintenance. Codex reads skills from the shared home,
+      // and `skills` is one of the entries an auth overlay links back to that
+      // shared home, so the install target is always `sharedHomePath`. This
+      // keeps one copy per configured Codex home and never writes into the
+      // shadow home. The shared home may be the user's normal Codex home. A failure must not stop
+      // instance creation or a turn, because Codex still runs without the
+      // skill.
+      const installCodexAuditAndRepairSkill = Effect.tryPromise({
+        try: () => installBundledAuditAndRepairSkill(homeLayout.sharedHomePath),
+        catch: (cause) => cause,
+      }).pipe(
+        Effect.tap((result) =>
+          // Home preparation repeats on every session start and turn, so the
+          // steady-state `unchanged` result stays at debug level.
+          result === "unchanged"
+            ? Effect.logDebug("codex.skill.auditAndRepair", {
+                instanceId,
+                result,
+                sharedHomePath: homeLayout.sharedHomePath,
+              })
+            : Effect.logInfo("codex.skill.auditAndRepair", {
+                instanceId,
+                result,
+                sharedHomePath: homeLayout.sharedHomePath,
+              }),
+        ),
+        Effect.catch((cause) =>
+          Effect.logWarning("codex.skill.auditAndRepairFailed", {
+            instanceId,
+            sharedHomePath: homeLayout.sharedHomePath,
+            cause: cause instanceof Error ? cause.message : String(cause),
+          }),
+        ),
+        Effect.asVoid,
+      );
       if (enabled) {
+        yield* installCodexAuditAndRepairSkill;
         yield* materializeCodexShadowHome(homeLayout, { authSource }).pipe(
           Effect.mapError(
             (cause) =>
@@ -240,7 +277,11 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
               binaryPath: effectiveConfig.binaryPath,
               env: effectiveEnvironment,
             });
-      const refreshCodexShadowHome = materializeCodexShadowHome(homeLayout, { authSource }).pipe(
+      // Runtime home preparation. Refresh the shared skill before each Codex
+      // session or request so an updated Cafe build reaches a long-lived
+      // instance, then re-materialize the shadow home links.
+      const refreshCodexShadowHome = installCodexAuditAndRepairSkill.pipe(
+        Effect.andThen(materializeCodexShadowHome(homeLayout, { authSource })),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
       );

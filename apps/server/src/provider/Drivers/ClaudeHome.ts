@@ -14,13 +14,35 @@ export const resolveClaudeHomePath = Effect.fn("resolveClaudeHomePath")(function
   return path.resolve(homePath.length > 0 ? expandHomePath(homePath) : NodeOS.homedir());
 });
 
+/**
+ * Resolve the Claude configuration directory for one instance.
+ *
+ * Claude Code currently supports both HOME-derived config discovery and
+ * CLAUDE_CONFIG_DIR. Cafe sets the latter explicitly so SDK launches match a
+ * verified CLI command such as `CLAUDE_CONFIG_DIR=/Users/me/.claude claude`
+ * instead of depending on subtle process-launch HOME behavior.
+ *
+ * This is the single source of truth for that path. `makeClaudeEnvironment`
+ * puts it in the provider environment, and provider-home maintenance such as
+ * the bundled skill install uses it to stay inside the same directory.
+ */
+export const resolveClaudeConfigDirectory = Effect.fn("resolveClaudeConfigDirectory")(function* (
+  config: Pick<ClaudeSettings, "homePath">,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): Effect.fn.Return<string, never, Path.Path> {
+  const path = yield* Path.Path;
+  const resolvedHomePath = yield* resolveClaudeHomePath(config);
+  const configuredConfigDir = baseEnv.CLAUDE_CONFIG_DIR?.trim();
+  return configuredConfigDir && configuredConfigDir.length > 0
+    ? path.resolve(configuredConfigDir)
+    : path.join(resolvedHomePath, ".claude");
+});
+
 export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function* (
   config: Pick<ClaudeSettings, "homePath" | "maxConcurrentSubagents">,
   baseEnv: NodeJS.ProcessEnv = process.env,
 ): Effect.fn.Return<NodeJS.ProcessEnv, never, Path.Path> {
-  const path = yield* Path.Path;
   const resolvedHomePath = yield* resolveClaudeHomePath(config);
-  const configuredConfigDir = baseEnv.CLAUDE_CONFIG_DIR?.trim();
   const maxConcurrentSubagents = config.maxConcurrentSubagents;
 
   // Revalidate at the process boundary as well as in the persisted schema:
@@ -42,17 +64,10 @@ export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function
     );
   }
 
-  // Claude Code currently supports both HOME-derived config discovery and
-  // CLAUDE_CONFIG_DIR. Cafe sets the latter explicitly so SDK launches match a
-  // verified CLI command such as `CLAUDE_CONFIG_DIR=/Users/me/.claude claude`
-  // instead of depending on subtle process-launch HOME behavior.
   return {
     ...baseEnv,
     HOME: resolvedHomePath,
-    CLAUDE_CONFIG_DIR:
-      configuredConfigDir && configuredConfigDir.length > 0
-        ? path.resolve(configuredConfigDir)
-        : path.join(resolvedHomePath, ".claude"),
+    CLAUDE_CONFIG_DIR: yield* resolveClaudeConfigDirectory(config, baseEnv),
     // Omission preserves user-owned inherited configuration. Explicit instance
     // settings win only for newly created environments; they cannot change a
     // running query or a sibling instance that shares the same base object.
