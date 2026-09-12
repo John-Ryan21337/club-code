@@ -8,6 +8,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 
 import {
@@ -18,7 +19,7 @@ import * as NetService from "@cafecode/shared/Net";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { deriveServerPaths } from "../config.ts";
 import { resolveBaseDir } from "../os-jank.ts";
-import { resolveServerConfig } from "./config.ts";
+import { resolveServerConfig, resolveCliAuthConfig } from "./config.ts";
 
 const encodeDesktopBootstrap = Schema.encodeEffect(Schema.fromJsonString(DesktopBackendBootstrap));
 
@@ -61,6 +62,34 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     const { fd } = yield* fs.open(filePath, { flag: "r" });
     return fd;
   });
+
+  it.effect("keeps the YouTube key redacted and requires a separate server opt-in", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "cafe-youtube-config-" });
+      for (const enabled of [false, true]) {
+        const resolved = yield* resolveCliAuthConfig(
+          { baseDir: Option.some(baseDir) },
+          Option.none(),
+        ).pipe(
+          Effect.provide(
+            ConfigProvider.layer(
+              ConfigProvider.fromEnv({
+                env: {
+                  CAFE_CODE_YOUTUBE_PUBLIC_DISCOVERY_API_KEY: "synthetic-api-key",
+                  ...(enabled ? { CAFE_CODE_YOUTUBE_PUBLIC_DISCOVERY_ENABLED: "true" } : {}),
+                },
+              }),
+            ),
+          ),
+          Effect.provide(NetService.layer),
+        );
+        expect(resolved.youtubePublicDiscoveryEnabled === true).toBe(enabled);
+        expect(Redacted.value(resolved.youtubePublicDiscoveryApiKey!)).toBe("synthetic-api-key");
+        expect(JSON.stringify(resolved)).not.toContain("synthetic-api-key");
+      }
+    }),
+  );
 
   it.effect("defaults Cafe Code home to ~/.cafe-code", () =>
     Effect.gen(function* () {

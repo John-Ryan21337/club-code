@@ -81,6 +81,8 @@ If a tradeoff is required, choose correctness, durability, and debuggability ove
 
 ## Maintainability
 
+- Public YouTube discovery is a separate opt-in backend feature. Keep its API key redacted in server configuration, use only the fixed Google endpoint and header authentication, and derive rate identity from the authenticated Cafe session. Preserve request/body deadlines, bounded cache/admission, and the renderer's connection fences for query dispatch, results, and selection. Search text is sent only on explicit Search; this route does not authorize account access or imply playback permission. See `docs/youtube-public-discovery.md` for the exact limits and verification scope.
+
 - Long-term maintainability is a core priority. If you add functionality, first check for shared logic that belongs in a separate module. Duplicate lifecycle or provider-connection logic across files is a code smell.
 - Do not write stubs or incomplete code. Finish the behavior, tests, diagnostics, and cleanup needed for the requested change.
 - Prefer structured schemas, generated protocol types, durable state machines, and explicit event names over stringly-typed local conventions.
