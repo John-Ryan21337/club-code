@@ -251,36 +251,40 @@ describe("AmbientImagePanel", () => {
     expect(readAmbientImageGeometry()?.x).toBeCloseTo(after.x, 2);
   });
 
-  it("releases pointer capture on blur and ignores later move events", async () => {
-    await renderHost({ presetPlacement: "top-left" });
-    const target = handle("move");
-    const capture = vi.spyOn(target, "setPointerCapture").mockImplementation(() => {});
-    const hasCapture = vi.spyOn(target, "hasPointerCapture").mockReturnValue(true);
-    const release = vi.spyOn(target, "releasePointerCapture").mockImplementation(() => {});
-    try {
-      target.dispatchEvent(
-        new PointerEvent("pointerdown", {
-          pointerId: 7,
-          button: 0,
-          bubbles: true,
-          clientX: 20,
-          clientY: 20,
-        }),
-      );
-      window.dispatchEvent(new Event("blur"));
-      expect(release).toHaveBeenCalledWith(7);
-      const before = relativeRect();
-      window.dispatchEvent(
-        new PointerEvent("pointermove", { pointerId: 7, clientX: 600, clientY: 500 }),
-      );
-      await Promise.resolve();
-      expect(relativeRect()).toEqual(before);
-    } finally {
-      capture.mockRestore();
-      hasCapture.mockRestore();
-      release.mockRestore();
-    }
-  });
+  it.each(["blur", "Home"])(
+    "releases pointer capture on %s and ignores later move events",
+    async (reason) => {
+      await renderHost({ presetPlacement: "top-left" });
+      const target = handle("move");
+      const capture = vi.spyOn(target, "setPointerCapture").mockImplementation(() => {});
+      const hasCapture = vi.spyOn(target, "hasPointerCapture").mockReturnValue(true);
+      const release = vi.spyOn(target, "releasePointerCapture").mockImplementation(() => {});
+      try {
+        target.dispatchEvent(
+          new PointerEvent("pointerdown", {
+            pointerId: 7,
+            button: 0,
+            bubbles: true,
+            clientX: 20,
+            clientY: 20,
+          }),
+        );
+        if (reason === "Home") pressKey(target, "Home");
+        else window.dispatchEvent(new Event("blur"));
+        expect(release).toHaveBeenCalledWith(7);
+        const before = relativeRect();
+        window.dispatchEvent(
+          new PointerEvent("pointermove", { pointerId: 7, clientX: 600, clientY: 500 }),
+        );
+        await Promise.resolve();
+        expect(relativeRect()).toEqual(before);
+      } finally {
+        capture.mockRestore();
+        hasCapture.mockRestore();
+        release.mockRestore();
+      }
+    },
+  );
 
   it("resizes the panel with the resize handle and keeps the aspect ratio", async () => {
     await renderHost({ layoutMode: "custom", presetPlacement: "bottom-left" });

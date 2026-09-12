@@ -338,7 +338,11 @@ export function AmbientImagePanel({
 
   /** Forgets the dragged position and returns the panel to its preset corner. */
   const recoverPosition = useCallback(() => {
+    const interaction = interactionRef.current;
     interactionRef.current = null;
+    if (interaction?.target.hasPointerCapture(interaction.pointerId)) {
+      interaction.target.releasePointerCapture(interaction.pointerId);
+    }
     setInteracting(false);
     resetAmbientImageGeometry();
     geometryRef.current = null;
