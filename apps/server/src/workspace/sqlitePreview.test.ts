@@ -59,6 +59,8 @@ describe("read-only SQLite previews", () => {
       relativePath: " data.sqlite",
       table: "items",
       columns: ["id", "title", "api_key", "payload"],
+      identityColumns: [0],
+      rowKeys: [],
       rows: [["1", "Synthetic item", "[redacted]", "[blob omitted]"]],
       truncated: false,
       redacted: true,

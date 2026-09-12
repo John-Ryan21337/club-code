@@ -5,6 +5,7 @@
  */
 export const SQLITE_PREVIEW_PROGRAM = String.raw`
 const { DatabaseSync } = require('node:sqlite');
+const { createHash } = require('node:crypto');
 let input = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => {
@@ -43,20 +44,33 @@ process.stdin.on('end', () => {
       const visible = metadata.filter(row => row.hidden === 0 && typeof row.name === 'string' && row.name.length <= 512 && !row.name.includes('\0'));
       const columns = visible.slice(0, 40).map(row => row.name);
       if (columns.length === 0) throw Error();
+      const primary = metadata.filter(row => row.pk > 0).sort((a, b) => a.pk - b.pk).map(row => row.name);
+      const identityColumns = primary.length > 0 && primary.every(name => columns.includes(name) && !secret.test(name))
+        ? primary.map(name => columns.indexOf(name)) : [];
       truncated = metadata.length > columns.length;
       const fields = columns.map(name => {
         const column = quote(name);
         return 'CASE WHEN typeof(' + column + ")='blob' THEN '[blob omitted]' ELSE substr(CAST(" + column + ' AS TEXT),1,4097) END';
       });
-      const statement = db.prepare('SELECT ' + fields.join(',') + ' FROM main.' + quote(request.table) + ' LIMIT ?');
+      // Hash typed bounded identities, not display strings. Preserve REAL as a
+      // native finite binary64 number; integer/text keys use exact SQLite bytes.
+      // JSON number serialization round-trips binary64 without SQLite text casts.
+      const keyFields = identityColumns.length ? primary.flatMap(name => {
+        const column = quote(name);
+        return ['typeof(' + column + ')', 'CASE WHEN typeof(' + column + ")='real' THEN " + column + ' WHEN typeof(' + column + ") IN ('integer','text') AND length(CAST(" + column + ' AS BLOB))<=4096 THEN hex(CAST(' + column + ' AS BLOB)) ELSE NULL END'];
+      }) : [];
+      const order = identityColumns.length ? ' ORDER BY ' + primary.map(quote).join(',') : '';
+      const statement = db.prepare('SELECT ' + fields.concat(keyFields).join(',') + ' FROM main.' + quote(request.table) + order + ' LIMIT ?');
       statement.setReturnArrays(true);
       const rows = [];
+      const rowKeys = [];
+      let identitySafe = identityColumns.length > 0;
       let redacted = false;
       let bytes = Buffer.byteLength(JSON.stringify(columns)) + 2048;
       for (const values of statement.iterate(request.limit + 1)) {
         if (rows.length === request.limit) { truncated = true; break; }
         const labelledSecret = columns.some((name, index) => /^(?:key|name|setting|property)$/i.test(name) && secret.test(String(values[index] ?? '')));
-        const row = values.map((value, index) => {
+        const row = values.slice(0, columns.length).map((value, index) => {
           if (secret.test(columns[index]) || (labelledSecret && /^(?:value|data|content)$/i.test(columns[index]))) { redacted = true; return '[redacted]'; }
           const text = value === null ? 'NULL' : String(value);
           if (text.length > 4096) truncated = true;
@@ -65,8 +79,12 @@ process.stdin.on('end', () => {
         bytes += Buffer.byteLength(JSON.stringify(row)) + 1;
         if (bytes > 240 * 1024) { truncated = true; break; }
         rows.push(row);
+        const keyParts = values.slice(columns.length);
+        if (keyParts.some(value => value === null || (typeof value === 'number' && !Number.isFinite(value)))) identitySafe = false;
+        if (identitySafe) rowKeys.push(createHash('sha256').update(JSON.stringify(keyParts)).digest('hex'));
       }
-      result = { columns, rows, truncated, redacted };
+      result = { columns, rows, truncated, redacted, identityColumns,
+        rowKeys: identitySafe && !truncated && !redacted ? rowKeys : [] };
     }
     const output = JSON.stringify(result);
     if (Buffer.byteLength(output) > 256 * 1024) throw Error();
