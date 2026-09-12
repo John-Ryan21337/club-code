@@ -37,6 +37,7 @@ function makeFakeBrowserWindow() {
   const setPermissionRequestHandler = vi.fn();
   const webContents = {
     copyImageAt: vi.fn(),
+    isFocused: vi.fn(() => true),
     isDestroyed: vi.fn(() => false),
     isLoadingMainFrame: vi.fn(() => false),
     on: vi.fn(),
@@ -45,6 +46,7 @@ function makeFakeBrowserWindow() {
     replaceMisspelling: vi.fn(),
     send: vi.fn(),
     session: {
+      setDisplayMediaRequestHandler: vi.fn(),
       setPermissionCheckHandler,
       setPermissionRequestHandler,
     },
