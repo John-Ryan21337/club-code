@@ -7,8 +7,9 @@
  * a compromised or buggy renderer cannot widen the observed surface.
  *
  * The layer performs only reads: `opendir`, `lstat`, `realpath`, and a single
- * bounded `read` on an `O_NOFOLLOW` descriptor. It never writes, never spawns a
- * process, and never opens a database.
+ * bounded `read` on an `O_NOFOLLOW` descriptor. Database previews copy bounded
+ * stable files to private temporary storage and query that copy in a bounded
+ * child. They never open SQLite against or write to the project database.
  *
  * Residual limitation, deliberately not papered over: the portable
  * `lstat`/`realpath`/`open` sequence used here is *not* atomic. Node exposes no
@@ -32,6 +33,12 @@ import { isAbsolute, relative, resolve, sep, win32 } from "node:path";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import {
+  WorkspaceObservatoryRowsResult,
+  WorkspaceObservatoryTablesResult,
+} from "@cafecode/contracts";
+import { readSqlitePreview } from "../sqlitePreview.ts";
 import { WORKSPACE_OBSERVATORY_LIMITS } from "@cafecode/contracts";
 import type {
   ProjectId,
@@ -615,7 +622,76 @@ export function makeWorkspaceObservatory(
     });
   });
 
-  return { tree, readFile } satisfies WorkspaceObservatoryShape;
+  const decodeTablesResult = Schema.decodeUnknownEffect(WorkspaceObservatoryTablesResult);
+  const decodeRowsResult = Schema.decodeUnknownEffect(WorkspaceObservatoryRowsResult);
+  const databasePreview = (
+    input: { projectId: ProjectId; relativePath: string },
+    request: Parameters<typeof readSqlitePreview>[1],
+  ) =>
+    Effect.gen(function* () {
+      const root = yield* realRootFor(input.projectId);
+      const result = yield* Effect.tryPromise({
+        try: (signal) =>
+          admission.run(async () => {
+            const target = await resolveObservedTarget(root, input.relativePath);
+            const value = await readSqlitePreview(
+              target,
+              request,
+              async () => {
+                if ((await resolveObservedTarget(root, input.relativePath)) !== target)
+                  deny("changed-while-reading", "The database changed while reading.");
+              },
+              signal,
+            );
+            return {
+              ...(value as Record<string, unknown>),
+              relativePath: toPosix(relative(root, target)),
+            };
+          }),
+        catch: denied,
+      });
+      // A snapshot can outlive a project move or removal. Re-read the server's
+      // authority before returning values from the previously selected root.
+      const currentRoot = yield* realRootFor(input.projectId);
+      if (currentRoot !== root) {
+        return yield* new WorkspaceObservatoryDeniedError({
+          reason: "changed-while-reading",
+          detail: "The project changed while reading the database.",
+        });
+      }
+      return result;
+    });
+  const tables: WorkspaceObservatoryShape["tables"] = (input) =>
+    databasePreview(input, { operation: "tables" }).pipe(
+      Effect.flatMap(decodeTablesResult),
+      Effect.mapError(denied),
+    );
+  const rows: WorkspaceObservatoryShape["rows"] = (input) =>
+    databasePreview(input, {
+      operation: "rows",
+      table: input.table,
+      limit: input.limit ?? 50,
+    }).pipe(
+      Effect.flatMap((value) =>
+        decodeRowsResult({
+          ...value,
+          table: input.table,
+        }),
+      ),
+      Effect.map((result) => {
+        let redacted = result.redacted;
+        const rows = result.rows.map((row) =>
+          row.map((cell) => {
+            const masked = redactObservedText(cell);
+            redacted ||= masked.redacted;
+            return masked.value;
+          }),
+        );
+        return { ...result, rows, redacted };
+      }),
+      Effect.mapError(denied),
+    );
+  return { tree, readFile, tables, rows } satisfies WorkspaceObservatoryShape;
 }
 
 /**

@@ -75,6 +75,52 @@ export const WorkspaceObservatoryFileResult = Schema.Struct({
 });
 export type WorkspaceObservatoryFileResult = typeof WorkspaceObservatoryFileResult.Type;
 
+export const WORKSPACE_DATABASE_LIMITS = {
+  tables: 200,
+  columns: 40,
+  rows: 100,
+  cellCharacters: 4096,
+  resultBytes: 256 * 1024,
+} as const;
+const DatabaseTableName = Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(128));
+export const WorkspaceObservatoryTablesInput = WorkspaceObservatoryFileInput;
+export type WorkspaceObservatoryTablesInput = typeof WorkspaceObservatoryTablesInput.Type;
+export const WorkspaceObservatoryRowsInput = Schema.Struct({
+  projectId: ProjectId,
+  relativePath: RelativePath,
+  table: DatabaseTableName,
+  limit: Schema.optionalKey(
+    Schema.Number.check(
+      Schema.isInt(),
+      Schema.isBetween({ minimum: 1, maximum: WORKSPACE_DATABASE_LIMITS.rows }),
+    ),
+  ),
+});
+export type WorkspaceObservatoryRowsInput = typeof WorkspaceObservatoryRowsInput.Type;
+export const WorkspaceObservatoryTablesResult = Schema.Struct({
+  relativePath: RelativePath,
+  tables: Schema.Array(Schema.Struct({ name: DatabaseTableName })).check(
+    Schema.isMaxLength(WORKSPACE_DATABASE_LIMITS.tables),
+  ),
+  truncated: Schema.Boolean,
+});
+export type WorkspaceObservatoryTablesResult = typeof WorkspaceObservatoryTablesResult.Type;
+export const WorkspaceObservatoryRowsResult = Schema.Struct({
+  relativePath: RelativePath,
+  table: DatabaseTableName,
+  columns: Schema.Array(Schema.String.check(Schema.isMaxLength(512))).check(
+    Schema.isMaxLength(WORKSPACE_DATABASE_LIMITS.columns),
+  ),
+  rows: Schema.Array(
+    Schema.Array(
+      Schema.String.check(Schema.isMaxLength(WORKSPACE_DATABASE_LIMITS.cellCharacters)),
+    ).check(Schema.isMaxLength(WORKSPACE_DATABASE_LIMITS.columns)),
+  ).check(Schema.isMaxLength(WORKSPACE_DATABASE_LIMITS.rows)),
+  truncated: Schema.Boolean,
+  redacted: Schema.Boolean,
+});
+export type WorkspaceObservatoryRowsResult = typeof WorkspaceObservatoryRowsResult.Type;
+
 export class WorkspaceObservatoryError extends Schema.TaggedErrorClass<WorkspaceObservatoryError>()(
   "WorkspaceObservatoryError",
   { message: TrimmedNonEmptyString },

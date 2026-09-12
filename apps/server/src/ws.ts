@@ -1336,6 +1336,30 @@ const makeWsRpcLayer = (
               ),
             { "rpc.aggregate": "workspace" },
           ),
+        [WS_METHODS.workspaceObservatoryTables]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceObservatoryTables,
+            workspaceObservatory
+              .tables(input)
+              .pipe(
+                Effect.mapError(
+                  (cause) => new WorkspaceObservatoryError({ message: cause.detail }),
+                ),
+              ),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.workspaceObservatoryRows]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceObservatoryRows,
+            workspaceObservatory
+              .rows(input)
+              .pipe(
+                Effect.mapError(
+                  (cause) => new WorkspaceObservatoryError({ message: cause.detail }),
+                ),
+              ),
+            { "rpc.aggregate": "workspace" },
+          ),
         [WS_METHODS.shellOpenInEditor]: (input) =>
           observeRpcEffect(WS_METHODS.shellOpenInEditor, externalLauncher.launchEditor(input), {
             "rpc.aggregate": "workspace",

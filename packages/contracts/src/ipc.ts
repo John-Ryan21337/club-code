@@ -34,6 +34,10 @@ import type {
   WorkspaceObservatoryFileResult,
   WorkspaceObservatoryTreeInput,
   WorkspaceObservatoryTreeResult,
+  WorkspaceObservatoryTablesInput,
+  WorkspaceObservatoryTablesResult,
+  WorkspaceObservatoryRowsInput,
+  WorkspaceObservatoryRowsResult,
 } from "./workspaceObservatory.ts";
 import type { ProviderInstanceId } from "./providerInstance.ts";
 import type {
@@ -501,6 +505,8 @@ export interface EnvironmentApi {
    * older environment clients that predate the observatory stay usable.
    */
   workspaceObservatory?: {
+    tables: (input: WorkspaceObservatoryTablesInput) => Promise<WorkspaceObservatoryTablesResult>;
+    rows: (input: WorkspaceObservatoryRowsInput) => Promise<WorkspaceObservatoryRowsResult>;
     tree: (input: WorkspaceObservatoryTreeInput) => Promise<WorkspaceObservatoryTreeResult>;
     readFile: (input: WorkspaceObservatoryFileInput) => Promise<WorkspaceObservatoryFileResult>;
   };

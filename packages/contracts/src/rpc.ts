@@ -114,6 +114,10 @@ import {
   WorkspaceObservatoryFileResult,
   WorkspaceObservatoryTreeInput,
   WorkspaceObservatoryTreeResult,
+  WorkspaceObservatoryTablesInput,
+  WorkspaceObservatoryTablesResult,
+  WorkspaceObservatoryRowsInput,
+  WorkspaceObservatoryRowsResult,
 } from "./workspaceObservatory.ts";
 import { VcsError } from "./vcs.ts";
 
@@ -129,6 +133,8 @@ export const WS_METHODS = {
   // Read-only workspace observatory methods
   workspaceObservatoryTree: "workspaceObservatory.tree",
   workspaceObservatoryReadFile: "workspaceObservatory.readFile",
+  workspaceObservatoryTables: "workspaceObservatory.tables",
+  workspaceObservatoryRows: "workspaceObservatory.rows",
 
   // Shell methods
   shellOpenInEditor: "shell.openInEditor",
@@ -385,6 +391,17 @@ export const WsWorkspaceObservatoryTreeRpc = Rpc.make(WS_METHODS.workspaceObserv
   error: WorkspaceObservatoryError,
 });
 
+export const WsWorkspaceObservatoryTablesRpc = Rpc.make(WS_METHODS.workspaceObservatoryTables, {
+  payload: WorkspaceObservatoryTablesInput,
+  success: WorkspaceObservatoryTablesResult,
+  error: WorkspaceObservatoryError,
+});
+export const WsWorkspaceObservatoryRowsRpc = Rpc.make(WS_METHODS.workspaceObservatoryRows, {
+  payload: WorkspaceObservatoryRowsInput,
+  success: WorkspaceObservatoryRowsResult,
+  error: WorkspaceObservatoryError,
+});
+
 export const WsWorkspaceObservatoryReadFileRpc = Rpc.make(WS_METHODS.workspaceObservatoryReadFile, {
   payload: WorkspaceObservatoryFileInput,
   success: WorkspaceObservatoryFileResult,
@@ -637,6 +654,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsWriteFileRpc,
   WsWorkspaceObservatoryTreeRpc,
   WsWorkspaceObservatoryReadFileRpc,
+  WsWorkspaceObservatoryTablesRpc,
+  WsWorkspaceObservatoryRowsRpc,
   WsShellOpenInEditorRpc,
   WsShellOpenTerminalRpc,
   WsFilesystemBrowseRpc,
