@@ -3,7 +3,7 @@ import { EnvironmentId, ThreadId } from "@cafecode/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
-import { MAX_ATMOSPHERE_CANVAS_PIXELS } from "../windowAtmosphere";
+import { MAX_ATMOSPHERE_CANVAS_PIXELS, MATRIX_2CH_AA_TOKENS } from "../windowAtmosphere";
 import { WindowAtmosphere } from "./WindowAtmosphere";
 import type { AppState } from "../store";
 
@@ -247,6 +247,48 @@ describe("WindowAtmosphere", () => {
     await screen.unmount();
     expect(frames.size).toBe(0);
   });
+
+  it.each([false, true])(
+    "updates cat heads without reseeding and clears them before the next frame (reduced motion %s)",
+    async (staticMode) => {
+      reducedMotion = staticMode;
+      testState.settings = { ...testState.settings!, fallingEffectJapaneseRatio: 1 };
+      const screen = await render(<WindowAtmosphere />);
+      const tick = (time: number) => {
+        const frame = Array.from(frames.values())[0]!;
+        frames.clear();
+        frame(time);
+      };
+      const calls = () => vi.mocked(context.fillText).mock.calls;
+      if (!staticMode) {
+        tick(1000);
+        vi.mocked(context.fillText).mockClear();
+        tick(1100);
+      }
+      const geometry = calls().map(([, x, y]) => [x, y]);
+      expect(calls().every(([text]) => text.length === 1)).toBe(true);
+      vi.mocked(context.fillText).mockClear();
+      testState.settings = { ...testState.settings!, fallingEffect2chEnriched: true };
+      await screen.rerender(<WindowAtmosphere />);
+      expect(
+        calls().some(([text]) =>
+          MATRIX_2CH_AA_TOKENS.includes(text as (typeof MATRIX_2CH_AA_TOKENS)[number]),
+        ),
+      ).toBe(true);
+      expect(
+        calls()
+          .slice(-geometry.length)
+          .map(([, x, y]) => [x, y]),
+      ).toEqual(geometry);
+      vi.mocked(context.fillText).mockClear();
+      testState.settings = { ...testState.settings!, fallingEffect2chEnriched: false };
+      await screen.rerender(<WindowAtmosphere />);
+      expect(calls().length).toBeGreaterThan(0);
+      expect(calls().every(([text]) => text.length === 1)).toBe(true);
+      expect(frames.size).toBe(staticMode ? 0 : 1);
+      await screen.unmount();
+    },
+  );
 
   it.each([false, true])(
     "clears routed labels without reseeding (reduced motion %s)",

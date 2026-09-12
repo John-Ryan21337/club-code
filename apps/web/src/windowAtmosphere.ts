@@ -87,7 +87,18 @@ export const MATRIX_JAPANESE_CODING_AI_TERMS = [
 /** Reviewed decorative kana and coding/AI-context kanji; rendering selects individual glyphs. */
 export const MATRIX_JAPANESE_GLYPHS = `アイウエオカキクケコサシスセソタチツテトナニヌネノマミムメモヤユヨラリルレロワヲン${MATRIX_JAPANESE_CODING_AI_TERMS.join("")}`;
 /** Optional tasteful 2ch/net-culture glyphs, without hateful, sexual, or slur content. */
+export const MATRIX_2CH_ENRICHED_GLYPHS = `${MATRIX_JAPANESE_GLYPHS}ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾅﾆﾇﾈﾉﾏﾐﾑﾒﾓﾗﾘﾙﾚﾛﾜﾝｰｯ､｡･「」()ｗ草乙神ｷﾀ`;
 /** Rare, intact, reviewed 2ch-style cat AA tokens; they are never split into pseudo-phrases. */
+export const MATRIX_2CH_AA_TOKENS = [
+  "∧＿∧",
+  "( ´∀｀)",
+  "(・∀・)",
+  "(=ﾟωﾟ)ﾉ",
+  "（´・ω・｀）",
+  "∧∧",
+  "(,,ﾟДﾟ)",
+] as const;
+const MATRIX_2CH_TOKEN_PROBABILITY = 0.08;
 export const MAX_MATRIX_TOKEN_FONT_SIZE = 18;
 export const MAX_MATRIX_TOKEN_WIDTH_PX = 144;
 const MATRIX_WORK_TOKEN_PROBABILITY = 0.34;
@@ -146,6 +157,7 @@ export interface AtmosphereParticle {
   glyphs: string;
   matrixLanguage: "english" | "japanese" | null;
   matrixWorkToken: string | null;
+  matrixToken: string | null;
   /** Viewport Y where the current bounded Matrix Walk lifecycle began. */
   matrixLifecycleStartY: number;
   /** Normalized 0..1 travel/font lifecycle, independent from viewport Y. */
@@ -269,6 +281,7 @@ export function createAtmosphereScene(
         glyphs: "",
         matrixLanguage: null,
         matrixWorkToken: null,
+        matrixToken: null,
         matrixLifecycleStartY: 0,
         matrixLifecycleProgress: 0,
         matrixLifecycleOpacity: 1,
@@ -309,6 +322,7 @@ export function createAtmosphereScene(
         glyphs,
         matrixLanguage: usesJapanese ? "japanese" : "english",
         matrixWorkToken: null,
+        matrixToken: null,
         matrixLifecycleStartY: lifecycleStartY,
         matrixLifecycleProgress: lifecycleProgress,
         matrixLifecycleOpacity: resolveMatrixLifecycleOpacity(lifecycleProgress),
@@ -327,6 +341,7 @@ export function createAtmosphereScene(
       glyphs: "",
       matrixLanguage: null,
       matrixWorkToken: null,
+      matrixToken: null,
       matrixLifecycleStartY: 0,
       matrixLifecycleProgress: 0,
       matrixLifecycleOpacity: 1,
@@ -347,6 +362,28 @@ export function clampFallingEffectSpeed(speed: number): number {
     return 1;
   }
   return Math.min(MAX_FALLING_EFFECT_SPEED, Math.max(MIN_FALLING_EFFECT_SPEED, speed));
+}
+
+/** Change decorative text only. A Roman-only scene never receives cat tokens. */
+export function applyMatrixEnrichmentInPlace(
+  scene: AtmosphereScene,
+  enabled: boolean,
+  random: () => number,
+): void {
+  if (scene.kind !== "matrix") return;
+  for (const particle of scene.particles) {
+    const japanese = particle.matrixLanguage === "japanese";
+    particle.glyphs = japanese
+      ? enabled
+        ? MATRIX_2CH_ENRICHED_GLYPHS
+        : MATRIX_JAPANESE_GLYPHS
+      : MATRIX_ROMAN_GLYPHS;
+    particle.glyphOffset %= particle.glyphs.length;
+    particle.matrixToken =
+      japanese && enabled && random() < MATRIX_2CH_TOKEN_PROBABILITY
+        ? (MATRIX_2CH_AA_TOKENS[Math.floor(random() * MATRIX_2CH_AA_TOKENS.length)] ?? null)
+        : null;
+  }
 }
 
 /** Replace only stream-head labels; keep positions, velocity and lifecycle intact. */
@@ -1233,7 +1270,7 @@ export function drawAtmosphereScene(
                 Math.floor(Math.max(0, particle.y) / particle.size)) %
               particle.glyphs.length;
             const glyph =
-              (trailIndex === 0 ? particle.matrixWorkToken : null) ??
+              (trailIndex === 0 ? (particle.matrixWorkToken ?? particle.matrixToken) : null) ??
               particle.glyphs[glyphIndex] ??
               "0";
             const textLayout = resolveMatrixWalkTextLayout(glyph, walkFontSize, scene.width);
@@ -1304,7 +1341,7 @@ export function drawAtmosphereScene(
               ? normalizedOpacity
               : normalizedOpacity * (1 - trailIndex / 8) * 0.7) * lifecycleOpacity;
           context.fillText(
-            (trailIndex === 0 ? particle.matrixWorkToken : null) ??
+            (trailIndex === 0 ? (particle.matrixWorkToken ?? particle.matrixToken) : null) ??
               particle.glyphs[glyphIndex] ??
               "0",
             projectedFrom.x,

@@ -52,6 +52,10 @@ describe("WindowAtmosphereSettings", () => {
     expect(testState.updateSettings).toHaveBeenCalledWith({
       fallingEffectLiveWorkVocabularyEnabled: true,
     });
+    const enrichment = page.getByRole("switch", { name: "2ch-style cat AA / 2ch風の猫AA" });
+    await expect.element(enrichment).not.toBeChecked();
+    await enrichment.click();
+    expect(testState.updateSettings).toHaveBeenCalledWith({ fallingEffect2chEnriched: true });
     await expect.element(page.getByText("Provider activity links")).not.toBeInTheDocument();
 
     await page.getByText("Rain", { exact: true }).click();
@@ -89,6 +93,7 @@ describe("WindowAtmosphereSettings", () => {
       fallingEffectSpeed: 2,
       fallingEffectDensity: 2,
       fallingEffectJapaneseRatio: 0.8,
+      fallingEffect2chEnriched: true,
       fallingEffectMatrixMotionMode: "walk-forward",
       fallingEffectMatrixWalkEndFontSize: 96,
     };
@@ -112,6 +117,7 @@ describe("WindowAtmosphereSettings", () => {
       fallingEffectDensity: 1,
       fallingEffectJapaneseRatio: 0.45,
       fallingEffectLiveWorkVocabularyEnabled: false,
+      fallingEffect2chEnriched: false,
     });
 
     await screen.unmount();
