@@ -10,7 +10,7 @@ The reader uses the fixed [NVIDIA query format](https://docs.nvidia.com/deploy/n
 
 One host sampler serves all project requests. It coalesces reads and caches successes and failures for three seconds. Each helper has a two-second deadline, a 500 ms forced-settlement grace, a 16 KiB output limit, and a single active slot. At most two unreaped helpers can remain; a second unreaped failure closes admission until one exits. Owner shutdown settles within its bounded grace. An operating-system process that cannot be killed can outlive that grace; its handle cannot retain the server process.
 
-Only validated adapter fields cross the existing authenticated telemetry RPC. A malformed row rejects the complete adapter list. Raw stderr, executable paths, and exception details are discarded. A GPU failure does not remove CPU, memory, or selected-project storage measurements. No network request, account credential, packet content, or user file is needed by this reader.
+Only validated adapter fields cross the existing authenticated telemetry RPC. A malformed core field rejects the complete adapter list. An unreadable optional temperature is omitted while valid utilization and memory values remain available. Raw stderr, executable paths, and exception details are discarded. A GPU failure does not remove CPU, memory, or selected-project storage measurements. No network request, account credential, packet content, or user file is needed by this reader.
 
 ## Adoption history
 
