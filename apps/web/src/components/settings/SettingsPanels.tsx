@@ -110,6 +110,7 @@ import {
   SettingsSection,
   useRelativeTimeTick,
 } from "./settingsLayout";
+import { WindowOpacitySettings } from "./WindowOpacitySettings";
 import { ProjectFavicon } from "../ProjectFavicon";
 import {
   useServerAvailableEditors,
@@ -724,6 +725,7 @@ export function AppearanceSettingsPanel() {
   return (
     <SettingsPageContainer>
       <SettingsSection title="Appearance">
+        <WindowOpacitySettings />
         <SettingsRow
           title="Theme"
           description="Choose how Cafe Code looks across the app."

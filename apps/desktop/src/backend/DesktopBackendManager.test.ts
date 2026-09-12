@@ -136,6 +136,8 @@ function makeManagerLayer(input: {
           handleBackendReady: Effect.void,
           dispatchMenuAction: () => Effect.void,
           syncAppearance: Effect.void,
+          getWindowOpacityState: Effect.die("unexpected getWindowOpacityState"),
+          setWindowOpacityPreference: () => Effect.die("unexpected setWindowOpacityPreference"),
           ...input.desktopWindow,
         } satisfies DesktopWindow.DesktopWindowShape),
       ),

@@ -15,6 +15,7 @@ import {
   setServerExposureMode,
   setServerHttpsEnabled,
 } from "./methods/serverExposure.ts";
+import { getWindowOpacityState, setWindowOpacityPreference } from "./methods/windowOpacity.ts";
 import {
   checkForUpdate,
   downloadUpdate,
@@ -60,6 +61,8 @@ export const installDesktopIpcHandlers = Effect.gen(function* () {
   yield* ipc.handle(setServerExposureMode);
   yield* ipc.handle(setServerHttpsEnabled);
   yield* ipc.handle(getAdvertisedEndpoints);
+  yield* ipc.handle(getWindowOpacityState);
+  yield* ipc.handle(setWindowOpacityPreference);
 
   yield* ipc.handle(pickFolder);
   yield* ipc.handle(confirm);
