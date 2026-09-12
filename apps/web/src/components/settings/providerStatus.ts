@@ -50,6 +50,12 @@ export function getProviderSummary(provider: ServerProvider | undefined) {
     };
   }
   if (provider.auth.status === "authenticated") {
+    if (provider.driver === "claudeAgent") {
+      return {
+        headline: "Saved credentials detected",
+        detail: "Use Check access in provider settings to verify a live request.",
+      };
+    }
     const authLabel = provider.auth.label ?? provider.auth.type;
     return {
       headline: authLabel ? `Authenticated · ${authLabel}` : "Authenticated",

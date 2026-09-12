@@ -18,6 +18,7 @@
 ## Windows-Specific Notes
 
 - The optional Atmosphere console keeps its controls below the visible Windows Electron caption band. Use the existing overlay geometry with a 40px fallback; ordinary browser clients, macOS/Linux, and hidden native controls use no inset. Verify the console browser caption/viewport cases and the required forced desktop build. Release pointer capture when a drag ends, the panel resets or minimizes, or the console unmounts.
+- Claude access checks preserve the selected instance's resolved runtime and authentication environment. On Windows remove all case variants of `CLAUDE_CODE_MAX_OUTPUT_TOKENS` before setting the small probe output cap; macOS/Linux replace only the exact key. Keep credential and runtime checks mocked in the default suite.
 
 - The separate scheduled/manual reliability workflow runs the existing Windows native installer/runtime/uninstaller smoke only on disposable GitHub-hosted Windows runners. It does not run on user machines or move process-backed/provider tests into the default suite. macOS uses its isolated DMG/ZIP smoke, and Linux keeps its existing artifact build and pipeline coverage.
 
@@ -70,6 +71,8 @@ Core priorities:
 If a tradeoff is required, choose correctness, durability, and debuggability over short-term convenience.
 
 ## Security Requirements
+
+- Provider access checks must require an actual structured terminal response, use synthetic input with tools/hooks/session persistence disabled, and return fixed outcomes without raw provider output. Bind checks to the saved instance and model; reject settings or instance changes before showing success. Keep live checks explicit and outside the default test suite.
 
 - Write all code as if it will run in a security-conscious environment where adversaries will constantly try to attack local transports, provider sessions, provider credentials, persisted command ledgers, and debug surfaces.
 - Local provider daemon and supervisor transports must be loopback-only or IPC by default, authenticated with high-entropy capability tokens, and must never be exposed on a non-loopback interface without an explicit authenticated design.
