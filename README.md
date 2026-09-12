@@ -194,6 +194,8 @@ authenticated:
 - OpenCode: install [OpenCode](https://opencode.ai/docs/) and configure at least one upstream provider, or configure Cafe Code with an existing OpenCode server URL
 - Grok Build (Early Access): install [Grok Build](https://docs.x.ai/build/overview), run `grok login`, and see [Cafe's Grok integration guide](./docs/grok-build.md)
 
+Before a long Claude task, use [Check access in provider settings](./docs/provider-access-check.md) to verify the selected connection and model with a small live request.
+
 Cafe Code currently ships Codex, Claude, OpenCode, and Early Access Grok Build provider integrations.
 
 ## Local Development
