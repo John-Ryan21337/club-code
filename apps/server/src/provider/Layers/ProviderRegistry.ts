@@ -170,7 +170,8 @@ export const mergeProviderSnapshot = (
     ...(reconciledProvider.accountRateLimits === undefined &&
     previousProvider.accountRateLimits !== undefined &&
     reconciledProvider.driver !== ProviderDriverKind.make("grok") &&
-    (reconciledProvider.driver !== ProviderDriverKind.make("codex") ||
+    ((reconciledProvider.driver !== ProviderDriverKind.make("codex") &&
+      reconciledProvider.driver !== ProviderDriverKind.make("claudeAgent")) ||
       isSameAuthenticatedProviderAccount(previousProvider, reconciledProvider))
       ? { accountRateLimits: previousProvider.accountRateLimits }
       : {}),
@@ -214,16 +215,44 @@ export const mergeProviderAccountRateLimitSnapshot = (input: {
   readonly snapshot: ServerProviderAccountRateLimitSnapshot;
   readonly checkedAt: string;
 }): ServerProviderAccountRateLimits => {
-  const previousByLimitId = input.previous?.rateLimitsByLimitId ?? {};
+  // Preserve each retained window's observation time before advancing the
+  // account envelope. Otherwise a notification for one bucket makes every
+  // untouched bucket look newly checked to the usage widget.
+  const dated = (
+    snapshot: ServerProviderAccountRateLimitSnapshot,
+    checkedAt: string,
+  ): ServerProviderAccountRateLimitSnapshot => ({
+    ...snapshot,
+    ...(snapshot.primary
+      ? { primary: { ...snapshot.primary, checkedAt: snapshot.primary.checkedAt ?? checkedAt } }
+      : {}),
+    ...(snapshot.secondary
+      ? {
+          secondary: {
+            ...snapshot.secondary,
+            checkedAt: snapshot.secondary.checkedAt ?? checkedAt,
+          },
+        }
+      : {}),
+  });
+  const previousCheckedAt = input.previous?.checkedAt ?? input.checkedAt;
+  const previousByLimitId = Object.fromEntries(
+    Object.entries(input.previous?.rateLimitsByLimitId ?? {}).map(([key, snapshot]) => [
+      key,
+      dated(snapshot, previousCheckedAt),
+    ]),
+  );
+  const previousDefault = input.previous
+    ? dated(input.previous.rateLimits, previousCheckedAt)
+    : undefined;
   const previousSnapshot =
-    previousByLimitId[input.limitId] ??
-    (input.limitId === "codex" ? input.previous?.rateLimits : undefined);
+    previousByLimitId[input.limitId] ?? (input.limitId === "codex" ? previousDefault : undefined);
   const mergedSnapshot: ServerProviderAccountRateLimitSnapshot = {
     ...previousSnapshot,
-    ...input.snapshot,
+    ...dated(input.snapshot, input.checkedAt),
   };
   const rateLimits =
-    input.limitId === "codex" ? mergedSnapshot : (input.previous?.rateLimits ?? mergedSnapshot);
+    input.limitId === "codex" ? mergedSnapshot : (previousDefault ?? mergedSnapshot);
 
   return {
     rateLimits,
@@ -234,6 +263,7 @@ export const mergeProviderAccountRateLimitSnapshot = (input: {
     ...(input.previous?.rateLimitResetCredits !== undefined
       ? { rateLimitResetCredits: input.previous.rateLimitResetCredits }
       : {}),
+    ...(input.previous?.paidUsage !== undefined ? { paidUsage: input.previous.paidUsage } : {}),
     checkedAt: input.checkedAt,
   };
 };
@@ -243,7 +273,7 @@ export const haveProvidersChanged = (
   nextProviders: ReadonlyArray<ServerProvider>,
 ): boolean => !Equal.equals(previousProviders, nextProviders);
 
-const correlateSnapshotWithSource = (
+export const correlateSnapshotWithSource = (
   source: ProviderSnapshotSource,
   snapshot: ServerProvider,
 ): Effect.Effect<ServerProvider> => {
@@ -267,7 +297,9 @@ const correlateSnapshotWithSource = (
       liveSteer: "unsupported",
       threadGoals: "unsupported",
       ...snapshot.runtimeCapabilities,
-      accountUsage: source.refreshAccountUsage !== undefined,
+      accountUsage:
+        source.refreshAccountUsage !== undefined &&
+        snapshot.runtimeCapabilities?.accountUsage !== false,
     },
   });
 };
@@ -546,7 +578,7 @@ export const ProviderRegistryLive = Layer.effect(
             return [{ changed: false }, previousProviders];
           }
           const previousRateLimits = provider.accountRateLimits;
-          const nextRateLimits: ServerProviderAccountRateLimits =
+          let nextRateLimits: ServerProviderAccountRateLimits =
             "snapshot" in input
               ? mergeProviderAccountRateLimitSnapshot({
                   previous: previousRateLimits,
@@ -565,8 +597,47 @@ export const ProviderRegistryLive = Layer.effect(
                   ...(previousRateLimits?.rateLimitResetCredits !== undefined
                     ? { rateLimitResetCredits: previousRateLimits.rateLimitResetCredits }
                     : {}),
+                  ...(previousRateLimits?.paidUsage !== undefined
+                    ? { paidUsage: previousRateLimits.paidUsage }
+                    : {}),
                   checkedAt: input.checkedAt,
                 };
+          if (!("snapshot" in input)) {
+            const prior = previousRateLimits?.rateLimits;
+            const rateLimits = {
+              ...nextRateLimits.rateLimits,
+              ...(prior?.primary
+                ? {
+                    primary: {
+                      ...prior.primary,
+                      checkedAt: prior.primary.checkedAt ?? previousRateLimits!.checkedAt,
+                    },
+                  }
+                : {}),
+              ...(prior?.secondary
+                ? {
+                    secondary: {
+                      ...prior.secondary,
+                      checkedAt: prior.secondary.checkedAt ?? previousRateLimits!.checkedAt,
+                    },
+                  }
+                : {}),
+              [input.slot]: { ...input.window, checkedAt: input.checkedAt },
+            };
+            nextRateLimits = {
+              ...nextRateLimits,
+              rateLimits,
+              ...(provider.driver === ProviderDriverKind.make("claudeAgent") &&
+              nextRateLimits.rateLimitsByLimitId
+                ? {
+                    rateLimitsByLimitId: {
+                      ...nextRateLimits.rateLimitsByLimitId,
+                      claude: rateLimits,
+                    },
+                  }
+                : {}),
+            };
+          }
           const nextProvider: ServerProvider = {
             ...provider,
             accountRateLimits: nextRateLimits,

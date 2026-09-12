@@ -41,6 +41,7 @@ import {
 } from "../claudeModelMetadata.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import { probeClaudeAccountUsage, supportsClaudeAccountUsage } from "../claudeAccountUsageProbe.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
@@ -118,6 +119,7 @@ const withInstanceIdentity =
     // destructive interrupt even though the adapter can queue it safely.
     runtimeCapabilities: {
       ...snapshot.runtimeCapabilities,
+      accountUsage: supportsClaudeAccountUsage(snapshot),
       liveSteer: "supported",
       // Claude `active_goal` is progress telemetry, not a durable public
       // create/get/update/clear control plane. Keep it in the work log and do
@@ -137,6 +139,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
   create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const httpClient = yield* HttpClient.HttpClient;
       const eventLoggers = yield* ProviderEventLoggers;
@@ -253,6 +256,13 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         initialSnapshot: (settings) =>
           makePendingClaudeProvider(settings).pipe(Effect.map(stampIdentity)),
         checkProvider,
+        refreshAccountUsage: ({ settings, snapshot }) =>
+          supportsClaudeAccountUsage(snapshot)
+            ? probeClaudeAccountUsage(settings, snapshot.auth, effectiveEnvironment).pipe(
+                Effect.provideService(Path.Path, path),
+                Effect.provideService(FileSystem.FileSystem, fileSystem),
+              )
+            : Effect.succeed(undefined),
         enrichSnapshot: ({ snapshot, publishSnapshot }) =>
           enrichProviderSnapshotWithVersionAdvisory(snapshot, maintenanceCapabilities).pipe(
             Effect.provideService(HttpClient.HttpClient, httpClient),

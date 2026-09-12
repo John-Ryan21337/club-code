@@ -69,6 +69,57 @@ it("remains absent and makes no refresh requests by default", async () => {
   expect(harness.refresh).not.toHaveBeenCalled();
 });
 
+it("shows paid-only usage without inventing a currency and preserves its stale state", async () => {
+  harness.providers = [
+    {
+      ...provider(),
+      accountRateLimits: {
+        checkedAt: new Date().toISOString(),
+        rateLimits: {},
+        paidUsage: {
+          status: "disabled",
+          used: "12.5",
+          limit: "100",
+          checkedAt: new Date(Date.now() - 720_000).toISOString(),
+        },
+      },
+    },
+  ];
+  const screen = await render(<ProviderUsageWidget />);
+  await expect.element(screen.getByText("Paid usage: disabled", { exact: true })).toBeVisible();
+  await expect.element(screen.getByText("Used: 12.5 · Limit: 100", { exact: true })).toBeVisible();
+  await expect
+    .element(screen.getByText("Provider units; currency not reported.", { exact: true }))
+    .toBeVisible();
+  await expect
+    .element(screen.getByText("Stale paid usage: showing last reported values.", { exact: true }))
+    .toBeVisible();
+});
+
+it("does not offer pacing for an old window beneath a fresh account event", async () => {
+  harness.settings = { ...harness.settings, modelPacingEnabled: true };
+  const source = provider();
+  harness.providers = [
+    {
+      ...source,
+      accountRateLimits: {
+        ...source.accountRateLimits!,
+        rateLimits: {
+          primary: {
+            ...source.accountRateLimits!.rateLimits.primary!,
+            checkedAt: new Date(Date.now() - 720_000).toISOString(),
+          },
+        },
+      },
+    },
+  ];
+  const screen = await render(<ProviderUsageWidget />);
+  await expect
+    .element(screen.getByText("Stale window: showing last reported values.", { exact: true }))
+    .toBeVisible();
+  expect(document.querySelector("[data-pacing-status]")).toBeNull();
+});
+
 it("refreshes the exact instance through usage-only scope and displays known facts", async () => {
   const screen = await render(<ProviderUsageWidget />);
   await expect.poll(() => harness.refresh.mock.calls.length).toBe(1);

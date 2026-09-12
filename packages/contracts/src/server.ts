@@ -65,6 +65,7 @@ export const ServerProviderAuthActions = Schema.Struct({
 export type ServerProviderAuthActions = typeof ServerProviderAuthActions.Type;
 
 export const ServerProviderAccountRateLimitWindow = Schema.Struct({
+  checkedAt: Schema.optionalKey(IsoDateTime),
   // Optional: some providers (e.g. Claude) report a window's reset time without
   // a usage figure. A window with only `resetsAt` is valid — consumers render
   // the reset and surface usage as "unknown" rather than fabricating a percentage.
@@ -141,7 +142,24 @@ export const ServerProviderAccountRateLimitResetCredits = Schema.Struct({
 export type ServerProviderAccountRateLimitResetCredits =
   typeof ServerProviderAccountRateLimitResetCredits.Type;
 
+const UsagePercent = Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 100 }));
+const UsageAmount = TrimmedNonEmptyString.check(Schema.isMaxLength(80));
+/** Provider-reported amounts are opaque; never infer a currency. */
+export const ServerProviderPaidUsage = Schema.Struct({
+  status: Schema.Literals(["enabled", "disabled", "unlimited"]),
+  checkedAt: Schema.optionalKey(IsoDateTime),
+  balance: Schema.optionalKey(Schema.NullOr(UsageAmount)),
+  used: Schema.optionalKey(Schema.NullOr(UsageAmount)),
+  limit: Schema.optionalKey(Schema.NullOr(UsageAmount)),
+  utilizationPercent: Schema.optionalKey(Schema.NullOr(UsagePercent)),
+  remainingPercent: Schema.optionalKey(Schema.NullOr(UsagePercent)),
+  currency: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(3)))),
+  resetsAt: Schema.optionalKey(Schema.NullOr(NonNegativeInt)),
+});
+export type ServerProviderPaidUsage = typeof ServerProviderPaidUsage.Type;
+
 export const ServerProviderAccountRateLimits = Schema.Struct({
+  paidUsage: Schema.optionalKey(Schema.NullOr(ServerProviderPaidUsage)),
   rateLimits: ServerProviderAccountRateLimitSnapshot,
   rateLimitsByLimitId: Schema.optionalKey(
     Schema.NullOr(Schema.Record(TrimmedNonEmptyString, ServerProviderAccountRateLimitSnapshot)),

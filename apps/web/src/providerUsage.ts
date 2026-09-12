@@ -5,6 +5,19 @@ import type {
 } from "@cafecode/contracts";
 import { identifyModelPacingLimit } from "./modelPacing";
 
+export function isProviderUsageStale(
+  checkedAt: string | undefined,
+  nowMs: number,
+  pollMinutes: number,
+): boolean {
+  const checkedMs = checkedAt ? Date.parse(checkedAt) : Number.NaN;
+  return (
+    !Number.isFinite(checkedMs) ||
+    nowMs - checkedMs > Math.max(600_000, pollMinutes * 120_000) ||
+    checkedMs > nowMs + 60_000
+  );
+}
+
 export function canRefreshProviderUsage(provider: ServerProvider): boolean {
   return (
     provider.runtimeCapabilities?.accountUsage === true &&
@@ -40,10 +53,7 @@ export function buildProviderUsageRows(
         ? [["default", account.rateLimits]]
         : [];
   const checkedMs = account ? Date.parse(account.checkedAt) : Number.NaN;
-  const stale =
-    !Number.isFinite(checkedMs) ||
-    nowMs - checkedMs > Math.max(600_000, pollMinutes * 120_000) ||
-    checkedMs > nowMs + 60_000;
+  const stale = isProviderUsageStale(account?.checkedAt, nowMs, pollMinutes);
   const windows = snapshots.flatMap(([key, snapshot]) => {
     const identity = identifyModelPacingLimit({
       snapshotKey: key,
@@ -76,6 +86,7 @@ export function buildProviderUsageRows(
           identity,
           usedPercent,
           resetsAt,
+          stale: isProviderUsageStale(window.checkedAt ?? account?.checkedAt, nowMs, pollMinutes),
           window: window as ServerProviderAccountRateLimitWindow,
         },
       ];
@@ -98,5 +109,7 @@ export function buildProviderUsageRows(
     checkedAt: Number.isFinite(checkedMs) ? account!.checkedAt : null,
     resetCredits,
     exhausted,
+    paidUsage: account?.paidUsage ?? null,
+    paidUsageStale: isProviderUsageStale(account?.paidUsage?.checkedAt, nowMs, pollMinutes),
   };
 }
