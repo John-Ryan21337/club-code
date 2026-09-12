@@ -37,6 +37,7 @@ import {
 } from "@cafecode/contracts/settings";
 
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
+import { useAtmosphereConsolePreferences } from "../../atmosphereConsolePreferences";
 import { useServerConfig } from "../../rpc/serverState";
 import {
   clampAtmosphereDensitySetting,
@@ -77,6 +78,7 @@ export function WindowAtmosphereSettings() {
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
   const serverConfig = useServerConfig();
+  const [consolePreferences, setConsolePreferences] = useAtmosphereConsolePreferences();
   const atmosphereAvailable = serverConfig?.ambientExperienceCapabilities.atmosphere === true;
   const hasNonDefaultValue =
     settings.fallingEffectsEnabled !== DEFAULT_FALLING_EFFECTS_ENABLED ||
@@ -576,6 +578,27 @@ export function WindowAtmosphereSettings() {
             </NumberField>
             <span className="text-xs text-muted-foreground">x</span>
           </div>
+        }
+      />
+      <SettingsRow
+        title="Atmosphere console"
+        description="Open a movable panel that accepts short local commands for these falling-effect settings. Opening it changes nothing on its own."
+        control={
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={!atmosphereAvailable}
+            onClick={() =>
+              setConsolePreferences((current) => ({
+                ...current,
+                open: true,
+                minimized: false,
+              }))
+            }
+          >
+            {consolePreferences.open ? "Console is open" : "Open console"}
+          </Button>
         }
       />
     </SettingsSection>
