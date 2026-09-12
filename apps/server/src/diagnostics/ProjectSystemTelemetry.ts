@@ -26,6 +26,12 @@ import {
   type ProjectVolumeSamplerShape,
 } from "./ProjectVolumeSampler.ts";
 import { unavailableProjectVolumeTelemetry } from "./ProjectVolumeTelemetry.ts";
+import { makeGpuProbeProcess, type GpuProbeProcessShape } from "./GpuProbeProcess.ts";
+import {
+  makeHostGpuTelemetrySampler,
+  type HostGpuTelemetrySamplerShape,
+} from "./HostGpuTelemetry.ts";
+import { probeFailedGpuTelemetry } from "./GpuTelemetry.ts";
 
 export const PROJECT_SYSTEM_TELEMETRY_MINIMUM_SAMPLE_INTERVAL_MS = 1_000;
 
@@ -56,6 +62,7 @@ export interface ProjectSystemTelemetryRuntime {
 export interface ProjectSystemTelemetryDependencies {
   readonly hostSampler: HostSystemTelemetrySamplerShape;
   readonly volumeSampler: ProjectVolumeSamplerShape;
+  readonly gpuSampler: HostGpuTelemetrySamplerShape;
   readonly runtime: ProjectSystemTelemetryRuntime;
 }
 
@@ -181,30 +188,25 @@ export function makeProjectSystemTelemetry(
       host = unavailableHostSample();
     }
 
-    const pending = Promise.resolve()
-      .then(() => dependencies.volumeSampler.read(input.workspaceRoot))
-      .then(
-        (projectVolume) => ({
-          projectId: input.projectId,
-          sampledAt: DateTime.makeUnsafe(sampledAtMs),
-          minimumSampleIntervalMs: PROJECT_SYSTEM_TELEMETRY_MINIMUM_SAMPLE_INTERVAL_MS,
-          platform,
-          architecture,
-          cpu: host.cpu,
-          memory: host.memory,
-          projectVolume,
-        }),
-        () => ({
-          projectId: input.projectId,
-          sampledAt: DateTime.makeUnsafe(sampledAtMs),
-          minimumSampleIntervalMs: PROJECT_SYSTEM_TELEMETRY_MINIMUM_SAMPLE_INTERVAL_MS,
-          platform,
-          architecture,
-          cpu: host.cpu,
-          memory: host.memory,
-          projectVolume: unavailableProjectVolumeTelemetry(),
-        }),
-      )
+    const pending = Promise.all([
+      Promise.resolve()
+        .then(() => dependencies.volumeSampler.read(input.workspaceRoot))
+        .catch(unavailableProjectVolumeTelemetry),
+      Promise.resolve()
+        .then(() => dependencies.gpuSampler.sample())
+        .catch(probeFailedGpuTelemetry),
+    ])
+      .then(([projectVolume, gpu]) => ({
+        projectId: input.projectId,
+        sampledAt: DateTime.makeUnsafe(sampledAtMs),
+        minimumSampleIntervalMs: PROJECT_SYSTEM_TELEMETRY_MINIMUM_SAMPLE_INTERVAL_MS,
+        platform,
+        architecture,
+        cpu: host.cpu,
+        memory: host.memory,
+        gpu,
+        projectVolume,
+      }))
       .then((result) => {
         const current = projectCache.get(input.projectId);
         if (current && current.generation > generation) {
@@ -256,19 +258,32 @@ function makeLiveRuntime(): ProjectSystemTelemetryRuntime {
   };
 }
 
-function makeLiveService(probe: ProjectVolumeProbeProcessShape): ProjectSystemTelemetryShape {
+function makeLiveService(input: {
+  readonly volumeProbe: ProjectVolumeProbeProcessShape;
+  readonly gpuProbe: GpuProbeProcessShape;
+}): ProjectSystemTelemetryShape {
   const runtime = makeLiveRuntime();
   return makeProjectSystemTelemetry({
     hostSampler: makeHostSystemTelemetrySampler(makeLiveHostSystemTelemetryRuntime()),
-    volumeSampler: makeProjectVolumeSampler(probe, {
+    gpuSampler: makeHostGpuTelemetrySampler(input.gpuProbe, {
+      nowMonotonicMillis: runtime.nowMonotonicMillis,
+    }),
+    volumeSampler: makeProjectVolumeSampler(input.volumeProbe, {
       nowMonotonicMillis: runtime.nowMonotonicMillis,
     }),
     runtime,
   });
 }
 
-const liveService = Effect.acquireRelease(Effect.sync(makeProjectVolumeProbeProcess), (probe) =>
-  Effect.promise(() => probe.close()),
+const liveService = Effect.acquireRelease(
+  Effect.sync(() => ({
+    volumeProbe: makeProjectVolumeProbeProcess(),
+    gpuProbe: makeGpuProbeProcess(),
+  })),
+  ({ volumeProbe, gpuProbe }) =>
+    Effect.promise(async () => {
+      await Promise.allSettled([volumeProbe.close(), gpuProbe.close()]);
+    }),
 ).pipe(Effect.map(makeLiveService));
 
 export const layer = Layer.effect(ProjectSystemTelemetry, liveService);

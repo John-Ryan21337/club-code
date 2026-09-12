@@ -51,10 +51,9 @@ function readDetail(record: Record<string, unknown>, fallback: string): string {
 }
 
 /**
- * Compatibility seam for the GPU adapter PR. The base telemetry contract has
- * no GPU field, so this returns an explicit unavailable projection today. Once
- * the RPC grows a `gpu` object, this consumes its bounded utilization and
- * memory fields without changing the graph or its polling lifecycle.
+ * Project the optional GPU measurement without treating a missing value from
+ * an older remote server as zero. GPU utilization is the highest adapter value;
+ * VRAM usage is the combined adapter memory usage.
  */
 export const projectTelemetryGpuAdapter: ProjectTelemetryGpuAdapter = (telemetry) => {
   const gpu = (telemetry as unknown as { readonly gpu?: unknown }).gpu;
