@@ -16,6 +16,7 @@ import { OpenInPicker } from "./OpenInPicker";
 import { usePrimaryEnvironmentId } from "../../environments/primary";
 import { useDesktopSourceUpdateState } from "../../lib/desktopSourceUpdateReactQuery";
 import { getLocalShellCapabilities } from "../../localCapabilities";
+import { YouTubePlayerToggle } from "../ambient/YouTubePlayerToggle";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -126,6 +127,7 @@ export const ChatHeader = memo(function ChatHeader({
           </Badge>
         )}
         <ConnectionStatusIndicator />
+        <YouTubePlayerToggle />
         {showOpenInPicker && (
           <OpenInPicker
             keybindings={keybindings}

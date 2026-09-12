@@ -83,7 +83,28 @@ export function getProviderModelCapabilities(
   provider: ProviderDriverKind,
 ): ModelCapabilities {
   const slug = normalizeModelSlug(model, provider);
-  return models.find((candidate) => candidate.slug === slug)?.capabilities ?? EMPTY_CAPABILITIES;
+  const caps = models.find((candidate) => candidate.slug === slug)?.capabilities;
+  if (!caps) return EMPTY_CAPABILITIES;
+  // Composer defaults are a product preference. Keep the provider snapshot
+  // intact, and let explicit saved selections override these defaults later.
+  return {
+    ...caps,
+    optionDescriptors: (caps.optionDescriptors ?? []).map((descriptor) =>
+      descriptor.type === "select" &&
+      ["reasoningEffort", "effort", "variant"].includes(descriptor.id) &&
+      descriptor.options.some((option) => option.id === "high") &&
+      !descriptor.promptInjectedValues?.includes("high")
+        ? {
+            ...descriptor,
+            currentValue: "high",
+            options: descriptor.options.map((option) => ({
+              ...option,
+              isDefault: option.id === "high",
+            })),
+          }
+        : descriptor,
+    ),
+  };
 }
 
 export function getDefaultServerModel(

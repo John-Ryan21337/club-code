@@ -8113,7 +8113,7 @@ export default function ChatView(props: ChatViewProps) {
           <div
             aria-hidden="true"
             className={cn(
-              "pointer-events-none absolute inset-y-0 left-[calc(env(safe-area-inset-left)+0.75rem)] right-[calc(env(safe-area-inset-right)+0.75rem)] z-0 mx-auto max-w-208",
+              "cafe-composer-width pointer-events-none absolute inset-y-0 left-[calc(env(safe-area-inset-left)+0.75rem)] right-[calc(env(safe-area-inset-right)+0.75rem)] z-0 mx-auto",
               !isMobile &&
                 "sm:left-[calc(env(safe-area-inset-left)+1.25rem)] sm:right-[calc(env(safe-area-inset-right)+1.25rem)]",
             )}
@@ -8202,7 +8202,7 @@ export default function ChatView(props: ChatViewProps) {
               <div className="relative z-10">
                 {settings.showComposerThreadAutomationControls ? (
                   <div
-                    className="mx-auto grid w-full min-w-0 max-w-208 grid-cols-1 items-start gap-2 sm:grid-cols-2"
+                    className="cafe-composer-width mx-auto grid w-full min-w-0 grid-cols-1 items-start gap-2 sm:grid-cols-2"
                     data-composer-thread-automation-controls="true"
                   >
                     <AutoNudgeControl

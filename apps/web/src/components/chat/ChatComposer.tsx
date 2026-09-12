@@ -89,11 +89,7 @@ import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
 import { searchSlashCommandItems } from "./composerSlashCommandSearch";
-import {
-  getComposerProviderState,
-  renderProviderTraitsMenuContent,
-  renderProviderTraitsPicker,
-} from "./composerProviderState";
+import { getComposerProviderState, renderProviderTraitsPicker } from "./composerProviderState";
 import { ContextWindowMeter } from "./ContextWindowMeter";
 import { ThreadGoalFooterButton } from "./ThreadGoalControl";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -1641,17 +1637,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     return true;
   };
 
-  const providerTraitsMenuContent = renderProviderTraitsMenuContent({
-    provider: selectedProvider,
-    providerInstanceId: selectedInstanceId,
-    ...(routeKind === "server" ? { threadRef: routeThreadRef } : {}),
-    ...(routeKind === "draft" && draftId ? { draftId } : {}),
-    model: selectedModel,
-    models: selectedProviderModels,
-    modelOptions: selectedComposerModelOptions,
-    prompt,
-    onPromptChange: setPromptFromTraits,
-  });
   const providerTraitsPicker = renderProviderTraitsPicker({
     provider: selectedProvider,
     providerInstanceId: selectedInstanceId,
@@ -3018,7 +3003,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     <form
       ref={composerFormRef}
       onSubmit={submitComposer}
-      className="mx-auto w-full min-w-0 max-w-208"
+      className="cafe-composer-width mx-auto w-full min-w-0"
       data-chat-composer-form="true"
     >
       {ephemeralBrowserContext ? (
@@ -3518,7 +3503,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 isComposerFooterCompact ? "gap-1.5" : "gap-2 sm:gap-0",
               )}
             >
-              <div className="-m-1 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              <div
+                className="-m-1 flex min-w-0 flex-1 flex-wrap items-center gap-1 p-1"
+                data-chat-composer-options="true"
+              >
                 <ComposerAttachImageButton
                   disabled={pendingUserInputs.length > 0 || activeThreadId === null}
                   onClick={openComposerFilePicker}
@@ -3565,6 +3553,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     : {})}
                 />
 
+                {providerTraitsPicker}
                 {isComposerFooterCompact ? (
                   <CompactComposerControlsMenu
                     activePlan={showPlanSidebarToggle}
@@ -3576,7 +3565,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                     showGoalControl={goalControlsSupported}
                     goalStatus={activeThread?.goal?.status ?? null}
-                    traitsMenuContent={providerTraitsMenuContent}
+                    traitsMenuContent={null}
                     onToggleInteractionMode={cycleComposerInteractionMode}
                     onClaudePermissionModeChange={handleClaudePermissionModeChange}
                     onTogglePlanSidebar={togglePlanSidebar}
@@ -3585,12 +3574,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   />
                 ) : (
                   <>
-                    {providerTraitsPicker ? (
-                      <>
-                        <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
-                        {providerTraitsPicker}
-                      </>
-                    ) : null}
                     <ComposerFooterModeControls
                       provider={selectedProvider}
                       showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}

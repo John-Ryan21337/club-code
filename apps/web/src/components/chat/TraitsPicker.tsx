@@ -397,8 +397,6 @@ export const TraitsPicker = memo(function TraitsPicker({
       .filter((label): label is string => typeof label === "string" && label.length > 0)
       .join(" · ") || "";
 
-  const isCodexStyle = provider === "codex";
-
   return (
     <Menu
       open={isMenuOpen}
@@ -411,26 +409,16 @@ export const TraitsPicker = memo(function TraitsPicker({
           <Button
             size="sm"
             variant={triggerVariant ?? "ghost"}
+            data-chat-provider-traits="true"
             className={cn(
-              isCodexStyle
-                ? "min-w-0 max-w-40 shrink justify-start overflow-hidden whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:max-w-48 sm:px-3 [&_svg]:mx-0"
-                : "shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3",
+              "h-auto min-h-7 min-w-0 max-w-full shrink-0 justify-start whitespace-normal px-2 py-1 text-muted-foreground/70 hover:text-foreground/80 sm:px-3 [&_svg]:mx-0",
               triggerClassName,
             )}
           />
         }
       >
-        {isCodexStyle ? (
-          <span className="flex min-w-0 w-full items-center gap-2 overflow-hidden">
-            {triggerLabel}
-            <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
-          </span>
-        ) : (
-          <>
-            <span>{triggerLabel}</span>
-            <ChevronDownIcon aria-hidden="true" className="size-3 opacity-60" />
-          </>
-        )}
+        <span className="min-w-0 text-left [overflow-wrap:anywhere]">{triggerLabel}</span>
+        <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
       </MenuTrigger>
       <MenuPopup align="start">
         <TraitsMenuContent

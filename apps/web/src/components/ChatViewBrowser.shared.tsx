@@ -4039,6 +4039,86 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       }
     });
 
+    it.each(
+      (["en", "ja", "dual"] as const).flatMap((uiLanguage) =>
+        [430, 1800].map((width) => ({ uiLanguage, width })),
+      ),
+    )(
+      "shows complete model and effort labels in $uiLanguage at $width pixels",
+      async ({ uiLanguage, width }) => {
+        const mounted = await mountChatView({
+          viewport: { ...WIDE_FOOTER_VIEWPORT, width },
+          snapshot: createSnapshotForTargetUser({
+            targetMessageId: "msg-user-wide-model-label" as MessageId,
+            targetText: "Model and effort label geometry",
+          }),
+          configureFixture: (nextFixture) => {
+            const model = nextFixture.snapshot.threads[0]!.modelSelection.model;
+            nextFixture.serverConfig = {
+              ...nextFixture.serverConfig,
+              providers: nextFixture.serverConfig.providers.map((provider) => ({
+                ...provider,
+                models: [
+                  {
+                    slug: model,
+                    name: "GPT-5.6-Sol · Long model label / 長いモデル名",
+                    isCustom: false,
+                    capabilities: createModelCapabilities({
+                      optionDescriptors: [
+                        {
+                          id: "reasoningEffort",
+                          label: "Reasoning",
+                          type: "select",
+                          currentValue: "ultra",
+                          options: [{ id: "ultra", label: "Ultra / 最大推論", isDefault: true }],
+                        },
+                      ],
+                    }),
+                  },
+                ],
+              })),
+            };
+          },
+        });
+        try {
+          replaceClientSettingsSnapshot({ ...DEFAULT_CLIENT_SETTINGS, uiLanguage });
+          const model = await waitForElement(
+            () => document.querySelector<HTMLElement>('[data-chat-provider-model-picker="true"]'),
+            "Missing model picker",
+          );
+          const traits = await waitForElement(
+            () => document.querySelector<HTMLElement>('[data-chat-provider-traits="true"]'),
+            "Missing effort picker",
+          );
+          await waitForLayout();
+          await vi.waitFor(() =>
+            expect(document.documentElement.dataset.uiLanguage).toBe(uiLanguage),
+          );
+          const composer = model.closest<HTMLElement>(".cafe-composer-width")!;
+          if (width === 1800) expect(composer.getBoundingClientRect().width).toBeGreaterThan(832);
+          else expect(composer.getBoundingClientRect().width).toBeLessThanOrEqual(width);
+          for (const control of [model, traits]) {
+            expect(control.textContent!.trim().length).toBeGreaterThan(0);
+            expect(control.scrollWidth).toBeLessThanOrEqual(control.clientWidth + 1);
+            for (const label of control.querySelectorAll<HTMLElement>("span")) {
+              expect(getComputedStyle(label).textOverflow).not.toBe("ellipsis");
+              expect(label.scrollWidth).toBeLessThanOrEqual(label.clientWidth + 1);
+            }
+          }
+          const options = model.closest<HTMLElement>('[data-chat-composer-options="true"]')!;
+          expect(options.scrollWidth).toBeLessThanOrEqual(options.clientWidth + 1);
+          if (import.meta.env.VITE_CAPTURE_COMPOSER === "1") {
+            await page.screenshot({
+              path: `../../../../docs/pr-assets/player-composer/composer-${uiLanguage}-${width}.png`,
+              save: true,
+            });
+          }
+        } finally {
+          await mounted.cleanup();
+        }
+      },
+    );
+
     it("keeps every composer footer control and icon visible in dual-language mode", async () => {
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
@@ -7768,7 +7848,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
 
         expect(scrim.getAttribute("aria-hidden")).toBe("true");
         expect(scrim.classList.contains("pointer-events-none")).toBe(true);
-        expect(scrim.classList.contains("max-w-208")).toBe(true);
+        expect(scrim.classList.contains("cafe-composer-width")).toBe(true);
         expect(scrim.classList.contains("z-0")).toBe(true);
 
         const scrimBounds = scrim.getBoundingClientRect();
@@ -7838,7 +7918,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
         expect(idleGuard).toBeTruthy();
         expect(controls.classList.contains("mx-auto")).toBe(true);
         expect(controls.classList.contains("w-full")).toBe(true);
-        expect(controls.classList.contains("max-w-208")).toBe(true);
+        expect(controls.classList.contains("cafe-composer-width")).toBe(true);
         expect(controls.classList.contains("grid-cols-1")).toBe(true);
         expect(controls.classList.contains("sm:grid-cols-2")).toBe(true);
         expect(Array.from(controls.children)).toEqual([autoNudge, idleGuard]);
@@ -8509,8 +8589,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
           findComposerProviderModelPicker,
           "Unable to find provider model picker.",
         );
-        const initialModelPickerOffset =
-          initialModelPicker.getBoundingClientRect().left - footer.getBoundingClientRect().left;
+        const initialModelLabel = initialModelPicker.textContent;
         const initialImplementButton = await waitForButtonByText("Implement");
         const initialImplementWidth = initialImplementButton.getBoundingClientRect().width;
 
@@ -8544,21 +8623,33 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
             const compactModelPicker = findComposerProviderModelPicker();
             expect(compactModelPicker).toBeTruthy();
 
-            const compactModelPickerOffset =
-              compactModelPicker!.getBoundingClientRect().left -
-              footer.getBoundingClientRect().left;
+            const modelRect = compactModelPicker!.getBoundingClientRect();
+            const footerRect = footer.getBoundingClientRect();
 
             expect(Math.abs(implementRect.right - implementActionsRect.left)).toBeLessThanOrEqual(
               1,
             );
             expect(Math.abs(implementRect.top - implementActionsRect.top)).toBeLessThanOrEqual(1);
             expect(Math.abs(implementRect.width - initialImplementWidth)).toBeLessThanOrEqual(1);
+            // Model labels can move to the next row so the complete name stays visible.
+            expect(compactModelPicker!.textContent).toBe(initialModelLabel);
+            expect(modelRect.left).toBeGreaterThanOrEqual(footerRect.left);
+            expect(modelRect.right).toBeLessThanOrEqual(footerRect.right);
             expect(
-              Math.abs(compactModelPickerOffset - initialModelPickerOffset),
-            ).toBeLessThanOrEqual(1);
+              modelRect.right <= implementRect.left || modelRect.bottom <= implementRect.top,
+            ).toBe(true);
+            expect(modelRect.bottom).toBeLessThanOrEqual(footerRect.bottom);
+            expect(compactModelPicker!.scrollWidth).toBeLessThanOrEqual(
+              compactModelPicker!.clientWidth + 1,
+            );
           },
           { timeout: 8_000, interval: 16 },
         );
+        if (import.meta.env.VITE_CAPTURE_COMPOSER === "1") {
+          await page.screenshot({
+            path: "../../../../docs/pr-assets/player-composer/composer-plan-440.png",
+          });
+        }
       } finally {
         await mounted.cleanup();
       }

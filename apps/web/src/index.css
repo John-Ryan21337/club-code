@@ -1611,6 +1611,30 @@ label:has(> select#reasoning-effort) select {
    state-colored gradient while the ambiance composer surface is enabled.
    AmbianceLayer owns the variable; when it is absent the frame stays
    transparent exactly like the default composer. */
+/* Expand the former 52rem measure by delta_s - 1 (sqrt(2)) on the silver scale.
+   The composer and its overlays share this cap; narrow panes use their full
+   available width. Labels wrap instead of shrinking bilingual text. */
+.cafe-composer-width {
+  max-width: 73.539105rem;
+  container-type: inline-size;
+  container-name: composer;
+}
+
+/* Narrow split panes need a full row for readable model and effort controls. */
+@container composer (max-width: 24rem) {
+  [data-chat-composer-footer="true"] {
+    flex-wrap: wrap;
+  }
+
+  [data-chat-composer-options="true"] {
+    flex-basis: 100%;
+  }
+
+  [data-chat-composer-actions="right"] {
+    margin-left: auto;
+  }
+}
+
 .cafe-ambiance-composer-frame {
   background: var(--cafe-ambiance-composer-ring, transparent);
   transition: background 400ms ease;
