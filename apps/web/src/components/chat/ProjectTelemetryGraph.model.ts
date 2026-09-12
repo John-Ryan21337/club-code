@@ -10,6 +10,8 @@ export interface ProjectTelemetryHistoryPoint {
   readonly projectVolumePercent: number | null;
   readonly gpuPercent: number | null;
   readonly vramPercent: number | null;
+  readonly networkReceiveBytesPerSecond: number | null;
+  readonly networkTransmitBytesPerSecond: number | null;
 }
 
 export interface ProjectTelemetryGpuProjection {
@@ -134,6 +136,10 @@ export function toProjectTelemetryHistoryPoint(
         : null,
     gpuPercent: gpu.gpuPercent,
     vramPercent: gpu.vramPercent,
+    networkReceiveBytesPerSecond:
+      telemetry.network?.status === "available" ? telemetry.network.receiveBytesPerSecond : null,
+    networkTransmitBytesPerSecond:
+      telemetry.network?.status === "available" ? telemetry.network.transmitBytesPerSecond : null,
   };
 }
 
@@ -174,6 +180,17 @@ export function buildTelemetrySparklinePath(
   });
 
   return path.trim();
+}
+
+/** Scale throughput to its own recent peak; this is not a link-capacity percentage. */
+export function normalizeTelemetryRateHistory(
+  values: readonly (number | null)[],
+): readonly (number | null)[] {
+  const valid = values.map((value) =>
+    value !== null && Number.isSafeInteger(value) && value >= 0 ? value : null,
+  );
+  const maximum = Math.max(1, ...valid.map((value) => value ?? 0));
+  return valid.map((value) => (value === null ? null : (value / maximum) * 100));
 }
 
 export function formatTelemetryBytes(bytes: number | null): string {
