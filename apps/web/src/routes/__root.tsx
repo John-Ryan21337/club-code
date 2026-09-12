@@ -11,6 +11,7 @@ import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { QueryClient, useQueryClient } from "@tanstack/react-query";
 
 import { AmbianceLayer } from "../ambiance/AmbianceLayer";
+import { WorldClockWidget } from "../components/WorldClockWidget";
 import { TaskAtriumOverlay } from "../components/atrium/TaskAtriumOverlay";
 import { APP_DISPLAY_NAME } from "../branding";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
@@ -163,6 +164,7 @@ function RootRouteView() {
         <AppearanceSettingsSync />
         <TaskAtriumOverlay />
         <AmbianceLayer />
+        <WorldClockWidget />
         <PowerSaveBlockerSync />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
