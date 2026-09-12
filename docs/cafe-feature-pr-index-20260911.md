@@ -127,6 +127,10 @@ Project SQLite previews: [Club #114](https://github.com/John-Ryan21337/club-code
 
 日本語：Club #114 は Cafe #94 のファイル表示を前提とし、選択プロジェクトの SQLite ファイルとテーブルを明示的に選んで、上限付きの読み取り専用スナップショットを表示します。マスキングと正確な接続の検査を行いますが、非公開の値が残る場合があります。合成 SQLite・WAL とブラウザーの検査が成功しました。再帰的な検索、主キーによる比較、アプリケーション全体の状態データベースは別です。
 
+Shared-audio controls: [Club #115](https://github.com/John-Ryan21337/club-code/pull/115), `6d187c5c`, uses combined prerequisite `6b4f2eb6` (#111/#112). It adds explicit Start/Stop controls, exact connection/source/queue ownership, and late-result track cleanup. Desktop selects only the current Cafe frame; browser builds use their chooser. Synthetic analyser/GPU and lifecycle checks passed. Live service audio, a real browser chooser and other-OS capture remain unqualified; Matrix music colors remain separate.
+
+日本語：Club #115 は #111 と #112 の統合 `6b4f2eb6` を前提とし、共有音声の明示的な開始・停止、接続・ソース・キューへの所有権、遅れて返るトラックの解放を追加します。デスクトップでは現在の Cafe フレームだけを選び、ブラウザー版では選択画面を使います。合成アナライザー・GPU・終了処理の検査が成功しました。実サービスの音声、実際のブラウザー選択画面、他 OS の取得は未確認です。Matrix の音楽反応色は別です。
+
 ## Browser adoption order
 
 1. [Cafe #63](https://github.com/cafeai/cafe-code/pull/63) defines bounded contracts;
@@ -186,13 +190,13 @@ The following remain separate from the published ports above:
 - Public YouTube discovery is #104 and the separate local-owner account/OAuth port is #107. These do not imply persistent account libraries or verified live access to Google.
 - Claude console interpretation is now #106. Codex still requires a verified containment boundary before it can be called supported.
 - Routed live work vocabulary is #105, optional cat AA/kana enrichment is #108, the fixed provider-observation producer is #110, and the activity overlay is #113. [Cafe issue #102](https://github.com/cafeai/cafe-code/issues/102) links both activity slices. Historical Club fork #4/#7/#18 proposed pieces on older lineages; neither those proposals nor individually green sibling PRs establish combined console/privacy/profile integration.
-- The bundled visualizer engine is #109, local-player activation is #112, and the native current-frame capture grant is #111. Renderer capture controls and Matrix music-reactive integration remain follow-ups. These published slices do not imply those additional capabilities.
+- The bundled visualizer engine is #109, local-player activation is #112, the native current-frame capture grant is #111, and renderer capture controls are #115. Matrix music-reactive integration remains a follow-up. Synthetic capture checks do not qualify live service audio or every operating system.
 - Project SQLite previews are #114 on the file-only observatory Cafe #94. Recursive discovery, primary-key comparison/refresh and owner-scoped global application-state database access remain separate. Cafe intentionally retired its diff viewer and worker-pool caller in `a4d4e3768e38f9c967f4715a4a4e9cbdc5c66992`; a pool-only transplant would be inert, and a diff-viewer return needs its own product proposal. Any further enrichment or collaboration claim needs concrete production-caller and existing-PR reconciliation.
 
 日本語：Club の全実装機能が現行 dev 向け PR になったという主張ではありません。
 公開 YouTube 検索・ローカル所有者のアカウント接続・Claude によるコンソール解釈・選択スレッドの作業語彙は、上の新しいドラフトにあります。
 永続的なアカウントライブラリや Google への実接続を確認したという意味ではありません。
-猫AA装飾は #108、固定の活動分類は #110、活動表示は #113、描画エンジンは #109、ローカルプレーヤーでの有効化は #112、フレーム音声取得のネイティブ基盤は #111 として公開済みです。画面からの音声取得操作、Matrix の音楽反応、
+猫AA装飾は #108、固定の活動分類は #110、活動表示は #113、描画エンジンは #109、ローカルプレーヤーでの有効化は #112、フレーム音声取得のネイティブ基盤は #111、取得操作は #115 として公開済みです。合成検査は実サービスの音声や全 OS の取得を保証しません。Matrix の音楽反応、
 再帰的なデータベース検索、主キー比較、アプリケーション全体の状態データベースなどには、別の移植・確認作業が残っています。選択プロジェクトの SQLite 表示は #114 として公開済みです。
 古い系統の提案が存在しても、現行 dev で統合済みとは扱いません。Codex の解釈機能には、
 安全な実行制限の確認が必要です。
