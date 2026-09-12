@@ -4957,13 +4957,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         settingSources: [...CLAUDE_SETTING_SOURCES],
         mcpServers: {
           club_browser: {
-            type: "http",
-            url: agentBrowserMcp.url,
-            headers: {
-              Authorization: agentBrowserMcp.authorization,
-              "X-Cafe-Browser-Thread": agentBrowserMcp.threadId,
-              "X-Cafe-Browser-Provider": agentBrowserMcp.providerInstanceId,
-            },
+            // The SDK serializes HTTP headers into child arguments. Its public
+            // SDK transport keeps the credential and exact identity in this host.
+            type: "sdk",
+            name: "club_browser",
+            instance: getAgentBrowserBridge().sdkServer(agentBrowserMcp),
           },
         },
         // The SDK type can lag the CLI here: current Claude Code exposes

@@ -429,7 +429,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("injects the authenticated browser MCP only into in-memory query options", () => {
+  it.effect("keeps browser authority inside the SDK host transport", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -440,11 +440,10 @@ describe("ClaudeAdapterLive", () => {
       });
 
       const server = harness.getLastCreateQueryInput()?.options.mcpServers?.club_browser;
-      assert.ok(server && server.type === "http");
-      assert.match(server.url, /^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
-      assert.match(server.headers?.Authorization ?? "", /^Bearer [A-Za-z0-9_-]{40,}$/);
-      assert.equal(server.headers?.["X-Cafe-Browser-Thread"], THREAD_ID);
-      assert.equal(server.headers?.["X-Cafe-Browser-Provider"], "claudeAgent");
+      assert.ok(server && server.type === "sdk");
+      assert.equal(server.name, "club_browser");
+      assert.deepEqual(Object.keys(server).toSorted(), ["instance", "name", "type"]);
+      assert.equal(typeof server.instance.connect, "function");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

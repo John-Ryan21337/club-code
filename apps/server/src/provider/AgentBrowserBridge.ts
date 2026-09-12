@@ -377,6 +377,10 @@ export class AgentBrowserBridge {
     };
   }
 
+  sdkServer(config: AgentBrowserMcpConfig): McpServer {
+    return this.#makeMcpServer(config, config.authorization);
+  }
+
   async enqueue(
     identity: AgentIdentity,
     action: AgentBrowserAction,

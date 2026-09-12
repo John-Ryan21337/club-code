@@ -6,6 +6,7 @@ import {
 } from "@cafecode/contracts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -460,6 +461,40 @@ describe("AgentBrowserBridge", () => {
       ]),
     );
     await client.close();
+  });
+
+  it("preserves browser execution and identity revocation over the SDK host transport", async () => {
+    bridge = new AgentBrowserBridge();
+    const config = await bridge.mcpConfig(identity);
+    const server = bridge.sdkServer(config);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    const client = new Client({ name: "synthetic-claude-sdk", version: "1" });
+    await client.connect(clientTransport);
+    try {
+      bridge.poll({ ...context, defaultAccess: true });
+      const call = client.callTool({ name: "club_browser_snapshot", arguments: {} });
+      let request: ReturnType<AgentBrowserBridge["poll"]>["request"] = null;
+      await vi.waitFor(() => {
+        request = bridge!.poll(context).request;
+        expect(request).not.toBeNull();
+      });
+      expect(request!.threadId).toBe(identity.threadId);
+      expect(request!.providerInstanceId).toBe(identity.providerInstanceId);
+      bridge.complete({
+        context,
+        requestId: request!.requestId,
+        result: { type: "snapshot", snapshot },
+      });
+      expect((await call).isError).not.toBe(true);
+      bridge.revokeForIdentity(identity, "The provider session stopped.");
+      const revoked = await client.callTool({ name: "club_browser_snapshot", arguments: {} });
+      expect(revoked.isError).toBe(true);
+      expect(JSON.stringify(revoked)).toContain("not a live provider session");
+    } finally {
+      await client.close();
+      await server.close();
+    }
   });
 
   it("forgets a stopped provider identity's bearer before a later grant", async () => {
