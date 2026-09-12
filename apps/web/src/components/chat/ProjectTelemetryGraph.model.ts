@@ -1,6 +1,10 @@
 import type { ServerProjectSystemTelemetryResult } from "@cafecode/contracts";
 import * as DateTime from "effect/DateTime";
 import {
+  projectGpuAdapterDetails,
+  type GpuAdapterHistoryPoint,
+} from "./ProjectGpuAdapterHistory.model";
+import {
   temperatureCategoryValues,
   type TemperatureCategoryValues,
 } from "./ProjectTemperatureHistory.model";
@@ -8,6 +12,7 @@ import {
 export const PROJECT_TELEMETRY_HISTORY_LIMIT = 48;
 
 export interface ProjectTelemetryHistoryPoint {
+  readonly gpuAdapters: readonly GpuAdapterHistoryPoint[];
   readonly temperatures: TemperatureCategoryValues;
   readonly sampledAtMs: number;
   readonly cpuPercent: number | null;
@@ -130,6 +135,14 @@ export function toProjectTelemetryHistoryPoint(
 ): ProjectTelemetryHistoryPoint {
   return {
     sampledAtMs: DateTime.toEpochMillis(telemetry.sampledAt),
+    gpuAdapters: projectGpuAdapterDetails(telemetry.gpu).map(
+      ({ key, utilizationPercent, memoryUtilizationPercent, temperatureCelsius }) => ({
+        key,
+        utilizationPercent,
+        memoryUtilizationPercent,
+        temperatureCelsius,
+      }),
+    ),
     temperatures: temperatureCategoryValues(telemetry.temperatures),
     cpuPercent: telemetry.cpu.status === "available" ? telemetry.cpu.utilizationPercent : null,
     memoryPercent:

@@ -63,6 +63,7 @@ function gpuAdapter(overrides: Record<string, unknown> = {}) {
 
 function historyPoint(sampledAtMs: number): ProjectTelemetryHistoryPoint {
   return {
+    gpuAdapters: [],
     temperatures: emptyTemperatureCategoryValues(),
     sampledAtMs,
     cpuPercent: sampledAtMs,

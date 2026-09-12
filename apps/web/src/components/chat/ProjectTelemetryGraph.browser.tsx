@@ -68,6 +68,87 @@ function telemetryFixture(input: {
 describe("ProjectTelemetryGraph", () => {
   beforeEach(async () => page.viewport(800, 600));
 
+  it("keeps GPU identity through disappearance and reordered samples", async () => {
+    const adapter = (index: number, utilizationPercent: number) => ({
+      index,
+      name: `Adapter ${index}`,
+      utilizationPercent,
+      memoryTotalBytes: 8192,
+      memoryUsedBytes: 2048,
+      memoryUtilizationPercent: 25,
+      temperatureCelsius: 60,
+    });
+    const sample = (
+      adapters: ReturnType<typeof adapter>[],
+    ): ServerProjectSystemTelemetryResult => ({
+      ...telemetryFixture({ projectId: projectA, minimumSampleIntervalMs: 250 }),
+      gpu: { status: "available", reason: null, detail: null, adapters },
+    });
+    const missing = deferred<ServerProjectSystemTelemetryResult>();
+    const returned = deferred<ServerProjectSystemTelemetryResult>();
+    const final = sample([adapter(7, 90), adapter(2, 30)]);
+    const readTelemetry = vi
+      .fn()
+      .mockResolvedValueOnce(sample([adapter(2, 20), adapter(7, 70)]))
+      .mockImplementationOnce(() => missing.promise)
+      .mockImplementationOnce(() => returned.promise)
+      .mockResolvedValue(final);
+    const mounted = await render(
+      <ProjectTelemetryGraph
+        environmentId={environmentA}
+        projectId={projectA}
+        pollIntervalMs={250}
+        readTelemetry={readTelemetry}
+      />,
+    );
+    try {
+      await page.getByLabelText("Expand Resources").click();
+      await page.getByText("GPU adapter histories", { exact: true }).click();
+      await expect
+        .element(
+          page.getByRole("group", {
+            name: "GPU 3: 20%. Measured adapter utilization.",
+            exact: true,
+          }),
+        )
+        .toBeVisible();
+      await vi.waitFor(() => expect(readTelemetry).toHaveBeenCalledTimes(2));
+      missing.resolve(sample([adapter(7, 80)]));
+      await expect
+        .element(
+          page.getByRole("group", {
+            name: "GPU 3: 20%. Measured adapter utilization.",
+            exact: true,
+          }),
+        )
+        .not.toBeInTheDocument();
+      await vi.waitFor(() => expect(readTelemetry).toHaveBeenCalledTimes(3));
+      returned.resolve(final);
+      await expect
+        .element(
+          page.getByRole("group", {
+            name: "GPU 3: 30%. Measured adapter utilization.",
+            exact: true,
+          }),
+        )
+        .toBeVisible();
+      const path = page
+        .getByRole("img", { name: "GPU 3 utilization history", exact: true })
+        .element()
+        .querySelectorAll("path")[1]
+        ?.getAttribute("d");
+      expect(path?.match(/M/g)).toHaveLength(2);
+      const gpu8 = page
+        .getByRole("img", { name: "GPU 8 utilization history", exact: true })
+        .element()
+        .querySelectorAll("path")[1]
+        ?.getAttribute("d");
+      expect(gpu8?.match(/M/g)).toHaveLength(1);
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
   it("shows hottest category histories and clears them when the selected project changes", async () => {
     const readTelemetry = vi.fn(async (_environmentId, projectId) => ({
       ...telemetryFixture({ projectId }),
@@ -293,7 +374,7 @@ describe("ProjectTelemetryGraph", () => {
       await expect
         .element(page.getByLabelText(/GPU: 62%.*Peak across 1 GPU adapter/))
         .toBeVisible();
-      await expect.element(page.getByLabelText(/VRAM: 25%.*6 GiB available/)).toBeVisible();
+      await expect.element(page.getByLabelText(/^Host VRAM: 25%.*6 GiB available/)).toBeVisible();
     } finally {
       await mounted.unmount();
     }
