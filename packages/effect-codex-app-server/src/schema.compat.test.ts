@@ -142,3 +142,44 @@ it("decodes the 0.146 managed configuration requirements while tolerating older 
   assert.equal(current.featureRequirements?.["in_app_updates"], false);
   assert.deepEqual(legacy, {});
 });
+
+it("keeps the 0.154 account/rateLimits/read request valid without params", () => {
+  // Codex 0.154.0 turned the previously parameterless method into one with
+  // optional usage-read capability flags. Existing callers pass `undefined`;
+  // the new flags must also decode without being adopted here.
+  const paramsSchema = CodexSchema.CLIENT_REQUEST_PARAMS["account/rateLimits/read"];
+  assert.equal(Schema.decodeUnknownSync(paramsSchema)(undefined), undefined);
+  assert.deepEqual(
+    Schema.decodeUnknownSync(paramsSchema)({
+      supportsLunaReserve: false,
+      excludeResetCreditDetails: true,
+    }),
+    {
+      supportsLunaReserve: false,
+      excludeResetCreditDetails: true,
+    },
+  );
+});
+
+const decodeRateLimitSnapshot = Schema.decodeUnknownSync(
+  CodexSchema.V2GetAccountRateLimitsResponse__RateLimitSnapshot,
+);
+
+it("decodes 0.154 rate-limit snapshots with and without the quota-alias model slug", () => {
+  const base = {
+    limitId: "limit-1",
+    limitName: "Primary",
+    primary: null,
+    secondary: null,
+    credits: null,
+    individualLimit: null,
+  };
+  const withSlug = decodeRateLimitSnapshot({
+    ...base,
+    normalModelSlug: "gpt-6-astra",
+  });
+  const legacy = decodeRateLimitSnapshot(base);
+
+  assert.equal(withSlug.normalModelSlug, "gpt-6-astra");
+  assert.equal(legacy.normalModelSlug, undefined);
+});

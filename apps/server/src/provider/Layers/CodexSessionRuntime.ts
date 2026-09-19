@@ -364,13 +364,13 @@ export function buildCodexAppServerArgs(
   ) {
     throw new RangeError("Codex worker limit must be an integer from 1 to 128.");
   }
-  // Codex rust-v0.153.4 config/mod.rs resolves agents.N as N spawned workers.
+  // Codex rust-v0.154.0 config/mod.rs resolves agents.N as N spawned workers.
   // Its V2-specific setting takes precedence and counts the coordinator too.
   // Set both keys so a saved V2 value cannot override this session's limit.
-  // https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/core/src/config/mod.rs#L2690
+  // https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/core/src/config/mod.rs#L2704
   // The pinned config merger preserves an existing boolean feature toggle as
   // `enabled`, so this nested limit does not enable a disabled V2 backend.
-  // https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/config/src/merge.rs#L71
+  // https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/merge.rs#L79
   const subagentThreadLimitArgs =
     codexSubagentThreadLimit === undefined
       ? []

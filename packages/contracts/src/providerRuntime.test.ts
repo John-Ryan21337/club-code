@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import { ProviderRuntimeEvent } from "./providerRuntime.ts";
 
 const decodeRuntimeEvent = Schema.decodeUnknownSync(ProviderRuntimeEvent);
+const encodeRuntimeEvent = Schema.encodeSync(ProviderRuntimeEvent);
 
 describe("ProviderRuntimeEvent", () => {
   it("accepts fork-provided driver kinds as branded slugs", () => {
@@ -180,5 +181,64 @@ describe("ProviderRuntimeEvent", () => {
     }
     expect(parsed.payload.usage.maxTokens).toBe(200000);
     expect(parsed.payload.usage.usedTokens).toBe(31251);
+  });
+
+  it("preserves assistant completion detail whitespace across encode and decode", () => {
+    // Assistant `detail` is verified as an exact UTF-16 prefix commitment
+    // against streamed deltas, and item lifecycle payloads round-trip through
+    // the provider daemon event journal and RPC transport. A trimming schema
+    // on `detail` silently rewrites the completion on every round-trip and
+    // strands prefix repair (leading " The" or a trailing newline both break
+    // the commitment), so the contract must keep source whitespace exactly.
+    const sourceText = " The final answer.\n";
+    const wireEvent = {
+      type: "item.completed",
+      eventId: "event-assistant-detail-1",
+      provider: "codex",
+      createdAt: "2026-02-28T00:00:05.000Z",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "item-1",
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        title: " Assistant message ",
+        detail: sourceText,
+      },
+    };
+
+    const parsed = decodeRuntimeEvent(wireEvent);
+    expect(parsed.type).toBe("item.completed");
+    if (parsed.type !== "item.completed") {
+      throw new Error("expected item.completed");
+    }
+    expect(parsed.payload.detail).toBe(sourceText);
+    // Titles are display labels and stay trimmed; only `detail` is
+    // whitespace-preserving.
+    expect(parsed.payload.title).toBe("Assistant message");
+
+    const reEncoded = encodeRuntimeEvent(parsed);
+    expect((reEncoded as typeof wireEvent).payload.detail).toBe(sourceText);
+    const reDecoded = decodeRuntimeEvent(reEncoded);
+    if (reDecoded.type !== "item.completed") {
+      throw new Error("expected item.completed after round-trip");
+    }
+    expect(reDecoded.payload.detail).toBe(sourceText);
+  });
+
+  it("still rejects an empty item lifecycle detail", () => {
+    expect(() =>
+      decodeRuntimeEvent({
+        type: "item.completed",
+        eventId: "event-assistant-detail-empty",
+        provider: "codex",
+        createdAt: "2026-02-28T00:00:06.000Z",
+        threadId: "thread-1",
+        payload: {
+          itemType: "assistant_message",
+          detail: "",
+        },
+      }),
+    ).toThrow();
   });
 });

@@ -894,8 +894,10 @@ function mapCodexModelCapabilities(
         },
   );
   const defaultReasoning = reasoningOptions.find((option) => option.isDefault)?.id;
-  // Codex 0.153.4 advertises Fast with the `priority` service-tier wire id.
+  // Codex 0.154.0 advertises Fast with the `priority` service-tier wire id.
   // Keep the deprecated `additionalSpeedTiers` alias for older compatible CLIs.
+  // A backend-advertised `ultrafast` tier is a distinct paid route: it must not
+  // be relabelled as Fast, so only the exact `priority` id matches here.
   const supportsFastMode =
     model.serviceTiers?.some((tier) => tier.id === "priority") === true ||
     (model.additionalSpeedTiers ?? []).includes("fast");
@@ -973,7 +975,7 @@ function makeStaticCodexReasoningCapabilities(input: {
 
 const CODEX_STANDARD_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
 const CODEX_MAX_REASONING_EFFORTS = [...CODEX_STANDARD_REASONING_EFFORTS, "max"] as const;
-// Mirrors Codex app-server `model/list` from codex-cli 0.153.4. The live
+// Mirrors Codex app-server `model/list` from codex-cli 0.154.0. The live
 // app-server response remains authoritative when available; this fallback keeps
 // fresh installs usable before the full Codex probe refreshes provider cache.
 const CODEX_ULTRA_REASONING_EFFORTS = [...CODEX_MAX_REASONING_EFFORTS, "ultra"] as const;

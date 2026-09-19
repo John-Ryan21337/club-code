@@ -18,9 +18,9 @@ import {
 } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-// Codex 0.153.4 release commit. Keep generation attached to an immutable
+// Codex 0.154.0 release commit. Keep generation attached to an immutable
 // upstream commit rather than a moving tag so regeneration is reproducible.
-const UPSTREAM_REF = "3d2ee51ca2d5db578f328aa75e20aa22c0197c9a";
+const UPSTREAM_REF = "6b9826e3aa83b1a5947db50f4332cb9c65f1b340";
 const USER_AGENT = "effect-codex-app-server-generator";
 const OXFMT_ENTRYPOINT = fileURLToPath(
   new URL("../../../node_modules/oxfmt/bin/oxfmt", import.meta.url),
