@@ -19,6 +19,11 @@ import {
   ThreadStatusLabel,
 } from "./ThreadStatusIndicators";
 import { ProjectFavicon } from "./ProjectFavicon";
+import {
+  SidebarThreadDragProvider,
+  SidebarThreadDropTarget,
+  useSidebarThreadDragSource,
+} from "./SidebarThreadDrag";
 import { autoAnimate } from "@formkit/auto-animate";
 import React, { useCallback, useEffect, memo, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -496,6 +501,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   } = props;
   const threadRef = scopeThreadRef(thread.environmentId, thread.id);
   const threadKey = scopedThreadKey(threadRef);
+  const threadDragProps = useSidebarThreadDragSource(threadRef, renamingThreadKey === threadKey);
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
   const isSelected = useThreadSelectionStore((state) => state.selectedThreadKeys.has(threadKey));
   // For grouped projects, the thread may belong to a different environment
@@ -689,6 +695,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         size="sm"
         isActive={isActive}
         data-testid={`thread-row-${thread.id}`}
+        {...threadDragProps}
         className={`${resolveThreadRowClassName({
           isActive,
           isSelected,
@@ -2499,7 +2506,14 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
   return (
     <>
-      <div className="group/project-header relative">
+      <SidebarThreadDropTarget
+        projectRefs={project.memberProjectRefs}
+        className="group/project-header relative"
+        onMoved={() => {
+          useUiStateStore.getState().setProjectExpanded(project.projectKey, true);
+          expandThreadListForProject(project.projectKey);
+        }}
+      >
         <SidebarMenuButton
           ref={isManualProjectSorting ? dragHandleProps?.setActivatorNodeRef : undefined}
           size="sm"
@@ -2567,7 +2581,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             {newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"}
           </TooltipPopup>
         </Tooltip>
-      </div>
+      </SidebarThreadDropTarget>
 
       <SidebarProjectThreadList
         projectKey={project.projectKey}
@@ -4324,54 +4338,56 @@ export default function Sidebar() {
       ) : (
         <>
           <div className="flex min-h-0 flex-1 flex-col group-data-[collapsible=icon]:hidden">
-            <SidebarProjectsContent
-              allProjects={allProjects}
-              meetingPrivacyEnabled={meetingPrivacyEnabled}
-              primaryEnvironmentBootstrapped={primaryEnvironmentBootstrapped}
-              bootstrappedEnvironmentIds={bootstrappedEnvironmentIdSet}
-              showArm64IntelBuildWarning={showArm64IntelBuildWarning}
-              arm64IntelBuildWarningDescription={arm64IntelBuildWarningDescription}
-              desktopUpdateButtonAction={desktopUpdateButtonAction}
-              desktopUpdateButtonDisabled={desktopUpdateButtonDisabled}
-              handleDesktopUpdateButtonClick={handleDesktopUpdateButtonClick}
-              desktopDebugEnabled={desktopDebugEnabled}
-              projectSortOrder={sidebarProjectSortOrder}
-              threadSortOrder={sidebarThreadSortOrder}
-              projectGroupingMode={sidebarProjectGroupingMode}
-              threadPreviewCount={sidebarThreadPreviewCount}
-              updateSettings={updateSettings}
-              openAddProject={handleOpenAddProject}
-              showAddProjectHint={showAddProjectHint}
-              onDismissAddProjectHint={dismissAddProjectHint}
-              isManualProjectSorting={isManualProjectSorting}
-              projectDnDSensors={projectDnDSensors}
-              projectCollisionDetection={projectCollisionDetection}
-              handleProjectDragStart={handleProjectDragStart}
-              handleProjectDragEnd={handleProjectDragEnd}
-              handleProjectDragCancel={handleProjectDragCancel}
-              handleNewThread={handleNewThread}
-              archiveThread={archiveThread}
-              deleteThread={deleteThread}
-              sortedProjects={sortedProjects}
-              expandedThreadListsByProject={expandedThreadListsByProject}
-              activeRouteProjectKey={activeRouteProjectKey}
-              routeThreadKey={routeThreadKey}
-              newThreadShortcutLabel={newThreadShortcutLabel}
-              commandPaletteShortcutLabel={commandPaletteShortcutLabel}
-              threadJumpLabelByKey={visibleThreadJumpLabelByKey}
-              attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
-              expandThreadListForProject={expandThreadListForProject}
-              collapseThreadListForProject={collapseThreadListForProject}
-              dragInProgressRef={dragInProgressRef}
-              suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
-              suppressProjectClickForContextMenuRef={suppressProjectClickForContextMenuRef}
-              attachProjectListAutoAnimateRef={attachProjectListAutoAnimateRef}
-              projectsLength={projects.length}
-              showSidebarSearch={showSidebarSearch}
-              showSidebarMascot={showSidebarMascot}
-              sidebarBrandImage={sidebarBrandImage}
-              showSidebarAttribution={showSidebarAttribution}
-            />
+            <SidebarThreadDragProvider>
+              <SidebarProjectsContent
+                allProjects={allProjects}
+                meetingPrivacyEnabled={meetingPrivacyEnabled}
+                primaryEnvironmentBootstrapped={primaryEnvironmentBootstrapped}
+                bootstrappedEnvironmentIds={bootstrappedEnvironmentIdSet}
+                showArm64IntelBuildWarning={showArm64IntelBuildWarning}
+                arm64IntelBuildWarningDescription={arm64IntelBuildWarningDescription}
+                desktopUpdateButtonAction={desktopUpdateButtonAction}
+                desktopUpdateButtonDisabled={desktopUpdateButtonDisabled}
+                handleDesktopUpdateButtonClick={handleDesktopUpdateButtonClick}
+                desktopDebugEnabled={desktopDebugEnabled}
+                projectSortOrder={sidebarProjectSortOrder}
+                threadSortOrder={sidebarThreadSortOrder}
+                projectGroupingMode={sidebarProjectGroupingMode}
+                threadPreviewCount={sidebarThreadPreviewCount}
+                updateSettings={updateSettings}
+                openAddProject={handleOpenAddProject}
+                showAddProjectHint={showAddProjectHint}
+                onDismissAddProjectHint={dismissAddProjectHint}
+                isManualProjectSorting={isManualProjectSorting}
+                projectDnDSensors={projectDnDSensors}
+                projectCollisionDetection={projectCollisionDetection}
+                handleProjectDragStart={handleProjectDragStart}
+                handleProjectDragEnd={handleProjectDragEnd}
+                handleProjectDragCancel={handleProjectDragCancel}
+                handleNewThread={handleNewThread}
+                archiveThread={archiveThread}
+                deleteThread={deleteThread}
+                sortedProjects={sortedProjects}
+                expandedThreadListsByProject={expandedThreadListsByProject}
+                activeRouteProjectKey={activeRouteProjectKey}
+                routeThreadKey={routeThreadKey}
+                newThreadShortcutLabel={newThreadShortcutLabel}
+                commandPaletteShortcutLabel={commandPaletteShortcutLabel}
+                threadJumpLabelByKey={visibleThreadJumpLabelByKey}
+                attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
+                expandThreadListForProject={expandThreadListForProject}
+                collapseThreadListForProject={collapseThreadListForProject}
+                dragInProgressRef={dragInProgressRef}
+                suppressProjectClickAfterDragRef={suppressProjectClickAfterDragRef}
+                suppressProjectClickForContextMenuRef={suppressProjectClickForContextMenuRef}
+                attachProjectListAutoAnimateRef={attachProjectListAutoAnimateRef}
+                projectsLength={projects.length}
+                showSidebarSearch={showSidebarSearch}
+                showSidebarMascot={showSidebarMascot}
+                sidebarBrandImage={sidebarBrandImage}
+                showSidebarAttribution={showSidebarAttribution}
+              />
+            </SidebarThreadDragProvider>
 
             <SidebarSeparator />
           </div>
