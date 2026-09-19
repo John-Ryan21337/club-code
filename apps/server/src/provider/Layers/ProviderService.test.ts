@@ -5,6 +5,8 @@ import path from "node:path";
 
 import type {
   ProviderApprovalDecision,
+  CodexThreadAttachmentsInput,
+  CodexThreadAttachmentsResult,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
   ProviderSession,
@@ -230,7 +232,14 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
       }),
   );
 
+  const codexThreadAttachments = vi.fn(
+    (
+      _input: CodexThreadAttachmentsInput,
+    ): Effect.Effect<CodexThreadAttachmentsResult, ProviderAdapterError> =>
+      Effect.succeed({ data: [], nextCursor: null }),
+  );
   const adapter: ProviderAdapterShape<ProviderAdapterError> = {
+    codexThreadAttachments,
     provider,
     capabilities: {
       sessionModelSwitch: "in-session",
@@ -277,6 +286,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
 
   return {
     adapter,
+    codexThreadAttachments,
     emit,
     updateSession,
     startSession,
@@ -975,6 +985,65 @@ it.effect(
 
 routing.layer("ProviderServiceLive routing", (it) => {
   beforeEach(routing.reset);
+
+  it.effect(
+    "binds attachment operations to the current live Codex instance without session recovery",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const threadId = asThreadId("attachment-routing");
+        const input = {
+          threadId,
+          providerInstanceId: codexInstanceId,
+          action: { kind: "list" },
+        } as const;
+        assert.isTrue(Exit.isFailure(yield* Effect.exit(provider.codexThreadAttachments!(input))));
+        assert.equal(routing.codex.startSession.mock.calls.length, 0);
+        yield* provider.startSession(threadId, {
+          threadId,
+          provider: CODEX_DRIVER,
+          providerInstanceId: codexInstanceId,
+          runtimeMode: "full-access",
+        });
+        assert.isTrue(
+          Exit.isFailure(
+            yield* Effect.exit(
+              provider.codexThreadAttachments!({
+                ...input,
+                providerInstanceId: claudeAgentInstanceId,
+              }),
+            ),
+          ),
+        );
+        assert.equal(routing.codex.codexThreadAttachments.mock.calls.length, 0);
+        assert.deepEqual(yield* provider.codexThreadAttachments!(input), {
+          data: [],
+          nextCursor: null,
+        });
+        routing.codex.codexThreadAttachments.mockImplementationOnce(() =>
+          provider
+            .startSession(threadId, {
+              threadId,
+              provider: CLAUDE_AGENT_DRIVER,
+              providerInstanceId: claudeAgentInstanceId,
+              runtimeMode: "full-access",
+            })
+            .pipe(Effect.as({ data: [], nextCursor: null }), Effect.orDie),
+        );
+        assert.isTrue(Exit.isFailure(yield* Effect.exit(provider.codexThreadAttachments!(input))));
+        assert.isTrue(
+          Exit.isFailure(
+            yield* Effect.exit(
+              provider.codexThreadAttachments!({
+                ...input,
+                providerInstanceId: claudeAgentInstanceId,
+              }),
+            ),
+          ),
+        );
+        assert.equal(routing.claude.codexThreadAttachments.mock.calls.length, 0);
+      }),
+  );
 
   it.effect("routes provider operations and rollback conversation", () =>
     Effect.gen(function* () {

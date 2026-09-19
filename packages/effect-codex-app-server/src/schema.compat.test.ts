@@ -3,6 +3,76 @@ import * as Schema from "effect/Schema";
 
 import * as CodexSchema from "./schema.ts";
 
+const encodeVoiceStart = Schema.encodeSync(
+  CodexSchema.CLIENT_REQUEST_PARAMS["thread/realtime/start"],
+);
+const decodeMemoryStatus = Schema.decodeUnknownSync(CodexSchema.V2MemoryStatusResponse);
+const decodeVoiceStarted = Schema.decodeUnknownSync(
+  CodexSchema.V2ThreadRealtimeStartedNotification,
+);
+
+it("encodes pinned experimental voice signaling and decodes readiness without handwritten wire schemas", () => {
+  const start = {
+    threadId: "thread-1",
+    realtimeSessionId: "private-lease-key",
+    outputModality: "audio" as const,
+    version: "v3" as const,
+    transport: { type: "webrtc" as const, sdp: "synthetic-offer" },
+  };
+  assert.deepEqual(encodeVoiceStart(start), start);
+  assert.deepEqual(
+    decodeMemoryStatus({
+      v2ConsolidatedThreads: 3,
+      v2Ready: true,
+    }),
+    { v2ConsolidatedThreads: 3, v2Ready: true },
+  );
+  assert.equal(
+    decodeVoiceStarted({
+      threadId: "thread-1",
+      realtimeSessionId: "private-lease-key",
+      version: "v3",
+    }).realtimeSessionId,
+    "private-lease-key",
+  );
+});
+
+it("round-trips Codex 0.155.1 persistent thread attachments and update notifications", () => {
+  const attachment = {
+    id: "a-1",
+    attachmentType: "note",
+    identityKey: "design",
+    payload: { text: "Use HTTPS" },
+    createdAt: 1_789_000_000,
+  };
+  assert.deepEqual(
+    Schema.decodeUnknownSync(CodexSchema.V2ThreadAttachmentListResponse)({
+      data: [attachment],
+      nextCursor: null,
+    }),
+    { data: [attachment], nextCursor: null },
+  );
+  assert.deepEqual(
+    Schema.encodeSync(CodexSchema.V2ThreadAttachmentAddParams)({ threadId: "t-1", ...attachment }),
+    {
+      threadId: "t-1",
+      attachmentType: "note",
+      identityKey: "design",
+      payload: { text: "Use HTTPS" },
+    },
+  );
+  assert.equal(
+    Schema.decodeUnknownSync(CodexSchema.V2ThreadAttachmentUpdatedNotification)({
+      threadId: "t-1",
+      attachmentId: "a-1",
+      attachmentType: "note",
+      identityKey: "design",
+      operation: "deleted",
+    }).operation,
+    "deleted",
+  );
+});
+
 it("decodes the Codex 0.146 enterprise plan without treating it as an unknown account", () => {
   const decoded = Schema.decodeUnknownSync(CodexSchema.V2GetAccountResponse)({
     account: {

@@ -78,6 +78,7 @@ const MUTATING_RPC_METHODS = new Set<ProviderDaemonRpcRequest["method"]>([
   "stopSession",
   "restartProviderRuntime",
   "setGoal",
+  "codexThreadAttachments",
   "clearGoal",
   "rollbackConversation",
 ]);
@@ -197,8 +198,13 @@ export const attachCommandIdToMutatingProviderDaemonRequest = <
   request: Extract<ProviderDaemonRpcRequest, { readonly method: M }>,
 ): Extract<ProviderDaemonRpcRequest, { readonly method: M }> => {
   const commandId = "commandId" in request ? request.commandId : undefined;
+  const unionRequest: ProviderDaemonRpcRequest = request;
   return (
-    MUTATING_RPC_METHODS.has(request.method)
+    MUTATING_RPC_METHODS.has(request.method) &&
+    !(
+      unionRequest.method === "codexThreadAttachments" &&
+      unionRequest.payload.action.kind === "list"
+    )
       ? { ...request, commandId: commandId ?? crypto.randomUUID() }
       : request
   ) as Extract<ProviderDaemonRpcRequest, { readonly method: M }>;
@@ -214,6 +220,7 @@ const rpc = <M extends ProviderDaemonRpcRequest["method"]>(
 ) =>
   Effect.tryPromise({
     try: async () => {
+      await requireRemoteCodexOperation(request.method, () => readRemoteHealth(daemonConfig));
       const requestWithCommandId = attachCommandIdToMutatingProviderDaemonRequest(request);
       const timeoutMs = providerDaemonRpcTimeoutMs(requestWithCommandId.method);
       const response = await requestProviderDaemonJson(daemonConfig, PROVIDER_DAEMON_RPC_PATH, {
@@ -243,6 +250,21 @@ const rpc = <M extends ProviderDaemonRpcRequest["method"]>(
     },
     catch: (cause) => toRemoteRequestError(request.method, cause),
   });
+
+/** Do not send new private payloads to an older daemon's unknown-method decoder. */
+export async function requireRemoteCodexOperation(
+  method: ProviderDaemonRpcRequest["method"],
+  readHealth: () => Promise<Pick<ProviderDaemonHealth, "supportedCodexOperations">>,
+): Promise<void> {
+  if (method !== "codexThreadAttachments" && method !== "codexExperimental") return;
+  const health = await readHealth();
+  if (!health.supportedCodexOperations?.includes(method)) {
+    throw new ProviderDaemonRpcResponseError(
+      "ProviderUnsupportedError",
+      "This provider runtime does not support the requested Codex operation. Update the runtime before retrying.",
+    );
+  }
+}
 
 async function readEventStream(
   daemonConfig: ProviderDaemonClientConfig,
@@ -464,6 +486,10 @@ const makeRemoteProviderService = Effect.gen(function* () {
         Effect.map((info) => decodeInstanceRoutingInfo(info) as ProviderInstanceRoutingInfo),
       ),
     getGoal: (input) => rpc(daemonConfig, { method: "getGoal", payload: input }),
+    codexExperimental: (input) =>
+      rpc(daemonConfig, { method: "codexExperimental", payload: input }),
+    codexThreadAttachments: (input) =>
+      rpc(daemonConfig, { method: "codexThreadAttachments", payload: input }),
     setGoal: (input) => rpc(daemonConfig, { method: "setGoal", payload: input }),
     clearGoal: (input) => rpc(daemonConfig, { method: "clearGoal", payload: input }),
     rollbackConversation: (input) =>

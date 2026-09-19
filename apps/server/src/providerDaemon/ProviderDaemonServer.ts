@@ -779,12 +779,20 @@ const executeRpcRequest = (
       );
     case "getCapabilities":
       return providerService.getCapabilities(request.payload.instanceId);
+    case "codexExperimental":
+      return providerService.codexExperimental
+        ? providerService.codexExperimental(request.payload)
+        : Effect.die("Codex experimental controls are unavailable.");
     case "getInstanceInfo":
       return providerService.getInstanceInfo(request.payload.instanceId);
     case "getGoal":
       return providerService.getGoal
         ? providerService.getGoal(request.payload)
         : Effect.die("Provider service does not expose goal operations.");
+    case "codexThreadAttachments":
+      return providerService.codexThreadAttachments
+        ? providerService.codexThreadAttachments(request.payload)
+        : Effect.die("Provider service does not expose thread attachments.");
     case "setGoal":
       return providerService.setGoal
         ? providerService.setGoal(request.payload)
@@ -1375,6 +1383,10 @@ export const runProviderDaemonServer = (
               return {
                 ok: true,
                 mode,
+                supportedCodexOperations: [
+                  ...(providerService.codexThreadAttachments ? ["codexThreadAttachments"] : []),
+                  ...(providerService.codexExperimental ? ["codexExperimental"] : []),
+                ],
                 protocolVersion: options.protocolVersion,
                 pid: process.pid,
                 ppid: process.ppid,

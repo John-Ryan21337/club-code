@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import { requestMicrophoneAccess } from "./methods/microphone.ts";
 
 import * as DesktopIpc from "./DesktopIpc.ts";
 import { getClientSettings, setClientSettings } from "./methods/clientSettings.ts";
@@ -62,6 +63,7 @@ import {
 
 export const installDesktopIpcHandlers = Effect.gen(function* () {
   const ipc = yield* DesktopIpc.DesktopIpc;
+  yield* ipc.handleFromSender(requestMicrophoneAccess);
 
   yield* ipc.handleSync(getAppBranding);
   yield* ipc.handleSync(getLocalEnvironmentBootstrap);

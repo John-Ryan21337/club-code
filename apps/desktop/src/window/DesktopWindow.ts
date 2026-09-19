@@ -24,7 +24,10 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopIpc from "../ipc/DesktopIpc.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
-import { installTrustedMainFrameCameraPermission } from "./DesktopCameraPermission.ts";
+import {
+  installTrustedMainFrameCameraPermission,
+  revokeTrustedMicrophoneAccess,
+} from "./DesktopCameraPermission.ts";
 import { installTrustedFrameAudioCapture } from "./DesktopDisplayMediaCapture.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 
@@ -396,8 +399,20 @@ const make = Effect.gen(function* () {
     yield* desktopIpc.trustWebContents(window.webContents, rendererUrl);
     const removeMediaPermissions = installDesktopMediaPermissionBoundaries(
       () => installTrustedFrameAudioCapture(window.webContents, rendererOrigin),
-      () => installTrustedMainFrameCameraPermission(window.webContents, rendererOrigin),
+      () =>
+        installTrustedMainFrameCameraPermission(
+          window.webContents,
+          rendererOrigin,
+          () => !window.isDestroyed() && window.isVisible() && window.isFocused(),
+        ),
     );
+    // A grant authorizes the current foreground document only. Returning focus
+    // or navigating back must require another explicit voice-start action.
+    const revokeMicrophoneGrant = () => revokeTrustedMicrophoneAccess(window.webContents);
+    window.on("blur", revokeMicrophoneGrant);
+    window.on("hide", revokeMicrophoneGrant);
+    window.webContents.on("did-start-navigation", revokeMicrophoneGrant);
+    window.webContents.on("render-process-gone", revokeMicrophoneGrant);
 
     window.webContents.on("context-menu", (event, params) => {
       event.preventDefault();
@@ -513,6 +528,10 @@ const make = Effect.gen(function* () {
     }
 
     window.on("closed", () => {
+      window.removeListener("blur", revokeMicrophoneGrant);
+      window.removeListener("hide", revokeMicrophoneGrant);
+      window.webContents.removeListener("did-start-navigation", revokeMicrophoneGrant);
+      window.webContents.removeListener("render-process-gone", revokeMicrophoneGrant);
       removeMediaPermissions();
       void runPromise(electronWindow.clearMain(Option.some(window)));
     });

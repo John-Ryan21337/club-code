@@ -449,6 +449,37 @@ describe("ProviderDaemonServer", () => {
     }).pipe(Effect.scoped, Effect.provide(makeProviderDaemonServerTestLayer(providerService)));
   });
 
+  it.effect("advertises implemented Codex operations in authenticated health", () =>
+    Effect.gen(function* () {
+      const port = yield* startProviderDaemonServerOnEphemeralPort({
+        host: "127.0.0.1",
+        token: TEST_TOKEN,
+        version: "test",
+      });
+      const response = yield* Effect.promise(() =>
+        fetch(`http://127.0.0.1:${port}/api/provider-daemon/health`, {
+          headers: { authorization: `Bearer ${TEST_TOKEN}` },
+        }),
+      );
+      const health = decodeProviderDaemonHealth(yield* Effect.promise(() => response.json()));
+      assert.deepEqual(health.supportedCodexOperations, [
+        "codexThreadAttachments",
+        "codexExperimental",
+      ]);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        makeProviderDaemonServerTestLayer({
+          ...mockProviderService,
+          codexThreadAttachments: () =>
+            Effect.die("must not execute an attachment operation during health"),
+          codexExperimental: () =>
+            Effect.die("must not execute an experimental operation during health"),
+        }),
+      ),
+    ),
+  );
+
   it.effect("rejects unauthenticated health requests and serves authorized health", () =>
     Effect.gen(function* () {
       const port = yield* startProviderDaemonServerOnEphemeralPort({
@@ -487,6 +518,7 @@ describe("ProviderDaemonServer", () => {
 
       assert.equal(authenticated.status, 200);
       assert.equal(health.ok, true);
+      assert.deepEqual(health.supportedCodexOperations, []);
       assert.equal(health.mode, "provider-daemon");
       assert.equal(health.protocolVersion, 1);
       assert.equal(health.activeSessionCount, 0);

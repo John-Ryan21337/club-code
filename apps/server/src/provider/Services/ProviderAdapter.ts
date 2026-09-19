@@ -8,6 +8,10 @@
  * @module ProviderAdapter
  */
 import type {
+  CodexExperimentalInput,
+  CodexExperimentalResult,
+  CodexThreadAttachmentsInput,
+  CodexThreadAttachmentsResult,
   ApprovalRequestId,
   ProviderApprovalDecision,
   ProviderDriverKind,
@@ -61,6 +65,12 @@ export interface ProviderThreadSnapshot {
 }
 
 export interface ProviderAdapterShape<TError> {
+  readonly codexExperimental?: (
+    input: CodexExperimentalInput,
+  ) => Effect.Effect<CodexExperimentalResult, TError>;
+  readonly codexThreadAttachments?: (
+    input: CodexThreadAttachmentsInput,
+  ) => Effect.Effect<CodexThreadAttachmentsResult, TError>;
   /**
    * Provider kind implemented by this adapter.
    */

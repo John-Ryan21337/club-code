@@ -217,11 +217,11 @@ describe("provider conformity workflow", () => {
       ],
       [
         "packages/effect-codex-app-server/scripts/generate.ts",
-        "6b9826e3aa83b1a5947db50f4332cb9c65f1b340",
+        "be2951ea34f0d295ed0becf97079f92fa5f6950e",
       ],
       [
         "apps/desktop/resources/managed-runtime/install-managed-provider-runtime.ps1",
-        'Install-ProviderPackage -PackageName "@openai/codex" -Version "0.154.0"\nInstall-ProviderPackage -PackageName "@anthropic-ai/claude-code" -Version "2.1.224"',
+        'Install-ProviderPackage -PackageName "@openai/codex" -Version "0.155.1"\nInstall-ProviderPackage -PackageName "@anthropic-ai/claude-code" -Version "2.1.224"',
       ],
     ]);
     expect(
@@ -246,7 +246,7 @@ describe("provider conformity workflow", () => {
       ],
       [
         "apps/desktop/resources/managed-runtime/install-managed-provider-runtime.ps1",
-        'Install-ProviderPackage -PackageName "@openai/codex" -Version "2.1.224"\nInstall-ProviderPackage -PackageName "@anthropic-ai/claude-code" -Version "0.154.0"',
+        'Install-ProviderPackage -PackageName "@openai/codex" -Version "2.1.224"\nInstall-ProviderPackage -PackageName "@anthropic-ai/claude-code" -Version "0.155.1"',
       ],
     ]);
     expect(
@@ -387,9 +387,9 @@ describe("provider conformity workflow", () => {
     const provider = {
       provider: "codex",
       binaryPath: "/usr/bin/codex",
-      installedVersion: "0.154.0",
-      registryVersion: "0.154.0",
-      approvedVersion: "0.154.0",
+      installedVersion: "0.155.1",
+      registryVersion: "0.155.1",
+      approvedVersion: "0.155.1",
       installKind: "npm",
     };
     expect(() =>
@@ -420,9 +420,9 @@ describe("provider conformity workflow", () => {
           {
             provider: "codex",
             binaryPath: "/usr/bin/codex",
-            installedVersion: "0.154.0",
+            installedVersion: "0.155.1",
             registryVersion: null,
-            approvedVersion: "0.154.0",
+            approvedVersion: "0.155.1",
             installKind: "npm",
           },
         ],

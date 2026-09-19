@@ -54,6 +54,25 @@ import {
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
 
 describe("Codex stderr classification", () => {
+  it("omits realtime failure payloads and multiline signaling from the journal", () => {
+    const first = classifyCodexStderrLines([
+      "2026-09-19T06:00:00.000Z ERROR codex_core::realtime_conversation: failed: private-SDP",
+      "a=ice-pwd:private-credential",
+    ]);
+    const next = classifyCodexStderrLines(
+      [
+        "more private audio diagnostics",
+        "2026-09-19T06:00:01.000Z WARN codex_core::session: ordinary warning",
+      ],
+      first.suppressCommandFailureDetails,
+    );
+    assert.deepEqual(first.messages, [
+      "Codex voice reported a diagnostic. Private details were omitted.",
+    ]);
+    assert.deepEqual(next.messages, [
+      "2026-09-19T06:00:01.000Z WARN codex_core::session: ordinary warning",
+    ]);
+  });
   it("keeps one failed-command diagnostic and drops its copied output", () => {
     const firstChunk = classifyCodexStderrLines([
       "2026-08-11T06:35:00.905Z ERROR codex_core::tools::router: error=Exit code: 1",

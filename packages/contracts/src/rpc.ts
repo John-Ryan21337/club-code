@@ -1,6 +1,16 @@
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
+import {
+  CodexExperimentalInput,
+  CodexExperimentalResult,
+  CodexExperimentalError,
+} from "./codexExperimental.ts";
+import {
+  CodexThreadAttachmentsInput,
+  CodexThreadAttachmentsResult,
+  CodexThreadAttachmentsError,
+} from "./codexThreadAttachments.ts";
 
 import { ExternalLauncherError, LaunchEditorInput, LaunchTerminalInput } from "./editor.ts";
 import { AuthAccessStreamEvent } from "./auth.ts";
@@ -187,6 +197,8 @@ export const WS_METHODS = {
 
   // Server meta
   serverGetConfig: "server.getConfig",
+  codexThreadAttachments: "codex.threadAttachments",
+  codexExperimental: "codex.experimental",
   serverRefreshProviders: "server.refreshProviders",
   serverCheckProviderAccess: "server.checkProviderAccess",
   serverConsumeProviderRateLimitResetCredit: "server.consumeProviderRateLimitResetCredit",
@@ -733,6 +745,16 @@ export const WsSubscribeUsageStatsRpc = Rpc.make(WS_METHODS.subscribeUsageStats,
 });
 
 export const WsRpcGroup = RpcGroup.make(
+  Rpc.make(WS_METHODS.codexExperimental, {
+    payload: CodexExperimentalInput,
+    success: CodexExperimentalResult,
+    error: CodexExperimentalError,
+  }),
+  Rpc.make(WS_METHODS.codexThreadAttachments, {
+    payload: CodexThreadAttachmentsInput,
+    success: CodexThreadAttachmentsResult,
+    error: CodexThreadAttachmentsError,
+  }),
   WsAgentBrowserGrantRpc,
   WsAgentBrowserRevokeRpc,
   WsAgentBrowserPollRpc,

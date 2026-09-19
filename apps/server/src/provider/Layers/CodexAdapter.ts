@@ -12,6 +12,7 @@ import * as Crypto from "node:crypto";
 import * as NodeFs from "node:fs";
 
 import {
+  AsyncUserInputQuestions,
   type CanonicalItemType,
   type CanonicalRequestType,
   type CodexSettings,
@@ -40,6 +41,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
@@ -1236,6 +1238,9 @@ function mapItemLifecycle(
       ...(status ? { status } : {}),
       ...(title ? { title } : {}),
       ...(detail ? { detail } : {}),
+      ...(item.type === "agentMessage" && Schema.is(AsyncUserInputQuestions)(item.questions)
+        ? { questions: item.questions }
+        : {}),
       ...(event.payload !== undefined ? { data: event.payload } : {}),
     },
   };
@@ -3146,6 +3151,37 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       ),
     );
 
+  const codexThreadAttachments: NonNullable<CodexAdapterShape["codexThreadAttachments"]> = (
+    input,
+  ) =>
+    requireSession(input.threadId).pipe(
+      Effect.flatMap((session) =>
+        Effect.gen(function* () {
+          if (!session.runtime.codexThreadAttachments) {
+            return yield* new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "thread/attachment",
+              detail: "This Codex runtime does not support thread attachments.",
+            });
+          }
+          const result = yield* session.runtime.codexThreadAttachments(input);
+          if ((yield* requireSession(input.threadId)) !== session) {
+            return yield* new ProviderAdapterSessionNotFoundError({
+              provider: PROVIDER,
+              threadId: input.threadId,
+            });
+          }
+          return result;
+        }),
+      ),
+      Effect.mapError((cause) =>
+        cause._tag === "ProviderAdapterSessionNotFoundError" ||
+        cause._tag === "ProviderAdapterRequestError"
+          ? cause
+          : mapCodexRuntimeError(input.threadId, "thread/attachment", cause),
+      ),
+    );
+
   const setGoal: NonNullable<CodexAdapterShape["setGoal"]> = (input: ProviderThreadGoalSetInput) =>
     requireSession(input.threadId).pipe(
       Effect.flatMap((session) =>
@@ -3161,6 +3197,43 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           : mapCodexRuntimeError(input.threadId, "thread/goal/set", cause),
       ),
     );
+
+  const codexExperimental: NonNullable<CodexAdapterShape["codexExperimental"]> = (input) =>
+    Effect.gen(function* () {
+      const session = yield* requireSession(input.threadId);
+      if (!session.runtime.codexExperimental)
+        return yield* Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "experimental",
+            detail: "Codex experimental controls are unavailable.",
+          }),
+        );
+      const result = yield* session.runtime
+        .codexExperimental(input)
+        .pipe(
+          Effect.mapError((cause) => mapCodexRuntimeError(input.threadId, "experimental", cause)),
+        );
+      const current = yield* requireSession(input.threadId).pipe(Effect.option);
+      if (Option.isNone(current) || current.value !== session) {
+        if (input.action.kind === "voiceStart" || input.action.kind === "voiceRenew") {
+          yield* session.runtime
+            .codexExperimental({
+              ...input,
+              action: { kind: "voiceStop", sessionKey: input.action.sessionKey },
+            })
+            .pipe(Effect.timeout("5 seconds"), Effect.ignore);
+        }
+        return yield* Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "experimental",
+            detail: "The Codex session changed.",
+          }),
+        );
+      }
+      return result;
+    });
 
   const clearGoal: NonNullable<CodexAdapterShape["clearGoal"]> = (threadId) =>
     requireSession(threadId).pipe(
@@ -3303,6 +3376,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     steerTurn,
     interruptTurn,
     getGoal,
+    codexExperimental,
+    codexThreadAttachments,
     setGoal,
     clearGoal,
     readThread,

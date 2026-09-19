@@ -260,6 +260,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           icon: "icon.icns",
           category: "public.app-category.developer-tools",
           extendInfo: {
+            NSMicrophoneUsageDescription:
+              "Club Code uses your microphone only when you start an experimental Codex voice session.",
             NSCameraUsageDescription:
               "Club Code uses your camera only when you choose to capture a photo for a chat prompt.",
           },
@@ -276,6 +278,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           icon: "icon.icns",
           category: "public.app-category.developer-tools",
           extendInfo: {
+            NSMicrophoneUsageDescription:
+              "Club Code uses your microphone only when you start an experimental Codex voice session.",
             NSCameraUsageDescription:
               "Club Code uses your camera only when you choose to capture a photo for a chat prompt.",
           },
@@ -293,6 +297,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         undefined,
       );
       assert.deepStrictEqual((emittedConfig.mac as { readonly extendInfo: unknown }).extendInfo, {
+        NSMicrophoneUsageDescription:
+          "Club Code uses your microphone only when you start an experimental Codex voice session.",
         NSCameraUsageDescription:
           "Club Code uses your camera only when you choose to capture a photo for a chat prompt.",
       });
@@ -320,6 +326,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "com.apple.security.cs.allow-unsigned-executable-memory",
       "com.apple.security.cs.disable-library-validation",
       "com.apple.security.device.camera",
+      "com.apple.security.device.audio-input",
     ];
     for (const resourceName of ["entitlements.mac.plist", "entitlements.mac.inherit.plist"]) {
       const contents = readFileSync(
@@ -331,7 +338,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       );
       assert.deepStrictEqual(enabledEntitlements, requiredEntitlements);
       assert.equal(contents.includes("<false/>"), false);
-      assert.equal(contents.includes("com.apple.security.device.audio-input"), false);
+      assert.equal(contents.includes("com.apple.security.device.audio-input"), true);
       assert.equal(contents.includes("com.apple.security.device.microphone"), false);
     }
   });

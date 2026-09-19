@@ -439,6 +439,19 @@ const TurnDiffUpdatedPayload = Schema.Struct({
 });
 export type TurnDiffUpdatedPayload = typeof TurnDiffUpdatedPayload.Type;
 
+// Nonblocking questions are ordinary user-message drafts, never approval requests.
+export const AsyncUserInputQuestions = Schema.Array(
+  Schema.Struct({
+    title: NonEmptyString.check(Schema.isMaxLength(4_000)),
+    options: Schema.optionalKey(
+      Schema.NullOr(
+        Schema.Array(NonEmptyString.check(Schema.isMaxLength(1_000))).check(Schema.isMaxLength(20)),
+      ),
+    ),
+  }),
+).check(Schema.isMaxLength(20));
+export type AsyncUserInputQuestions = typeof AsyncUserInputQuestions.Type;
+
 export const ItemLifecyclePayload = Schema.Struct({
   itemType: CanonicalItemType,
   status: Schema.optional(RuntimeItemStatus),
@@ -451,6 +464,7 @@ export const ItemLifecyclePayload = Schema.Struct({
   // every round-trip and strands prefix repair, so `detail` must preserve
   // source whitespace exactly. Display consumers trim or truncate defensively.
   detail: Schema.optional(NonEmptyString),
+  questions: Schema.optional(AsyncUserInputQuestions),
   data: Schema.optional(Schema.Unknown),
 });
 export type ItemLifecyclePayload = typeof ItemLifecyclePayload.Type;

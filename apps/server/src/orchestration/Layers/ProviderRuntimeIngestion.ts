@@ -834,6 +834,23 @@ function runtimeEventToActivities(
     }
 
     case "item.completed": {
+      if (event.payload.itemType === "assistant_message" && event.payload.questions?.length) {
+        return [
+          {
+            id: event.eventId,
+            createdAt: event.createdAt,
+            tone: "info",
+            kind: "user-input.async-requested",
+            summary: "Optional questions",
+            payload: {
+              ...(event.itemId ? { itemId: event.itemId } : {}),
+              questions: event.payload.questions,
+            },
+            turnId: toTurnId(event.turnId) ?? null,
+            ...maybeSequence,
+          },
+        ];
+      }
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }

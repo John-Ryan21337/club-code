@@ -1,5 +1,6 @@
 import {
   ProviderDaemonRpcRequest,
+  ProviderInstanceId,
   ThreadId,
   type ProviderDaemonRpcRequest as ProviderDaemonRpcRequestValue,
 } from "@cafecode/contracts";
@@ -26,6 +27,44 @@ const stopRequest = {
 } satisfies ProviderDaemonRpcRequestValue;
 
 describe("ProviderDaemonCommandLedger", () => {
+  it("does not persist attachment reads and deduplicates attachment mutations", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const ledger = yield* makeProviderDaemonCommandLedger();
+        const count = yield* Ref.make(0);
+        const payload = {
+          threadId: ThreadId.make("thread-1"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        };
+        const read = {
+          method: "codexThreadAttachments",
+          payload: { ...payload, action: { kind: "list" } },
+        } satisfies ProviderDaemonRpcRequestValue;
+        const execute = Ref.update(count, (n) => n + 1).pipe(
+          Effect.as({ ok: true, value: { data: ["private record"], nextCursor: null } } as const),
+        );
+        yield* ledger.runOnce(read, execute);
+        yield* ledger.runOnce(read, execute);
+        expect((yield* ledger.snapshot).commandCount).toBe(0);
+        expect(yield* Ref.get(count)).toBe(2);
+        const remove = {
+          method: "codexThreadAttachments",
+          commandId: "attachment-remove-command-000000000",
+          payload: {
+            ...payload,
+            action: { kind: "remove", attachmentType: "note", identityKey: "private key" },
+          },
+        } satisfies ProviderDaemonRpcRequestValue;
+        yield* ledger.runOnce(remove, execute);
+        yield* ledger.runOnce(remove, execute);
+        expect(yield* Ref.get(count)).toBe(3);
+        const snapshot = yield* ledger.snapshot;
+        expect(snapshot.commandCount).toBe(1);
+        expect(JSON.stringify(snapshot)).not.toContain("private record");
+        expect(JSON.stringify(snapshot)).not.toContain("private key");
+      }).pipe(Effect.scoped, Effect.provide(SqlitePersistenceMemory)),
+    );
+  });
   it("returns the stored result for duplicate mutating command ids", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {

@@ -1,4 +1,8 @@
 import {
+  type CodexExperimentalInput,
+  type CodexExperimentalResult,
+  type CodexThreadAttachmentsInput,
+  CodexThreadAttachmentsResult,
   ApprovalRequestId,
   CodexSubagentThreadLimit,
   DEFAULT_MODEL,
@@ -45,6 +49,8 @@ import * as Stream from "effect/Stream";
 import * as SchemaIssue from "effect/SchemaIssue";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as CodexClient from "effect-codex-app-server/client";
+import { makeCodexExperimentalController } from "../CodexExperimental.ts";
+import { runCodexThreadAttachments } from "../CodexThreadAttachments.ts";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexProtocol from "effect-codex-app-server/protocol";
 import * as CodexRpc from "effect-codex-app-server/rpc";
@@ -364,13 +370,13 @@ export function buildCodexAppServerArgs(
   ) {
     throw new RangeError("Codex worker limit must be an integer from 1 to 128.");
   }
-  // Codex rust-v0.154.0 config/mod.rs resolves agents.N as N spawned workers.
+  // Codex rust-v0.155.1 config/mod.rs resolves agents.N as N spawned workers.
   // Its V2-specific setting takes precedence and counts the coordinator too.
   // Set both keys so a saved V2 value cannot override this session's limit.
-  // https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/core/src/config/mod.rs#L2704
+  // https://github.com/openai/codex/blob/rust-v0.155.1/codex-rs/core/src/config/mod.rs#L2717
   // The pinned config merger preserves an existing boolean feature toggle as
   // `enabled`, so this nested limit does not enable a disabled V2 backend.
-  // https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/merge.rs#L79
+  // https://github.com/openai/codex/blob/rust-v0.155.1/codex-rs/config/src/merge.rs#L78
   const subagentThreadLimitArgs =
     codexSubagentThreadLimit === undefined
       ? []
@@ -471,6 +477,12 @@ export interface CodexThreadSnapshot {
 }
 
 export interface CodexSessionRuntimeShape {
+  readonly codexExperimental?: (
+    input: CodexExperimentalInput,
+  ) => Effect.Effect<CodexExperimentalResult, CodexSessionRuntimeError>;
+  readonly codexThreadAttachments?: (
+    input: CodexThreadAttachmentsInput,
+  ) => Effect.Effect<CodexThreadAttachmentsResult, CodexSessionRuntimeError>;
   readonly start: () => Effect.Effect<ProviderSession, CodexSessionRuntimeError>;
   readonly getSession: Effect.Effect<ProviderSession>;
   readonly sendTurn: (
@@ -1680,6 +1692,15 @@ export function classifyCodexStderrLines(
     const line = rawLine.replaceAll(ANSI_ESCAPE_REGEX, "").trim();
     const structuredLog = line.match(CODEX_STDERR_LOG_REGEX);
     if (structuredLog) {
+      // Upstream realtime failures can quote SDP or API response bodies. Their
+      // continuation lines are equally private and must not enter the journal.
+      if (/\bcodex_[\w:]*realtime[\w:]*:/.test(line)) {
+        suppressDetails = true;
+        if (structuredLog[1] === "WARN" || structuredLog[1] === "ERROR") {
+          messages.push("Codex voice reported a diagnostic. Private details were omitted.");
+        }
+        continue;
+      }
       // Codex writes the complete failed command output after this header. The
       // command item already owns that output. Keep only the diagnostic header.
       suppressDetails = line.includes(" ERROR codex_core::tools::router: error=Exit code:");
@@ -1834,6 +1855,7 @@ function readNotificationThreadId(notification: CodexServerNotification): string
     case "thread/unarchived":
     case "thread/closed":
     case "thread/name/updated":
+    case "thread/attachment/updated":
     case "thread/goal/updated":
     case "thread/goal/cleared":
     case "thread/environment/connected":
@@ -2940,7 +2962,8 @@ export const makeCodexSessionRuntime = (
           providerInstanceId: options.providerInstanceId ?? PROVIDER,
           direction: event.direction,
           stage: event.stage,
-          payload: event.payload,
+          // Protocol failures can contain private prompts or WebRTC credentials.
+          payloadOmitted: true,
         }),
     }).pipe(Layer.build, Effect.provideService(Scope.Scope, runtimeScope));
     const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
@@ -4791,6 +4814,9 @@ export const makeCodexSessionRuntime = (
     );
 
     yield* client.raw.notifications.pipe(
+      // Voice signaling, lease keys, transcripts, audio, and provider errors
+      // stay transient. Errors and arbitrary realtime items can contain SDP.
+      Stream.filter((notification) => !notification.method.startsWith("thread/realtime/")),
       Stream.runForEach((notification) =>
         Queue.offer(
           serverNotifications,
@@ -5028,6 +5054,11 @@ export const makeCodexSessionRuntime = (
       return providerThreadId;
     });
 
+    const codexExperimental = yield* makeCodexExperimentalController(
+      client,
+      readProviderThreadId,
+    ).pipe(Effect.provideService(Scope.Scope, runtimeScope));
+
     const close = Effect.gen(function* () {
       const alreadyClosed = yield* Ref.getAndSet(closedRef, true);
       if (alreadyClosed) {
@@ -5047,6 +5078,7 @@ export const makeCodexSessionRuntime = (
 
     return {
       start,
+      codexExperimental,
       getSession: Ref.get(sessionRef),
       sendTurn: (input) =>
         Effect.gen(function* () {
@@ -5494,6 +5526,11 @@ export const makeCodexSessionRuntime = (
           ? yield* normalizeCodexThreadGoal(response.goal, options.threadId)
           : null;
       }),
+      codexThreadAttachments: (input) =>
+        Effect.gen(function* () {
+          const threadId = yield* readProviderThreadId;
+          return yield* runCodexThreadAttachments(client, threadId, input.action);
+        }),
       setGoal: (input) =>
         Effect.gen(function* () {
           const providerThreadId = yield* readProviderThreadId;

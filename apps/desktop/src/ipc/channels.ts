@@ -50,3 +50,4 @@ export const EMBEDDED_BROWSER_SNAPSHOT_CHANNEL = "desktop:embedded-browser-snaps
 export const EMBEDDED_BROWSER_CLICK_CHANNEL = "desktop:embedded-browser-click";
 export const EMBEDDED_BROWSER_TYPE_CHANNEL = "desktop:embedded-browser-type";
 export const EMBEDDED_BROWSER_STATE_CHANNEL = "desktop:embedded-browser-state";
+export const REQUEST_MICROPHONE_ACCESS_CHANNEL = "desktop:request-microphone-access";

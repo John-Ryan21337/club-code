@@ -368,6 +368,26 @@ const sessionErrorLayer = it.layer(
 );
 
 sessionErrorLayer("CodexAdapterLive session errors", (it) => {
+  it.effect("returns a typed refusal when an older runtime lacks attachment support", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("attachment-unsupported-runtime");
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const result = yield* adapter.codexThreadAttachments!({
+        threadId,
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        action: { kind: "list" },
+      }).pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure")
+        assert.equal(result.failure._tag, "ProviderAdapterRequestError");
+    }),
+  );
+
   it.effect("maps missing adapter sessions to ProviderAdapterSessionNotFoundError", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
@@ -872,6 +892,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
             type: "agentMessage",
             id: "msg_1",
             text: "done",
+            questions: [{ title: "Which approach?", options: ["A", "B"] }],
           },
         },
       };
@@ -890,6 +911,9 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       assert.equal(firstEvent.value.itemId, "msg_1");
       assert.equal(firstEvent.value.turnId, "turn-1");
       assert.equal(firstEvent.value.payload.itemType, "assistant_message");
+      assert.deepEqual(firstEvent.value.payload.questions, [
+        { title: "Which approach?", options: ["A", "B"] },
+      ]);
     }),
   );
 

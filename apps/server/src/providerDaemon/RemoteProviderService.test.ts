@@ -17,6 +17,7 @@ import {
   providerDaemonRpcTimeoutMs,
   remoteProviderCursorProjectorForConfig,
   toRemoteRequestError,
+  requireRemoteCodexOperation,
 } from "./RemoteProviderService.ts";
 import {
   PROVIDER_DAEMON_RUNTIME_CURSOR_PROJECTOR,
@@ -24,6 +25,47 @@ import {
 } from "./ProviderDaemonRuntimeCursor.ts";
 
 describe("RemoteProviderService", () => {
+  it("refuses new Codex operations before sending their payload to an older daemon", async () => {
+    for (const method of ["codexThreadAttachments", "codexExperimental"] as const) {
+      let sent = false;
+      try {
+        await requireRemoteCodexOperation(method, async () => ({}));
+        sent = true;
+      } catch (error) {
+        assert.instanceOf(error, ProviderDaemonRpcResponseError);
+      }
+      assert.isFalse(sent);
+      await requireRemoteCodexOperation(method, async () => ({
+        supportedCodexOperations: [method],
+      }));
+    }
+    await requireRemoteCodexOperation("listSessions", async () => {
+      throw new Error("Ordinary reads must not request health.");
+    });
+  });
+  it("gives attachment mutations stable command IDs but leaves reads unjournaled", () => {
+    const payload = {
+      threadId: ThreadId.make("thread-1"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    };
+    const read = attachCommandIdToMutatingProviderDaemonRequest({
+      method: "codexThreadAttachments",
+      payload: { ...payload, action: { kind: "list" } },
+    });
+    assert.isFalse("commandId" in read);
+    const remove = attachCommandIdToMutatingProviderDaemonRequest({
+      method: "codexThreadAttachments",
+      payload: {
+        ...payload,
+        action: { kind: "remove", attachmentType: "note", identityKey: "key" },
+      },
+    });
+    assert.equal(typeof remove.commandId, "string");
+    assert.equal(
+      attachCommandIdToMutatingProviderDaemonRequest(remove).commandId,
+      remove.commandId,
+    );
+  });
   it("adds commandId to restartProviderRuntime daemon RPC requests", () => {
     const request = attachCommandIdToMutatingProviderDaemonRequest({
       method: "restartProviderRuntime",

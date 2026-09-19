@@ -1334,6 +1334,38 @@ describe("ProviderRuntimeIngestion", () => {
     );
   });
 
+  it("projects completed optional questions without creating a blocking input request", async () => {
+    const harness = await createHarness();
+    const questions = [{ title: "Which approach?", options: ["Small", "Complete"] }];
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("async-questions"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-questions"),
+      itemId: asItemId("item-questions"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: "I can keep working.",
+        questions,
+      },
+    });
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((activity) => activity.kind === "user-input.async-requested"),
+    );
+    expect(
+      thread.activities.find((activity) => activity.kind === "user-input.async-requested")?.payload,
+    ).toEqual({ itemId: "item-questions", questions });
+    expect(thread.activities.some((activity) => activity.kind === "user-input.requested")).toBe(
+      false,
+    );
+    expect(thread.messages.find((message) => message.id === "assistant:item-questions")?.text).toBe(
+      "I can keep working.",
+    );
+  });
+
   it("maps canonical content delta/item completed into finalized assistant messages", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
