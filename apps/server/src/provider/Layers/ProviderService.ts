@@ -10,6 +10,8 @@
  * @module ProviderServiceLive
  */
 import {
+  CodexExperimentalInput,
+  CodexThreadAttachmentsInput,
   EventId,
   ModelSelection,
   NonNegativeInt,
@@ -1669,8 +1671,82 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const getCapabilities: ProviderServiceShape["getCapabilities"] = (instanceId) =>
     registry.getByInstance(instanceId).pipe(Effect.map((adapter) => adapter.capabilities));
 
+  const codexThreadAttachments: NonNullable<ProviderServiceShape["codexThreadAttachments"]> =
+    Effect.fn("codexThreadAttachments")(function* (rawInput) {
+      const operation = "ProviderService.codexThreadAttachments";
+      const input = yield* decodeInputOrValidationError({
+        operation,
+        schema: CodexThreadAttachmentsInput,
+        payload: rawInput,
+      });
+      const routed = yield* resolveRoutableSession({
+        threadId: input.threadId,
+        operation,
+        allowRecovery: false,
+      });
+      if (
+        !routed.isActive ||
+        routed.instanceId !== input.providerInstanceId ||
+        routed.adapter.provider !== "codex" ||
+        !routed.adapter.codexThreadAttachments
+      ) {
+        return yield* toValidationError(operation, "A matching live Codex session is required.");
+      }
+      const result = yield* routed.adapter.codexThreadAttachments(input);
+      const current = yield* resolveRoutableSession({
+        threadId: input.threadId,
+        operation,
+        allowRecovery: false,
+      });
+      if (
+        !current.isActive ||
+        current.instanceId !== routed.instanceId ||
+        current.adapter !== routed.adapter
+      ) {
+        return yield* toValidationError(operation, "The Codex session changed during the request.");
+      }
+      return result;
+    });
+
   const getInstanceInfo: ProviderServiceShape["getInstanceInfo"] = (instanceId) =>
     registry.getInstanceInfo(instanceId);
+
+  const codexExperimental: NonNullable<ProviderServiceShape["codexExperimental"]> = Effect.fn(
+    "codexExperimental",
+  )(function* (rawInput) {
+    const operation = "ProviderService.codexExperimental";
+    const input = yield* decodeInputOrValidationError({
+      operation,
+      schema: CodexExperimentalInput,
+      payload: rawInput,
+    });
+    const routed = yield* resolveRoutableSession({
+      threadId: input.threadId,
+      operation,
+      allowRecovery: false,
+    });
+    if (
+      !routed.isActive ||
+      routed.instanceId !== input.providerInstanceId ||
+      routed.adapter.provider !== "codex" ||
+      !routed.adapter.codexExperimental
+    ) {
+      return yield* toValidationError(operation, "A matching live Codex session is required.");
+    }
+    const result = yield* routed.adapter.codexExperimental(input);
+    const current = yield* resolveRoutableSession({
+      threadId: input.threadId,
+      operation,
+      allowRecovery: false,
+    });
+    if (
+      !current.isActive ||
+      current.instanceId !== routed.instanceId ||
+      current.adapter !== routed.adapter
+    )
+      return yield* toValidationError(operation, "The Codex session changed.");
+    return result;
+  });
 
   const requireGoalAdapter = Effect.fn("requireGoalAdapter")(function* (input: {
     readonly threadId: ThreadId;
@@ -1950,6 +2026,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     listSessions,
     listSessionsInventory,
     getCapabilities,
+    codexExperimental,
+    codexThreadAttachments,
     getInstanceInfo,
     getGoal,
     setGoal,

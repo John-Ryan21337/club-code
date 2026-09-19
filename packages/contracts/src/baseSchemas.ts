@@ -13,6 +13,15 @@ export const TrimmedString = Schema.String.pipe(
 );
 export const TrimmedNonEmptyString = TrimmedString.check(Schema.isNonEmpty());
 
+/**
+ * Non-empty string that preserves source whitespace in both decode and encode.
+ * Use for payload text that downstream consumers compare as exact UTF-16
+ * prefixes (for example assistant completion text verified against streamed
+ * deltas); `TrimmedNonEmptyString` would silently rewrite it on every
+ * journal or RPC round-trip.
+ */
+export const NonEmptyString = Schema.String.check(Schema.isNonEmpty());
+
 export const NonNegativeInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 export const PositiveInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(1));
 export const PortSchema = Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }));

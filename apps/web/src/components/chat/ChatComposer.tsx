@@ -92,6 +92,9 @@ import { searchSlashCommandItems } from "./composerSlashCommandSearch";
 import { getComposerProviderState, renderProviderTraitsPicker } from "./composerProviderState";
 import { ContextWindowMeter } from "./ContextWindowMeter";
 import { ThreadGoalFooterButton } from "./ThreadGoalControl";
+import { AsyncQuestionsPanel } from "./AsyncQuestionsPanel";
+import { CodexAttachmentsControl } from "./CodexAttachmentsControl";
+import { CodexExperimentalControl } from "./CodexExperimentalControl";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { basenameOfPath } from "../../vscode-icons";
 import { cn, randomUUID } from "~/lib/utils";
@@ -3006,6 +3009,35 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       className="cafe-composer-width mx-auto w-full min-w-0"
       data-chat-composer-form="true"
     >
+      {selectedProvider === "codex" && activeThreadId && activeThread?.session && (
+        <CodexExperimentalControl
+          key={`experimental:${environmentId}:${activeThreadId}:${selectedInstanceId}`}
+          environmentId={environmentId}
+          threadId={activeThreadId}
+          providerInstanceId={selectedInstanceId}
+        />
+      )}
+      {selectedProvider === "codex" && activeThreadId && activeThread?.session && (
+        <CodexAttachmentsControl
+          key={`${environmentId}:${activeThreadId}:${selectedInstanceId}`}
+          environmentId={environmentId}
+          threadId={activeThreadId}
+          providerInstanceId={selectedInstanceId}
+        />
+      )}
+      <AsyncQuestionsPanel
+        key={`${environmentId}:${activeThreadId ?? draftId}`}
+        activities={activeThreadActivities}
+        disabled={composerEditorDisabled}
+        onAddAnswer={(answer) => {
+          const current = promptRef.current;
+          const next = current.length > 0 ? `${current}\n\n${answer}` : answer;
+          if (next.length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS) return false;
+          onManualActivity?.();
+          setPromptFromTraits(next);
+          return true;
+        }}
+      />
       {ephemeralBrowserContext ? (
         <div
           className="mb-2 rounded-xl border border-primary/30 bg-primary/5 p-2.5"

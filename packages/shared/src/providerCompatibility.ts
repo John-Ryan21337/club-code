@@ -1,11 +1,11 @@
 export const PROVIDER_COMPATIBILITY_MATRIX = {
   schemaVersion: 1,
-  approvedAt: "2026-09-07",
+  approvedAt: "2026-09-19",
   providers: {
     codex: {
-      cliVersion: "0.153.4",
+      cliVersion: "0.155.1",
       npmPackage: "@openai/codex",
-      protocolRef: "3d2ee51ca2d5db578f328aa75e20aa22c0197c9a",
+      protocolRef: "be2951ea34f0d295ed0becf97079f92fa5f6950e",
     },
     claude: {
       cliVersion: "2.1.224",

@@ -844,6 +844,8 @@ export function resolveMacDesktopBuildConfig(
       extendInfo: {
         NSCameraUsageDescription:
           "Club Code uses your camera only when you choose to capture a photo for a chat prompt.",
+        NSMicrophoneUsageDescription:
+          "Club Code uses your microphone only when you start an experimental Codex voice session.",
       },
       ...(signed
         ? {

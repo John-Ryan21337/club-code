@@ -568,6 +568,7 @@ export type DesktopCompletionSpeechSynthesizeResult =
   typeof DesktopCompletionSpeechSynthesizeResultSchema.Type;
 
 export interface DesktopBridge {
+  requestMicrophoneAccess?: () => Promise<boolean>;
   getAppBranding: () => DesktopAppBranding | null;
   getLocalEnvironmentBootstrap: () => DesktopEnvironmentBootstrap | null;
   getDebugEndpointState: () => Promise<DesktopDebugEndpointState>;

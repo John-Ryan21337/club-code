@@ -12,6 +12,10 @@
  * @module ProviderService
  */
 import type {
+  CodexExperimentalInput,
+  CodexExperimentalResult,
+  CodexThreadAttachmentsInput,
+  CodexThreadAttachmentsResult,
   AgentBrowserCompleteInput,
   AgentBrowserCompleteResult,
   AgentBrowserGrantInput,
@@ -58,6 +62,12 @@ export interface ProviderThreadReadResult {
  * ProviderServiceShape - Service API for provider session and turn orchestration.
  */
 export interface ProviderServiceShape {
+  readonly codexExperimental?: (
+    input: CodexExperimentalInput,
+  ) => Effect.Effect<CodexExperimentalResult, ProviderServiceError>;
+  readonly codexThreadAttachments?: (
+    input: CodexThreadAttachmentsInput,
+  ) => Effect.Effect<CodexThreadAttachmentsResult, ProviderServiceError>;
   /** Process-local agent browser grant and request broker controls. */
   readonly grantAgentBrowser?: (
     input: AgentBrowserGrantInput,

@@ -1,4 +1,9 @@
 import * as Schema from "effect/Schema";
+import { CodexExperimentalInput, CodexExperimentalResult } from "./codexExperimental.ts";
+import {
+  CodexThreadAttachmentsInput,
+  CodexThreadAttachmentsResult,
+} from "./codexThreadAttachments.ts";
 
 import { IsoDateTime, NonNegativeInt, PortSchema, ThreadId } from "./baseSchemas.ts";
 import {
@@ -313,6 +318,9 @@ export type ProviderDaemonSupervisorProcess = typeof ProviderDaemonSupervisorPro
 
 export const ProviderDaemonHealth = Schema.Struct({
   ok: Schema.Literal(true),
+  supportedCodexOperations: Schema.optional(
+    Schema.Array(Schema.Literals(["codexThreadAttachments", "codexExperimental"])),
+  ),
   mode: ProviderRuntimeProcessMode,
   protocolVersion: Schema.optional(NonNegativeInt),
   pid: NonNegativeInt,
@@ -461,6 +469,8 @@ const RollbackConversationPayload = Schema.Struct({
 });
 
 export const ProviderDaemonRpcRequest = Schema.Union([
+  // Transient signaling and readiness reads must never enter the command ledger.
+  Schema.Struct({ method: Schema.Literal("codexExperimental"), payload: CodexExperimentalInput }),
   // These process-local broker calls intentionally omit commandId so the
   // daemon command ledger never persists grants, typed values, or results.
   Schema.Struct({
@@ -536,6 +546,11 @@ export const ProviderDaemonRpcRequest = Schema.Union([
     payload: ProviderThreadGoalGetInput,
   }),
   Schema.Struct({
+    method: Schema.Literal("codexThreadAttachments"),
+    commandId: Schema.optional(ProviderDaemonCommandId),
+    payload: CodexThreadAttachmentsInput,
+  }),
+  Schema.Struct({
     method: Schema.Literal("setGoal"),
     commandId: Schema.optional(ProviderDaemonCommandId),
     payload: ProviderThreadGoalSetInput,
@@ -570,6 +585,8 @@ export const ProviderDaemonRpcResultByMethod = {
   getCapabilities: ProviderDaemonAdapterCapabilities,
   getInstanceInfo: ProviderDaemonInstanceRoutingInfo,
   getGoal: Schema.NullOr(ProviderThreadGoal),
+  codexExperimental: CodexExperimentalResult,
+  codexThreadAttachments: CodexThreadAttachmentsResult,
   setGoal: ProviderThreadGoal,
   clearGoal: ProviderThreadGoalClearResult,
   rollbackConversation: Schema.Void,

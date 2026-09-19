@@ -54,6 +54,25 @@ import {
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
 
 describe("Codex stderr classification", () => {
+  it("omits realtime failure payloads and multiline signaling from the journal", () => {
+    const first = classifyCodexStderrLines([
+      "2026-09-19T06:00:00.000Z ERROR codex_core::realtime_conversation: failed: private-SDP",
+      "a=ice-pwd:private-credential",
+    ]);
+    const next = classifyCodexStderrLines(
+      [
+        "more private audio diagnostics",
+        "2026-09-19T06:00:01.000Z WARN codex_core::session: ordinary warning",
+      ],
+      first.suppressCommandFailureDetails,
+    );
+    assert.deepEqual(first.messages, [
+      "Codex voice reported a diagnostic. Private details were omitted.",
+    ]);
+    assert.deepEqual(next.messages, [
+      "2026-09-19T06:00:01.000Z WARN codex_core::session: ordinary warning",
+    ]);
+  });
   it("keeps one failed-command diagnostic and drops its copied output", () => {
     const firstChunk = classifyCodexStderrLines([
       "2026-08-11T06:35:00.905Z ERROR codex_core::tools::router: error=Exit code: 1",
@@ -2154,6 +2173,11 @@ const makeTrimSnapshotRaw = (turns: ReadonlyArray<Record<string, unknown>>) => (
   thread: {
     id: "thread-1",
     status: { type: "active" },
+    // Codex 0.154.0 threads carry nullable model/effort/originator metadata.
+    // Trimming only rewrites `turns`; release metadata must pass through.
+    model: "gpt-6-astra",
+    reasoningEffort: "low",
+    originator: null,
     turns,
   },
 });
@@ -2190,6 +2214,14 @@ describe("trimCodexThreadSnapshotForDecode", () => {
     assert.deepEqual((result.value as { thread: { status: unknown } }).thread.status, {
       type: "active",
     });
+    const trimmedThread = (
+      result.value as {
+        thread: { model: unknown; reasoningEffort: unknown; originator: unknown };
+      }
+    ).thread;
+    assert.equal(trimmedThread.model, "gpt-6-astra");
+    assert.equal(trimmedThread.reasoningEffort, "low");
+    assert.equal(trimmedThread.originator, null);
     // The original payload is not mutated.
     assert.equal(raw.thread.turns.length, 20);
   });

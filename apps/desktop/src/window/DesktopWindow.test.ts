@@ -20,6 +20,7 @@ import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopIpc from "../ipc/DesktopIpc.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
+import { requestTrustedMicrophoneAccess } from "./DesktopCameraPermission.ts";
 
 const environmentInput = {
   dirname: "/repo/apps/desktop/dist-electron",
@@ -49,6 +50,7 @@ function makeFakeBrowserWindow() {
     isDestroyed: vi.fn(() => false),
     isLoadingMainFrame: vi.fn(() => false),
     on: vi.fn(),
+    removeListener: vi.fn(),
     once: vi.fn(),
     openDevTools: vi.fn(),
     replaceMisspelling: vi.fn(),
@@ -63,9 +65,11 @@ function makeFakeBrowserWindow() {
     isDestroyed: vi.fn(() => false),
     isMinimized: vi.fn(() => false),
     isVisible: vi.fn(() => true),
+    isFocused: vi.fn(() => true),
     loadURL: vi.fn(() => Promise.resolve()),
     maximize: vi.fn(),
     on: vi.fn(),
+    removeListener: vi.fn(),
     once: vi.fn(),
     restore: vi.fn(),
     setBackgroundColor: vi.fn(),
@@ -283,6 +287,26 @@ describe("DesktopWindow", () => {
             fakeWindow.loadURL.mock.invocationCallOrder[0]!,
         );
 
+        const contents = fakeWindow.window.webContents;
+        const audioCheck = () =>
+          fakeWindow.setPermissionCheckHandler.mock.calls[0]![0]!(
+            contents,
+            "media",
+            "http://127.0.0.1:5733",
+            {
+              isMainFrame: true,
+              requestingUrl: "http://127.0.0.1:5733/",
+              securityOrigin: "http://127.0.0.1:5733",
+              mediaType: "audio",
+            },
+          );
+        for (const event of ["blur", "hide"]) {
+          assert.isTrue(requestTrustedMicrophoneAccess(contents, contents.mainFrame));
+          const listener = fakeWindow.on.mock.calls.find(([name]) => name === event)?.[1];
+          assert.isFunction(listener);
+          listener?.();
+          assert.isFalse(audioCheck());
+        }
         const closedListener = fakeWindow.on.mock.calls.find(([event]) => event === "closed")?.[1];
         assert.isFunction(closedListener);
         closedListener?.();

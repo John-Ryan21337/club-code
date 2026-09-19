@@ -1,3 +1,4 @@
+import { withCodexAttachmentOwner } from "./provider/CodexThreadAttachments.ts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -11,6 +12,8 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { type AuthAccessStreamEvent, AuthSessionId } from "@cafecode/contracts/auth";
 import {
+  CodexExperimentalError,
+  CodexThreadAttachmentsError,
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
   AgentBrowserRpcError,
   ClientSettingsError,
@@ -696,6 +699,60 @@ const makeWsRpcLayer = (
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
       return WsRpcGroup.of({
+        [WS_METHODS.codexExperimental]: (input) =>
+          Effect.gen(function* () {
+            if (!providerService.codexExperimental)
+              return yield* Effect.fail(
+                new CodexExperimentalError({
+                  detail: "Codex experimental controls are unavailable.",
+                }),
+              );
+            return yield* withCodexAttachmentOwner({
+              sessionId: currentSessionId,
+              listSessions: sessions.listActive(),
+              operation: providerService.codexExperimental(input),
+              onInvalidated:
+                input.action.kind === "voiceStart" || input.action.kind === "voiceRenew"
+                  ? providerService
+                      .codexExperimental({
+                        ...input,
+                        action: { kind: "voiceStop", sessionKey: input.action.sessionKey },
+                      })
+                      .pipe(Effect.timeout("5 seconds"), Effect.ignore, Effect.asVoid)
+                  : Effect.void,
+            });
+          }).pipe(
+            Effect.timeout("25 seconds"),
+            Effect.mapError(
+              () =>
+                new CodexExperimentalError({
+                  detail:
+                    "The experimental Codex operation failed. Check the owner session and provider settings.",
+                }),
+            ),
+          ),
+        [WS_METHODS.codexThreadAttachments]: (input) =>
+          Effect.gen(function* () {
+            if (!providerService.codexThreadAttachments) {
+              return yield* Effect.fail(
+                new CodexThreadAttachmentsError({ detail: "Thread attachments are unavailable." }),
+              );
+            }
+            return yield* withCodexAttachmentOwner({
+              sessionId: currentSessionId,
+              listSessions: sessions.listActive(),
+              operation: providerService.codexThreadAttachments(input),
+            });
+          }).pipe(
+            Effect.timeout("15 seconds"),
+            Effect.mapError(
+              () =>
+                new CodexThreadAttachmentsError({
+                  detail:
+                    "Could not read or change Codex attachments. Check the session and attachment limits.",
+                }),
+            ),
+          ),
         [WS_METHODS.serverInterpretAtmosphereCommand]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverInterpretAtmosphereCommand,

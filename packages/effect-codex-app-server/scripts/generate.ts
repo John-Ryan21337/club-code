@@ -4,6 +4,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { make as makeJsonSchemaGenerator } from "@effect/openapi-generator/JsonSchemaGenerator";
 import { fileURLToPath } from "node:url";
+import { zstdDecompressSync } from "node:zlib";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -18,10 +19,27 @@ import {
 } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-// Codex 0.153.4 release commit. Keep generation attached to an immutable
+// Codex 0.155.1 release commit. Keep generation attached to an immutable
 // upstream commit rather than a moving tag so regeneration is reproducible.
-const UPSTREAM_REF = "3d2ee51ca2d5db578f328aa75e20aa22c0197c9a";
+const UPSTREAM_REF = "be2951ea34f0d295ed0becf97079f92fa5f6950e";
 const USER_AGENT = "effect-codex-app-server-generator";
+// These opt-in methods are deliberately absent from upstream's stable fixtures.
+// Read their exact release exports instead of maintaining handwritten wire shapes.
+const EXPERIMENTAL_METHODS = new Set([
+  "memory/status",
+  "userVerification/status",
+  "userVerification/enroll",
+  "userVerification/delete",
+  "userVerification/verify",
+  "userVerification/cancel",
+  "thread/realtime/start",
+  "thread/realtime/stop",
+  "thread/realtime/appendText",
+]);
+const ExperimentalExports = Schema.Struct({
+  typescript: Schema.Record(Schema.String, Schema.String),
+  json_schema: Schema.Record(Schema.String, Schema.String),
+});
 const OXFMT_ENTRYPOINT = fileURLToPath(
   new URL("../../../node_modules/oxfmt/bin/oxfmt", import.meta.url),
 );
@@ -566,6 +584,38 @@ function rewriteExternalRefs(
 const generateFiles = Effect.fn("generateFiles")(function* () {
   yield* ensureGeneratedDir();
 
+  const archiveUrl = `https://raw.githubusercontent.com/openai/codex/${UPSTREAM_REF}/codex-rs/app-server-protocol/schema/precomputed/app-server-exports-experimental.json.zst`;
+  const archiveBytes = yield* HttpClientRequest.get(archiveUrl).pipe(
+    HttpClient.execute,
+    Effect.flatMap(HttpClientResponse.filterStatusOk),
+    Effect.flatMap((response) => response.arrayBuffer),
+  );
+  const archiveText = yield* Effect.try({
+    try: () =>
+      zstdDecompressSync(new Uint8Array(archiveBytes), {
+        maxOutputLength: 16 * 1024 * 1024,
+      }).toString("utf8"),
+    catch: (cause) =>
+      new GeneratorError({ detail: "Could not decode pinned experimental exports", cause }),
+  });
+  const archive = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ExperimentalExports))(
+    archiveText,
+  );
+  const experimentalEntries = parseRequestEntries(archive.typescript["ClientRequest.ts"]!).filter(
+    (entry) => EXPERIMENTAL_METHODS.has(entry.method),
+  );
+  if (experimentalEntries.length !== EXPERIMENTAL_METHODS.size)
+    throw new Error("Missing experimental release methods");
+  const experimentalFiles = Object.keys(archive.json_schema).filter(
+    (file) =>
+      /^v2\/(MemoryStatus|UserVerification|ThreadRealtime(Start|Stop|AppendText))(Params|Response)\.json$/.test(
+        file,
+      ) ||
+      /^v2\/UserVerification(Status|Enroll|Delete|Verify|Cancel)(Params|Response)\.json$/.test(
+        file,
+      ),
+  );
+
   const [rootJsonEntries, v1JsonEntries, v2JsonEntries] = yield* Effect.all([
     fetchDirectoryEntries("schema/json"),
     fetchDirectoryEntries("schema/json/v1"),
@@ -576,6 +626,14 @@ const generateFiles = Effect.fn("generateFiles")(function* () {
     ...buildJsonSchemaFiles(rootJsonEntries),
     ...buildJsonSchemaFiles(v1JsonEntries),
     ...buildJsonSchemaFiles(v2JsonEntries),
+    ...buildJsonSchemaFiles(
+      experimentalFiles.map((file) => ({
+        name: file.split("/").at(-1)!,
+        path: `codex-rs/app-server-protocol/schema/json/${file}`,
+        download_url: `archive:${file}`,
+        type: "file",
+      })),
+    ),
   ].toSorted((left, right) => left.exportName.localeCompare(right.exportName));
 
   const exportNameByQualifiedName = new Map(
@@ -584,7 +642,9 @@ const generateFiles = Effect.fn("generateFiles")(function* () {
   const aggregateSchemas: Record<string, typeof Schema.Json.Type> = {};
 
   for (const file of jsonSchemaFiles) {
-    const raw = yield* fetchText(file.downloadUrl);
+    const raw = file.downloadUrl.startsWith("archive:")
+      ? archive.json_schema[file.downloadUrl.slice("archive:".length)]!
+      : yield* fetchText(file.downloadUrl);
     const parsed = yield* decodeJsonSchemaDocument(raw);
     const localDefinitionNames = new Map(
       Object.keys(parsed.definitions ?? {}).map((definitionName) => [
@@ -662,7 +722,7 @@ const generateFiles = Effect.fn("generateFiles")(function* () {
     `https://raw.githubusercontent.com/openai/codex/${UPSTREAM_REF}/codex-rs/app-server-protocol/schema/typescript/ServerNotification.ts`,
   );
 
-  const clientRequestEntries = parseRequestEntries(clientRequestRaw);
+  const clientRequestEntries = [...parseRequestEntries(clientRequestRaw), ...experimentalEntries];
   const clientNotificationEntries = parseNotificationEntries(clientNotificationRaw);
   const serverRequestEntries = parseRequestEntries(serverRequestRaw);
   const serverNotificationEntries = parseNotificationEntries(serverNotificationRaw);

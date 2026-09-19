@@ -12,5 +12,7 @@
     <!-- Electron's media-device work can run in a signed helper; browser-level permission remains main-session scoped. -->
     <key>com.apple.security.device.camera</key>
     <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
   </dict>
 </plist>

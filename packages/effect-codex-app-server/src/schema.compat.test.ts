@@ -3,6 +3,76 @@ import * as Schema from "effect/Schema";
 
 import * as CodexSchema from "./schema.ts";
 
+const encodeVoiceStart = Schema.encodeSync(
+  CodexSchema.CLIENT_REQUEST_PARAMS["thread/realtime/start"],
+);
+const decodeMemoryStatus = Schema.decodeUnknownSync(CodexSchema.V2MemoryStatusResponse);
+const decodeVoiceStarted = Schema.decodeUnknownSync(
+  CodexSchema.V2ThreadRealtimeStartedNotification,
+);
+
+it("encodes pinned experimental voice signaling and decodes readiness without handwritten wire schemas", () => {
+  const start = {
+    threadId: "thread-1",
+    realtimeSessionId: "private-lease-key",
+    outputModality: "audio" as const,
+    version: "v3" as const,
+    transport: { type: "webrtc" as const, sdp: "synthetic-offer" },
+  };
+  assert.deepEqual(encodeVoiceStart(start), start);
+  assert.deepEqual(
+    decodeMemoryStatus({
+      v2ConsolidatedThreads: 3,
+      v2Ready: true,
+    }),
+    { v2ConsolidatedThreads: 3, v2Ready: true },
+  );
+  assert.equal(
+    decodeVoiceStarted({
+      threadId: "thread-1",
+      realtimeSessionId: "private-lease-key",
+      version: "v3",
+    }).realtimeSessionId,
+    "private-lease-key",
+  );
+});
+
+it("round-trips Codex 0.155.1 persistent thread attachments and update notifications", () => {
+  const attachment = {
+    id: "a-1",
+    attachmentType: "note",
+    identityKey: "design",
+    payload: { text: "Use HTTPS" },
+    createdAt: 1_789_000_000,
+  };
+  assert.deepEqual(
+    Schema.decodeUnknownSync(CodexSchema.V2ThreadAttachmentListResponse)({
+      data: [attachment],
+      nextCursor: null,
+    }),
+    { data: [attachment], nextCursor: null },
+  );
+  assert.deepEqual(
+    Schema.encodeSync(CodexSchema.V2ThreadAttachmentAddParams)({ threadId: "t-1", ...attachment }),
+    {
+      threadId: "t-1",
+      attachmentType: "note",
+      identityKey: "design",
+      payload: { text: "Use HTTPS" },
+    },
+  );
+  assert.equal(
+    Schema.decodeUnknownSync(CodexSchema.V2ThreadAttachmentUpdatedNotification)({
+      threadId: "t-1",
+      attachmentId: "a-1",
+      attachmentType: "note",
+      identityKey: "design",
+      operation: "deleted",
+    }).operation,
+    "deleted",
+  );
+});
+
 it("decodes the Codex 0.146 enterprise plan without treating it as an unknown account", () => {
   const decoded = Schema.decodeUnknownSync(CodexSchema.V2GetAccountResponse)({
     account: {
@@ -141,4 +211,45 @@ it("decodes the 0.146 managed configuration requirements while tolerating older 
   assert.equal(current.browserUse?.disableAutoReview, true);
   assert.equal(current.featureRequirements?.["in_app_updates"], false);
   assert.deepEqual(legacy, {});
+});
+
+it("keeps the 0.154 account/rateLimits/read request valid without params", () => {
+  // Codex 0.154.0 turned the previously parameterless method into one with
+  // optional usage-read capability flags. Existing callers pass `undefined`;
+  // the new flags must also decode without being adopted here.
+  const paramsSchema = CodexSchema.CLIENT_REQUEST_PARAMS["account/rateLimits/read"];
+  assert.equal(Schema.decodeUnknownSync(paramsSchema)(undefined), undefined);
+  assert.deepEqual(
+    Schema.decodeUnknownSync(paramsSchema)({
+      supportsLunaReserve: false,
+      excludeResetCreditDetails: true,
+    }),
+    {
+      supportsLunaReserve: false,
+      excludeResetCreditDetails: true,
+    },
+  );
+});
+
+const decodeRateLimitSnapshot = Schema.decodeUnknownSync(
+  CodexSchema.V2GetAccountRateLimitsResponse__RateLimitSnapshot,
+);
+
+it("decodes 0.154 rate-limit snapshots with and without the quota-alias model slug", () => {
+  const base = {
+    limitId: "limit-1",
+    limitName: "Primary",
+    primary: null,
+    secondary: null,
+    credits: null,
+    individualLimit: null,
+  };
+  const withSlug = decodeRateLimitSnapshot({
+    ...base,
+    normalModelSlug: "gpt-6-astra",
+  });
+  const legacy = decodeRateLimitSnapshot(base);
+
+  assert.equal(withSlug.normalModelSlug, "gpt-6-astra");
+  assert.equal(legacy.normalModelSlug, undefined);
 });

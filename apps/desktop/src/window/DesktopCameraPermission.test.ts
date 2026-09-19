@@ -6,6 +6,8 @@ import {
   allowsTrustedMainFrameCameraCheck,
   allowsTrustedMainFrameCameraRequest,
   installTrustedMainFrameCameraPermission,
+  requestTrustedMicrophoneAccess,
+  revokeTrustedMicrophoneAccess,
   type CameraPermissionSession,
   type CameraPermissionWebContents,
 } from "./DesktopCameraPermission.ts";
@@ -57,6 +59,150 @@ function requestDetails(
 }
 
 describe("desktop camera permission", () => {
+  it("binds grants to the exact current frame and revokes them permanently on foreground loss", () => {
+    const { webContents, session } = makeHarness();
+    const foreground = vi.fn(() => true);
+    const remove = installTrustedMainFrameCameraPermission(webContents, TRUSTED_ORIGIN, foreground);
+    const check = vi.mocked(session.setPermissionCheckHandler).mock.calls[0]![0]!;
+    const audioCheck = () =>
+      check(
+        webContents as unknown as Electron.WebContents,
+        "media",
+        TRUSTED_ORIGIN,
+        checkDetails({ mediaType: "audio" }),
+      );
+    expect(requestTrustedMicrophoneAccess(webContents)).toBe(false);
+    expect(requestTrustedMicrophoneAccess(webContents, { ...webContents.mainFrame })).toBe(false);
+    expect(requestTrustedMicrophoneAccess(webContents, webContents.mainFrame)).toBe(true);
+    foreground.mockReturnValue(false);
+    expect(audioCheck()).toBe(false);
+    foreground.mockReturnValue(true);
+    expect(audioCheck()).toBe(false);
+    expect(requestTrustedMicrophoneAccess(webContents, webContents.mainFrame)).toBe(true);
+    revokeTrustedMicrophoneAccess(webContents);
+    expect(audioCheck()).toBe(false);
+    remove();
+  });
+
+  it("revokes failed callbacks and rejects replaced session owners and retained camera handlers", () => {
+    const first = makeHarness();
+    const removeFirst = installTrustedMainFrameCameraPermission(
+      first.webContents,
+      TRUSTED_ORIGIN,
+      () => true,
+    );
+    const check = vi.mocked(first.session.setPermissionCheckHandler).mock.calls[0]![0]!;
+    const request = vi.mocked(first.session.setPermissionRequestHandler).mock.calls[0]![0]!;
+    expect(requestTrustedMicrophoneAccess(first.webContents, first.webContents.mainFrame)).toBe(
+      true,
+    );
+    expect(() =>
+      request(
+        first.webContents as unknown as Electron.WebContents,
+        "media",
+        () => {
+          throw new Error("renderer closed");
+        },
+        requestDetails({ mediaTypes: ["audio"] }),
+      ),
+    ).not.toThrow();
+    const callback = vi.fn();
+    request(
+      first.webContents as unknown as Electron.WebContents,
+      "media",
+      callback,
+      requestDetails({ mediaTypes: ["audio"] }),
+    );
+    expect(callback).toHaveBeenLastCalledWith(false);
+    const second = makeHarness(first.session);
+    const removeSecond = installTrustedMainFrameCameraPermission(
+      second.webContents,
+      TRUSTED_ORIGIN,
+      () => true,
+    );
+    expect(requestTrustedMicrophoneAccess(first.webContents, first.webContents.mainFrame)).toBe(
+      false,
+    );
+    expect(
+      check(
+        first.webContents as unknown as Electron.WebContents,
+        "media",
+        TRUSTED_ORIGIN,
+        checkDetails(),
+      ),
+    ).toBe(false);
+    removeFirst();
+    expect(requestTrustedMicrophoneAccess(second.webContents, second.webContents.mainFrame)).toBe(
+      true,
+    );
+    removeSecond();
+    expect(requestTrustedMicrophoneAccess(second.webContents, second.webContents.mainFrame)).toBe(
+      false,
+    );
+  });
+  it("requires a fresh foreground main-window grant for microphone checks and requests", () => {
+    vi.useFakeTimers();
+    try {
+      const { webContents, session } = makeHarness();
+      const foreground = vi.fn(() => true);
+      const remove = installTrustedMainFrameCameraPermission(
+        webContents,
+        TRUSTED_ORIGIN,
+        foreground,
+      );
+      const check = vi.mocked(session.setPermissionCheckHandler).mock.calls[0]![0]!;
+      const request = vi.mocked(session.setPermissionRequestHandler).mock.calls[0]![0]!;
+      const audioCheck = () =>
+        check(
+          webContents as unknown as Electron.WebContents,
+          "media",
+          TRUSTED_ORIGIN,
+          checkDetails({ mediaType: "audio" }),
+        );
+      expect(audioCheck()).toBe(false);
+      expect(requestTrustedMicrophoneAccess({})).toBe(false);
+      expect(requestTrustedMicrophoneAccess(webContents, webContents.mainFrame)).toBe(true);
+      expect(audioCheck()).toBe(true);
+      const callback = vi.fn();
+      request(
+        webContents as unknown as Electron.WebContents,
+        "media",
+        callback,
+        requestDetails({ mediaTypes: ["audio"] }),
+      );
+      expect(callback).toHaveBeenLastCalledWith(true);
+      request(
+        webContents as unknown as Electron.WebContents,
+        "media",
+        callback,
+        requestDetails({ mediaTypes: ["audio"], isMainFrame: false }),
+      );
+      expect(callback).toHaveBeenLastCalledWith(false);
+      request(
+        webContents as unknown as Electron.WebContents,
+        "media",
+        callback,
+        requestDetails({ mediaTypes: ["audio", "video"] }),
+      );
+      expect(callback).toHaveBeenLastCalledWith(false);
+      foreground.mockReturnValue(false);
+      expect(audioCheck()).toBe(false);
+      expect(requestTrustedMicrophoneAccess(webContents, webContents.mainFrame)).toBe(false);
+      foreground.mockReturnValue(true);
+      expect(audioCheck()).toBe(false);
+      expect(requestTrustedMicrophoneAccess(webContents, webContents.mainFrame)).toBe(true);
+      vi.advanceTimersByTime(5001);
+      expect(audioCheck()).toBe(false);
+      expect(requestTrustedMicrophoneAccess(webContents, webContents.mainFrame)).toBe(true);
+      webContents.mainFrame = { ...webContents.mainFrame };
+      expect(audioCheck()).toBe(false);
+      remove();
+      expect(requestTrustedMicrophoneAccess(webContents, webContents.mainFrame)).toBe(false);
+      expect(audioCheck()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("allows only camera video from the exact live trusted main contents and origin", () => {
     const { frame, webContents } = makeHarness();
     expect(

@@ -111,11 +111,11 @@ const STATIC_CONTENT_SECURITY_POLICY = [
 ].join("; ");
 const STATIC_SECURITY_HEADERS = {
   "Content-Security-Policy": STATIC_CONTENT_SECURITY_POLICY,
-  // Camera capture is available only to the top-level Club Code origin. The
+  // Camera and microphone capture are limited to the Club Code origin. The
   // Electron main-window policy narrows this further to its exact live frame;
   // remote browser permission and OS privacy prompts remain authoritative.
   "Permissions-Policy":
-    'camera=(self), fullscreen=(self "https://www.youtube-nocookie.com" "https://open.spotify.com"), geolocation=(), microphone=(), payment=(), usb=()',
+    'camera=(self), fullscreen=(self "https://www.youtube-nocookie.com" "https://open.spotify.com"), geolocation=(), microphone=(self), payment=(), usb=()',
   "Referrer-Policy": "no-referrer",
   "X-Content-Type-Options": "nosniff",
   "X-Frame-Options": "DENY",

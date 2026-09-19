@@ -13,6 +13,25 @@ export interface CameraPermissionWebContents {
 }
 
 const sessionOwners = new WeakMap<CameraPermissionSession, symbol>();
+const microphoneGrants = new WeakMap<
+  object,
+  {
+    request: (frame: object | null | undefined) => boolean;
+    revoke: () => void;
+  }
+>();
+
+/** Called only through the sender-validated desktop IPC route. */
+export function requestTrustedMicrophoneAccess(
+  sender: object | undefined,
+  frame?: object | null,
+): boolean {
+  return sender !== undefined && (microphoneGrants.get(sender)?.request(frame) ?? false);
+}
+
+export function revokeTrustedMicrophoneAccess(sender: object): void {
+  microphoneGrants.get(sender)?.revoke();
+}
 
 function clearPermissionHandlers(session: CameraPermissionSession): void {
   // Electron exposes independent setters and no atomic replace/reset operation.
@@ -106,53 +125,126 @@ export function allowsTrustedMainFrameCameraRequest(
 
 /**
  * Grants getUserMedia camera video only to the live Club Code main frame.
+ * Microphone access additionally requires a recent, frame-bound IPC grant.
  *
  * Electron's media permission callbacks do not expose a user-gesture flag.
  * This handler therefore responds only to Chromium's actual permission
- * check/request flow; it never pre-opens a device or synthesizes a grant.
+ * check/request flow; it never pre-opens a device.
  */
 export function installTrustedMainFrameCameraPermission(
   webContents: CameraPermissionWebContents,
   trustedOrigin: string,
+  isForeground: () => boolean = () => false,
 ): () => void {
   const session = webContents.session;
   const owner = Symbol("desktop-camera-permission");
   sessionOwners.set(session, owner);
+  let microphoneUntil = 0;
+  let microphoneFrame = webContents.mainFrame;
+  const revoke = () => {
+    microphoneUntil = 0;
+  };
+  const microphoneAllowed = () => {
+    try {
+      const allowed =
+        sessionOwners.get(session) === owner &&
+        performance.now() < microphoneUntil &&
+        webContents.mainFrame === microphoneFrame &&
+        isForeground() &&
+        isLiveTrustedMainContents(webContents, webContents, trustedOrigin);
+      if (!allowed) revoke();
+      return allowed;
+    } catch {
+      revoke();
+      return false;
+    }
+  };
+  const grant = {
+    revoke,
+    request: (frame: object | null | undefined) => {
+      revoke();
+      try {
+        if (
+          sessionOwners.get(session) !== owner ||
+          !isForeground() ||
+          frame !== webContents.mainFrame ||
+          !isLiveTrustedMainContents(webContents, webContents, trustedOrigin)
+        )
+          return false;
+        microphoneFrame = webContents.mainFrame;
+        microphoneUntil = performance.now() + 5000;
+        return true;
+      } catch {
+        return false;
+      }
+    },
+  };
+  microphoneGrants.set(webContents, grant);
 
   try {
     session.setPermissionCheckHandler(
       (requestingWebContents, permission, requestingOrigin, details) =>
-        allowsTrustedMainFrameCameraCheck(
+        sessionOwners.get(session) === owner &&
+        (allowsTrustedMainFrameCameraCheck(
           requestingWebContents,
           permission,
           requestingOrigin,
           details,
           webContents,
           trustedOrigin,
-        ),
+        ) ||
+          (details.mediaType === "audio" &&
+            microphoneAllowed() &&
+            allowsTrustedMainFrameCameraCheck(
+              requestingWebContents,
+              permission,
+              requestingOrigin,
+              { ...details, mediaType: "video" },
+              webContents,
+              trustedOrigin,
+            ))),
     );
     session.setPermissionRequestHandler((requestingWebContents, permission, callback, details) => {
-      callback(
-        allowsTrustedMainFrameCameraRequest(
+      const allowed =
+        sessionOwners.get(session) === owner &&
+        (allowsTrustedMainFrameCameraRequest(
           requestingWebContents,
           permission,
           details,
           webContents,
           trustedOrigin,
-        ),
-      );
+        ) ||
+          ((details as Electron.MediaAccessPermissionRequest).mediaTypes?.length === 1 &&
+            (details as Electron.MediaAccessPermissionRequest).mediaTypes?.[0] === "audio" &&
+            microphoneAllowed() &&
+            allowsTrustedMainFrameCameraRequest(
+              requestingWebContents,
+              permission,
+              { ...details, mediaTypes: ["video"] } as Electron.MediaAccessPermissionRequest,
+              webContents,
+              trustedOrigin,
+            )));
+      try {
+        callback(allowed);
+      } catch {
+        revoke();
+      }
     });
   } catch (cause) {
     if (sessionOwners.get(session) === owner) {
       sessionOwners.delete(session);
+      microphoneGrants.delete(webContents);
       clearPermissionHandlers(session);
     }
     throw cause;
   }
 
   return () => {
+    revoke();
+    if (microphoneGrants.get(webContents) === grant) microphoneGrants.delete(webContents);
     if (sessionOwners.get(session) !== owner) return;
     sessionOwners.delete(session);
+    microphoneGrants.delete(webContents);
     clearPermissionHandlers(session);
   };
 }

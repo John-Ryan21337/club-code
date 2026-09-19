@@ -110,6 +110,8 @@ export interface WsRpcClient {
     >;
   };
   readonly server: {
+    readonly codexExperimental: RpcUnaryMethod<typeof WS_METHODS.codexExperimental>;
+    readonly codexThreadAttachments: RpcUnaryMethod<typeof WS_METHODS.codexThreadAttachments>;
     readonly getConfig: RpcUnaryNoArgMethod<typeof WS_METHODS.serverGetConfig>;
     readonly interpretAtmosphereCommand: RpcUnaryMethod<
       typeof WS_METHODS.serverInterpretAtmosphereCommand
@@ -314,6 +316,10 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) => client[WS_METHODS.gitPreparePullRequestThread](input)),
     },
     server: {
+      codexExperimental: (input) =>
+        transport.request((client) => client[WS_METHODS.codexExperimental](input)),
+      codexThreadAttachments: (input) =>
+        transport.request((client) => client[WS_METHODS.codexThreadAttachments](input)),
       getConfig: () => transport.request((client) => client[WS_METHODS.serverGetConfig]({})),
       interpretAtmosphereCommand: (input) =>
         transport.request((client) => client[WS_METHODS.serverInterpretAtmosphereCommand](input)),

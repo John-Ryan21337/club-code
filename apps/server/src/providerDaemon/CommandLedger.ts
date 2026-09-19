@@ -35,9 +35,17 @@ const MUTATING_METHODS = new Set<ProviderDaemonRpcRequest["method"]>([
   "stopSession",
   "restartProviderRuntime",
   "setGoal",
+  "codexThreadAttachments",
   "clearGoal",
   "rollbackConversation",
 ]);
+
+function isMutatingRequest(request: ProviderDaemonRpcRequestValue): boolean {
+  return (
+    MUTATING_METHODS.has(request.method) &&
+    !(request.method === "codexThreadAttachments" && request.payload.action.kind === "list")
+  );
+}
 
 interface CommandRow {
   readonly commandId: string;
@@ -401,7 +409,7 @@ export const makeProviderDaemonCommandLedger = (options?: {
     const requireCommandId = (
       request: ProviderDaemonRpcRequestValue,
     ): ProviderDaemonRpcEnvelopeValue | string =>
-      !MUTATING_METHODS.has(request.method)
+      !isMutatingRequest(request)
         ? ""
         : !("commandId" in request) || request.commandId === undefined
           ? commandError(
@@ -415,7 +423,7 @@ export const makeProviderDaemonCommandLedger = (options?: {
       execute: Effect.Effect<ProviderDaemonRpcEnvelopeValue>,
     ): Effect.Effect<ProviderDaemonRpcEnvelopeValue> =>
       Effect.gen(function* () {
-        if (!MUTATING_METHODS.has(request.method)) {
+        if (!isMutatingRequest(request)) {
           return yield* execute;
         }
 
