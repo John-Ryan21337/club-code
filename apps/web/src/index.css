@@ -1224,18 +1224,62 @@ label:has(> select#reasoning-effort) select {
   background: color-mix(in srgb, var(--muted) 78%, var(--background)) !important;
 }
 
-.chat-markdown .chat-markdown-table-scroll {
+.chat-markdown .chat-markdown-table-frame {
+  min-width: 0;
   max-width: 100%;
+  contain: inline-size;
+  margin: 0.65rem 0;
+}
+
+.chat-markdown-table-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem 0.85rem;
+  padding: 0.35rem 0;
+}
+
+.chat-markdown .chat-markdown-table-scroll {
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
   overflow-x: auto;
   overflow-y: hidden;
   overscroll-behavior-x: contain;
   padding-bottom: 0.2rem;
-  scrollbar-width: thin;
+  scrollbar-width: auto;
   scrollbar-color: color-mix(in srgb, var(--border) 78%, transparent) transparent;
 }
 
 .chat-markdown .chat-markdown-table-scroll::-webkit-scrollbar {
-  height: 7px;
+  height: 10px;
+  width: 10px;
+}
+
+.chat-markdown-table-scroll:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.chat-markdown .chat-markdown-table-expanded {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin: 0;
+}
+
+.chat-markdown .chat-markdown-table-expanded .chat-markdown-table-scroll {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.chat-markdown .chat-markdown-table-expanded th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--popover);
 }
 
 .chat-markdown .chat-markdown-table-scroll::-webkit-scrollbar-track {
