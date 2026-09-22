@@ -147,6 +147,42 @@ Operational application state: [Club #119](https://github.com/John-Ryan21337/clu
 
 日本語：Club #119 は #118 を前提とし、`usage_stats_days` の固定カウンター・日付と、`projection_state` の既知の投影処理状態だけを明示的に読みます。処理の前後で現在の所有者権限と、バックエンドが観測したループバック接続を確認します。ローカルプロキシは遠隔ブラウザーを中継できるため、元のクライアントがローカルである証明ではありません。合成 SQLite・認証済み RPC・ブラウザーで検査しました。定期更新・比較・任意 SQL・フォレンジック用の生データ全体は含みません。状態全体の生データへの同等アクセスは意図的に対象外です。
 
+## Recent Club improvements checked on 22 September
+
+These four PRs extend the Club release. Their GitHub heads were checked on
+22 September 2026. They are available for Cafe maintainers to review, but are
+not rebased ports against current Cafe `dev`. Preserve Cafe's current provider
+and renderer behavior when adapting them.
+
+| Feature                                                | PR and exact head                                                                                             | Base and review scope                                                                                                                                                                     |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| YouTube controls, wider composer, High effort defaults | [Club #120](https://github.com/John-Ryan21337/club-code/pull/120), `1a565aabc142d8df1053f81659cc819d125b4b28` | Club release base. Theater/restore and header on/off controls; English, Japanese and bilingual sizing. Saved effort choices take precedence.                                              |
+| Codex CLI 0.155.1 and optional controls                | [Club #121](https://github.com/John-Ryan21337/club-code/pull/121), `b20f7d0ec012bbbb897db8d37a00ab42918e6cc7` | Based on #120. Optional-question drafting, attachment records, experimental voice and readiness controls. Native verification enrollment and CLI-daemon management remain outside the UI. |
+| Move threads between projects                          | [Club #122](https://github.com/John-Ryan21337/club-code/pull/122), `acb0f93df43bdc36046cbfcbbf09c16f02a5ac41` | Based on #121. Sidebar drag uses the existing move command within one connected environment. It preserves history without moving project files.                                           |
+| Scroll and expand wide chat tables                     | [Club #123](https://github.com/John-Ryan21337/club-code/pull/123), `03e14be55b0a1a092bb4ee45c26bd01bface6fd8` | Based on #122. Independent table scrolling, paging buttons, expanded view, sticky column headings, and keyboard focus restoration.                                                        |
+
+Review order for this stack is #120, #121, #122, then #123. The later bases
+record the tested integration order; thread dragging and table scrolling do not
+intrinsically require Codex voice features. A separate Cafe port must resolve
+its actual dependencies and run checks against its own base.
+
+Each implementation passed its recorded repository tests, browser tests,
+formatting, lint, type checks, and desktop build. The final stack at `03e14be5`
+passed 4,614 repository tests with three existing skips, 483 Chromium tests,
+and all nine typecheck tasks. All 2,721 installed build files matched SHA-256
+hashes from that build. Synthetic tests do not certify live YouTube playback,
+provider account entitlement, physical microphone access, or signed macOS behavior.
+
+The [table guide and synthetic previews](https://github.com/John-Ryan21337/club-code/blob/03e14be55b0a1a092bb4ee45c26bd01bface6fd8/docs/chat-table-view.md)
+show the final interaction. Source and build files are installed in the local
+Club release; publication does not mean these PRs were merged into Cafe.
+
+日本語：Club #120〜#123 の公開コミットを2026年9月22日に確認しました。
+YouTube操作と入力欄、Codex 0.155.1、プロジェクト間のスレッド移動、表のスクロールと拡大を含みます。
+この順序はClubで検証した依存順序です。現行Cafe向けの移植では依存関係を再確認し、組み合わせた状態で検証してください。
+最終構成では全体テスト4,614件、ブラウザーテスト483件、型検査、静的検査、ビルドが成功しました。
+合成データによる検証であり、実際のアカウント、マイク、署名済みmacOSアプリの動作保証ではありません。
+
 ## Browser adoption order
 
 1. [Cafe #63](https://github.com/cafeai/cafe-code/pull/63) defines bounded contracts;
