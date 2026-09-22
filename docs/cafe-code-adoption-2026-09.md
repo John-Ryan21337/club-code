@@ -3,6 +3,11 @@
 This guide compares the current Club Code source with Cafe Code on 2026-09-11.
 It helps maintainers choose a feature without importing the complete fork.
 
+For the subsequent implementation pass, use the [feature PR index](./cafe-feature-pr-index-20260911.md).
+It records newly published ports, exact prerequisite branches, and remaining work.
+追加の移植作業は[機能PR一覧](./cafe-feature-pr-index-20260911.md)を参照してください。
+新しく公開したPR、依存ブランチ、未完了の作業を記録しています。
+
 このガイドは2026年9月11日時点のClub CodeとCafe Codeを比較します。
 フォーク全体を取り込まず、必要な機能を選んで検討するための資料です。
 
@@ -130,5 +135,6 @@ Publication requires formatting, lint, type checking, unit/integration tests, an
 No application restart is required to publish source; installed binaries are a separate release step.
 
 ChatGPT agents performed the source analysis and independent code review.
-A Claude Code 2.1.259 review was attempted but could not authenticate because its OAuth session had expired.
-No Claude review result is claimed.
+A Claude Code 2.1.259 review in the initial publication pass could not authenticate
+because its OAuth session had expired. No Claude review result is claimed for that
+attempt. Subsequent authenticated Claude Opus 5 work is recorded in the feature PR index.
