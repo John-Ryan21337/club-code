@@ -42,6 +42,7 @@ import { getLocalShellCapabilities } from "../localCapabilities";
 import { cn, isMacPlatform, isWindowsPlatform } from "../lib/utils";
 import { normalizeChatMarkdownMath } from "../lib/chatMarkdownMath";
 import { normalizeCodexCitationMarkers } from "../lib/codexCitations";
+import { ChatMarkdownTable } from "./ChatMarkdownTable";
 
 class CodeHighlightErrorBoundary extends React.Component<
   { fallback: ReactNode; children: ReactNode },
@@ -794,11 +795,7 @@ function ChatMarkdown({
         );
       },
       table({ node: _node, children, ...props }) {
-        return (
-          <div className="chat-markdown-table-scroll">
-            <table {...props}>{children}</table>
-          </div>
-        );
+        return <ChatMarkdownTable {...props}>{children}</ChatMarkdownTable>;
       },
     }),
     [
