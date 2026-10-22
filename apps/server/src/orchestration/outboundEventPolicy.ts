@@ -7,22 +7,17 @@ export type OutboundEventClassification =
 /**
  * Conservative overload policy for queued orchestration events.
  *
- * Unknown and lifecycle-shaped events are protected. Only state that is both
- * reconstructable from snapshots and has a stable identity is replaceable.
- * This function is shared by hub routing and connection flow control so adding
- * a new event type cannot accidentally acquire lossy behavior in one layer.
+ * Unknown and lifecycle-shaped events are protected. Only complete state
+ * snapshots with a stable identity are replaceable. Streaming
+ * message text is an append fragment; replacing it discards words even when
+ * the durable message is intact. Keep each fragment as a protected barrier.
+ * Keep this classification at the routing boundary so new event types cannot
+ * acquire lossy behavior without an explicit policy change.
  */
 export function classifyOutboundOrchestrationEvent(
   event: OrchestrationEvent,
 ): OutboundEventClassification {
   switch (event.type) {
-    case "thread.message-sent":
-      return event.payload.role === "assistant" && event.payload.streaming
-        ? {
-            kind: "replaceable",
-            key: `streaming-message:${event.aggregateId}:${event.payload.messageId}`,
-          }
-        : { kind: "protected" };
     case "thread.session-set":
       return {
         kind: "replaceable",
