@@ -529,6 +529,89 @@ function normalizeLiteralTextCommandsInMath(text: string): string {
   return transformOutsideFences(text, normalizeLiteralTextCommandsInMathChunk);
 }
 
+function isNumericMathSpan(body: string): boolean {
+  if (/[\n|]/.test(body) || /[+\-*/=<>–—]\s*$/.test(body)) return false;
+  if (body !== body.trim() && /^[+-]?[\d,.]+$/.test(body.trim())) return false;
+  // Explicit TeX commands can contain prose (for example \text{...}). Bare
+  // currency ranges can contain words too, but those words are not formulas.
+  if (/\\[A-Za-z]+/.test(body)) return true;
+  return !/[A-Za-z]{3,}/.test(body) && !/\b(?:to|vs|or|and|per)\b/i.test(body);
+}
+
+function escapeCurrencyDollarsInChunk(text: string): string {
+  const output: string[] = [];
+  for (let cursor = 0; cursor < text.length; ) {
+    // Keep literal code and link destinations byte-for-byte. Currency in a
+    // link label still needs protection, but its URL must not be rewritten.
+    if (text[cursor] === "`") {
+      const length = characterRunLength(text, cursor, "`");
+      const close = findClosingDelimiter(text, cursor + length, "`", length);
+      if (close !== null) {
+        output.push(text.slice(cursor, close + length));
+        cursor = close + length;
+        continue;
+      }
+    }
+    if (text.startsWith("](", cursor)) {
+      let depth = 1;
+      let end = cursor + 2;
+      for (; end < text.length && depth > 0; end += 1) {
+        if (isEscapedCharacter(text, end)) continue;
+        if (text[end] === "(") depth += 1;
+        if (text[end] === ")") depth -= 1;
+      }
+      output.push(text.slice(cursor, end));
+      cursor = end;
+      continue;
+    }
+    const url = /^(?:https?:\/\/|mailto:)[^\s<>]+/.exec(text.slice(cursor));
+    if (url) {
+      output.push(url[0]);
+      cursor += url[0].length;
+      continue;
+    }
+    if (text[cursor] !== "$" || isEscapedCharacter(text, cursor)) {
+      output.push(text[cursor] ?? "");
+      cursor += 1;
+      continue;
+    }
+    const length = characterRunLength(text, cursor, "$");
+    const start = cursor + length;
+    const close = findClosingDelimiter(text, start, "$", length);
+    if (length > 1) {
+      const end = close === null ? text.length : close + length;
+      output.push(text.slice(cursor, end));
+      cursor = end;
+      continue;
+    }
+    if (/^[ \t]*[+-]?\d/.test(text.slice(start))) {
+      const math =
+        close !== null &&
+        !/\d/.test(text[close + 1] ?? "") &&
+        isNumericMathSpan(text.slice(start, close));
+      if (!math) {
+        // remark-math otherwise pairs two prices, discards their spaces, and
+        // renders intervening prose as individual italic math symbols.
+        output.push("\\$");
+        cursor += 1;
+        continue;
+      }
+    }
+    if (close !== null) {
+      output.push(text.slice(cursor, close + 1));
+      cursor = close + 1;
+    } else {
+      output.push("$");
+      cursor += 1;
+    }
+  }
+  return output.join("");
+}
+
+function escapeCurrencyDollars(text: string): string {
+  return transformOutsideFences(text, escapeCurrencyDollarsInChunk);
+}
+
 /**
  * Providers do not consistently delimit math. Normalize common chat output
  * shapes before the Markdown AST is built so KaTeX handles them as math, while
@@ -539,7 +622,7 @@ export function normalizeChatMarkdownMath(text: string): string {
     normalizeStandaloneMathParagraphs(
       normalizeLatexDelimiters(
         normalizeDollarDisplayDelimiters(
-          normalizeTableRowMathDelimiters(normalizeMathFences(text)),
+          normalizeTableRowMathDelimiters(escapeCurrencyDollars(normalizeMathFences(text))),
         ),
       ),
     ),

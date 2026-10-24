@@ -1317,6 +1317,25 @@ label:has(> select#reasoning-effort) select {
   font-weight: 600;
 }
 
+/* Use the existing 6rem cell minimum on the silver-ratio scale for live prose.
+   The first column measurements stay fixed as new cells arrive. */
+.chat-markdown .chat-markdown-table-stable th,
+.chat-markdown .chat-markdown-table-stable td {
+  min-width: 14.5rem;
+  overflow-wrap: anywhere;
+}
+
+/* A later formula or code token must stay inside its frozen column. */
+.chat-markdown .chat-markdown-table-stable td > code,
+.chat-markdown .chat-markdown-table-stable th > code,
+.chat-markdown .chat-markdown-table-stable td .katex,
+.chat-markdown .chat-markdown-table-stable th .katex {
+  display: inline-block;
+  max-width: 100%;
+  overflow-x: auto;
+  vertical-align: middle;
+}
+
 .chat-markdown td:has(code),
 .chat-markdown th:has(code),
 .chat-markdown td:has(.katex),
