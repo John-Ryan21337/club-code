@@ -3,11 +3,13 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 import type { ServerProviderSkill } from "@cafecode/contracts";
 import React, {
   Children,
+  createContext,
   Suspense,
   type MouseEvent as ReactMouseEvent,
   isValidElement,
   use,
   useCallback,
+  useContext,
   memo,
   useEffect,
   useMemo,
@@ -15,7 +17,7 @@ import React, {
   useState,
   type ReactNode,
 } from "react";
-import type { Components } from "react-markdown";
+import type { Components, ExtraProps } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import { defaultUrlTransform } from "react-markdown";
 import rehypeKatex from "rehype-katex";
@@ -75,6 +77,15 @@ interface ChatMarkdownProps {
 }
 
 const EMPTY_MARKDOWN_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
+const MarkdownStreamingContext = createContext(false);
+
+// Keep the component type stable across text chunks. An inline renderer in the
+// components memo remounts the table whenever link metadata changes, resetting
+// its horizontal scroll, measured columns, and expanded dialog.
+function MarkdownTable({ node: _node, ...props }: React.ComponentProps<"table"> & ExtraProps) {
+  const isStreaming = useContext(MarkdownStreamingContext);
+  return <ChatMarkdownTable {...props} isStreaming={isStreaming} />;
+}
 
 const CODE_FENCE_LANGUAGE_REGEX = /(?:^|\s)language-([^\s]+)/;
 const MAX_HIGHLIGHT_CACHE_ENTRIES = 500;
@@ -794,9 +805,7 @@ function ChatMarkdown({
           </MarkdownCodeBlock>
         );
       },
-      table({ node: _node, children, ...props }) {
-        return <ChatMarkdownTable {...props}>{children}</ChatMarkdownTable>;
-      },
+      table: MarkdownTable,
     }),
     [
       additionalWorkspaceRoots,
@@ -811,16 +820,18 @@ function ChatMarkdown({
   );
 
   return (
-    <div className="chat-markdown w-full min-w-0 text-sm leading-relaxed text-foreground/80">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, [remarkMath, { singleDollarTextMath: true }]]}
-        rehypePlugins={[[rehypeKatex, { strict: false, throwOnError: false, trust: false }]]}
-        components={markdownComponents}
-        urlTransform={markdownUrlTransform}
-      >
-        {normalizedText}
-      </ReactMarkdown>
-    </div>
+    <MarkdownStreamingContext.Provider value={isStreaming}>
+      <div className="chat-markdown w-full min-w-0 text-sm leading-relaxed text-foreground/80">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm, [remarkMath, { singleDollarTextMath: true }]]}
+          rehypePlugins={[[rehypeKatex, { strict: false, throwOnError: false, trust: false }]]}
+          components={markdownComponents}
+          urlTransform={markdownUrlTransform}
+        >
+          {normalizedText}
+        </ReactMarkdown>
+      </div>
+    </MarkdownStreamingContext.Provider>
   );
 }
 

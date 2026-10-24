@@ -3,6 +3,34 @@ import katex from "katex";
 import { normalizeChatMarkdownMath } from "./chatMarkdownMath";
 
 describe("normalizeChatMarkdownMath", () => {
+  it.each([
+    ["Salary $85,000 to $110,000 per year", "Salary \\$85,000 to \\$110,000 per year"],
+    ["Budget $25–$40/hour", "Budget \\$25–\\$40/hour"],
+    ["| Salary | $90k-$120k |", "| Salary | \\$90k-\\$120k |"],
+    [
+      "Price $15.50 and *ordinary spaced emphasis*",
+      "Price \\$15.50 and *ordinary spaced emphasis*",
+    ],
+  ])("keeps currency as prose: %s", (source, expected) => {
+    expect(normalizeChatMarkdownMath(source)).toBe(expected);
+    expect(normalizeChatMarkdownMath(expected)).toBe(expected);
+  });
+
+  it("preserves formulas, escaped money, code spans, and link destinations", () => {
+    const source =
+      "Use $x$, $2+2=4$, $2x$, and $2\\pi r$; \\$20; `$30 to $40`; [file](https://example.com/$50).";
+    expect(normalizeChatMarkdownMath(source)).toBe(source);
+  });
+
+  it("keeps currency prices separate from a later formula", () => {
+    expect(normalizeChatMarkdownMath("Spend $20 today and compute $x+1$ next.")).toBe(
+      "Spend \\$20 today and compute $x+1$ next.",
+    );
+  });
+
+  it("protects adjacent prices before the next amount has finished streaming", () => {
+    expect(normalizeChatMarkdownMath("Prices: $20 $")).toBe("Prices: \\$20 $");
+  });
   it("converts Codex-style fenced math blocks to display math", () => {
     expect(
       normalizeChatMarkdownMath(

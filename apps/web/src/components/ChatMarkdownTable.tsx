@@ -1,5 +1,12 @@
 import { ArrowLeftIcon, ArrowRightIcon, Maximize2Icon, XIcon } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type ComponentProps } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ComponentProps,
+} from "react";
 import { useUiLocalization } from "../uiLocalization";
 import { Button } from "./ui/button";
 import {
@@ -15,13 +22,27 @@ import {
 function TableViewport({
   tableProps,
   expand,
+  isStreaming,
 }: {
   tableProps: ComponentProps<"table">;
   expand?: boolean;
+  isStreaming?: boolean;
 }) {
   const { t } = useUiLocalization();
   const viewport = useRef<HTMLDivElement>(null);
   const table = useRef<HTMLTableElement>(null);
+  const [columnWidths, setColumnWidths] = useState<ReadonlyArray<number>>([]);
+  const retainColumns = isStreaming === true || columnWidths.length > 0;
+  useLayoutEffect(() => {
+    const node = table.current;
+    if (!isStreaming || columnWidths.length > 0 || !node?.tHead?.rows[0]) return;
+    // Freeze the first visible column layout before paint. Later cells wrap in
+    // their own column instead of repeatedly moving all earlier rows. Keep the
+    // widths at completion too, so the last token does not cause another jump.
+    setColumnWidths(
+      Array.from(node.tHead.rows[0].cells, (cell) => cell.getBoundingClientRect().width),
+    );
+  }, [columnWidths.length, isStreaming, tableProps.children]);
   const [edges, setEdges] = useState({ overflow: false, left: false, right: false });
   const measure = useCallback(() => {
     const node = viewport.current;
@@ -50,7 +71,9 @@ function TableViewport({
     node?.scrollBy({ left: (direction * node.clientWidth) / Math.SQRT2, behavior: "instant" });
   };
   return (
-    <div className={`chat-markdown-table-frame ${expand ? "chat-markdown-table-expanded" : ""}`}>
+    <div
+      className={`chat-markdown-table-frame ${expand ? "chat-markdown-table-expanded" : ""} ${retainColumns ? "chat-markdown-table-stable" : ""}`}
+    >
       {edges.overflow && (
         <div className="chat-markdown-table-toolbar">
           <span className="text-xs text-muted-foreground">
@@ -105,18 +128,42 @@ function TableViewport({
         }
         onScroll={measure}
       >
-        <table {...tableProps} ref={table} />
+        <table
+          {...tableProps}
+          ref={table}
+          style={
+            columnWidths.length > 0
+              ? {
+                  ...tableProps.style,
+                  tableLayout: "fixed",
+                  width: columnWidths.reduce((sum, width) => sum + width, 0),
+                }
+              : tableProps.style
+          }
+        >
+          {columnWidths.length > 0 && (
+            <colgroup>
+              {columnWidths.map((width, index) => (
+                <col key={index} style={{ width }} />
+              ))}
+            </colgroup>
+          )}
+          {tableProps.children}
+        </table>
       </div>
     </div>
   );
 }
 
-export function ChatMarkdownTable(props: ComponentProps<"table">) {
+export function ChatMarkdownTable({
+  isStreaming = false,
+  ...props
+}: ComponentProps<"table"> & { isStreaming?: boolean }) {
   const { t } = useUiLocalization();
   const [open, setOpen] = useState(false);
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <TableViewport tableProps={props} />
+      <TableViewport tableProps={props} isStreaming={isStreaming} />
       <DialogPopup
         className="max-w-[min(96rem,calc(100vw-2rem))] max-h-[85dvh]"
         bottomStickOnMobile={false}
@@ -140,7 +187,7 @@ export function ChatMarkdownTable(props: ComponentProps<"table">) {
           <XIcon className="size-4" />
         </DialogClose>
         <div className="chat-markdown min-h-0 flex flex-col px-4 pb-4">
-          {open && <TableViewport tableProps={props} expand />}
+          {open && <TableViewport tableProps={props} isStreaming={isStreaming} expand />}
         </div>
       </DialogPopup>
     </Dialog>
