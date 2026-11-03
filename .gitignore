@@ -31,3 +31,4 @@ squashfs-root/
 dist-electron/
 .electron-runtime/
 .startup-profiles/
+/schnozzle-data/

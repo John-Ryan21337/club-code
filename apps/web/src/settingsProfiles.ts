@@ -51,6 +51,8 @@ export type SettingsProfileClientFieldPolicy =
   | "project-specific";
 
 export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
+  schnozzleEnabled: "consent",
+  schnozzleRelayOrigin: "project-specific",
   autoOpenPlanSidebar: "include",
   // Language belongs to the person using this renderer, not to a project or
   // presentation profile that another operator might load.

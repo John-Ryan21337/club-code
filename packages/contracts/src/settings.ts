@@ -707,6 +707,8 @@ export type SidebarThreadPreviewCount = typeof SidebarThreadPreviewCount.Type;
 export const DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT: SidebarThreadPreviewCount = 6;
 
 export const ClientSettingsSchema = Schema.Struct({
+  schnozzleEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  schnozzleRelayOrigin: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   autoOpenPlanSidebar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   uiLanguage: UiLanguagePreference.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_UI_LANGUAGE)),
@@ -1925,6 +1927,8 @@ export const ServerSettingsPatch = Schema.Struct({
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
+  schnozzleEnabled: Schema.optionalKey(Schema.Boolean),
+  schnozzleRelayOrigin: Schema.optionalKey(Schema.String),
   autoOpenPlanSidebar: Schema.optionalKey(Schema.Boolean),
   uiLanguage: Schema.optionalKey(UiLanguagePreference),
   onboardingCompleted: Schema.optionalKey(Schema.Boolean),
