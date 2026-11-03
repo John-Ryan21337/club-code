@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark light" />
+    <title>Amalgamating Schnozzle</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/app.mjs"></script>
+  </head>
+  <body>
+    <header>
+      <div>
+        <span class="eyebrow">THREE MINDS. ROOM TO THINK.</span>
+        <h1>Amalgamating Schnozzle</h1>
+        <p>A peculiar, indispensable attachment connecting otherwise separate contraptions.</p>
+      </div>
+      <output id="connection" role="status">Opening local storage…</output>
+    </header>
+    <main>
+      <section id="enroll">
+        <h2>Connect your device</h2>
+        <p>
+          Use the same browser to return. Your device key stays here. No GitHub account is required.
+        </p>
+        <form id="join">
+          <label>Your name<input name="name" maxlength="80" required autocomplete="name" /></label
+          ><label
+            >Invitation or setup code<textarea
+              name="secret"
+              rows="4"
+              maxlength="3000"
+              required
+              spellcheck="false"
+              autocomplete="off"
+            ></textarea></label
+          ><label
+            ><input type="checkbox" name="create" /> Create the first project with the server setup
+            code</label
+          ><label
+            >New project name<input
+              name="projectName"
+              maxlength="120"
+              value="Our shared project" /></label
+          ><button>Join project</button>
+        </form>
+      </section>
+      <div id="workspace" hidden>
+        <nav>
+          <strong id="project-name"></strong><button id="new-card">New idea</button
+          ><button id="export">Export shared context</button
+          ><button id="persist">Keep offline storage</button>
+        </nav>
+        <p class="notice">
+          Share only content that every project member may see. Shared text is context, not an
+          instruction to an AI. Nothing here runs code, merges a pull request, or changes a private
+          conversation.
+        </p>
+        <div class="layout">
+          <section>
+            <div class="section-heading">
+              <h2>Independent lanes</h2>
+              <label
+                >Show<select id="filter">
+                  <option value="all">Everything</option>
+                  <option>idea</option>
+                  <option>task</option>
+                  <option>proposal</option>
+                  <option>note</option>
+                  <option>handoff</option>
+                </select></label
+              >
+            </div>
+            <div id="cards"></div>
+          </section>
+          <aside>
+            <section>
+              <h2>Your draft</h2>
+              <p id="editing">New card · saved on this device</p>
+              <form id="compose">
+                <label
+                  >Type<select name="kind" aria-label="Type">
+                    <option>idea</option>
+                    <option>task</option>
+                    <option>proposal</option>
+                    <option>note</option>
+                    <option>handoff</option>
+                  </select></label
+                ><label
+                  >Lane<input
+                    name="lane"
+                    maxlength="80"
+                    required
+                    placeholder="Your independent approach" /></label
+                ><label>Title<input name="title" maxlength="160" required /></label
+                ><label
+                  >Context or proposal<textarea
+                    name="text"
+                    rows="10"
+                    maxlength="24000"
+                    required
+                    placeholder="Paste selected AI output, a field requirement, or your own idea. Review it before sharing."
+                  ></textarea></label
+                ><label
+                  >State<select name="state">
+                    <option>open</option>
+                    <option>working</option>
+                    <option>blocked</option>
+                    <option>done</option>
+                  </select></label
+                ><button>Send it via the Amalgamating Schnozzle</button>
+              </form>
+              <output id="draft-status" role="status"></output>
+            </section>
+            <section>
+              <h2>Outbox</h2>
+              <p>
+                Drafts and queued cards survive a disconnect. Reviews and approvals require a live
+                connection.
+              </p>
+              <div id="outbox"></div>
+            </section>
+            <section>
+              <h2>People and devices</h2>
+              <div id="members"></div>
+              <form id="invite" hidden>
+                <label
+                  >Invite as<select name="role">
+                    <option>explorer</option>
+                    <option>auditor</option>
+                    <option>approver</option>
+                  </select></label
+                ><button>Create one-use invitation</button
+                ><label
+                  >Send this privately<textarea
+                    id="invitation"
+                    rows="5"
+                    readonly
+                    spellcheck="false"
+                  ></textarea>
+                </label>
+                <p>
+                  Expires after 24 hours. Send the relay address with it. Treat the block as a
+                  password until it is used.
+                </p>
+              </form>
+            </section>
+            <section>
+              <h2>While you were away</h2>
+              <p id="since"></p>
+              <div id="activity"></div>
+            </section>
+          </aside>
+        </div>
+      </div>
+      <p id="error" role="alert"></p>
+      <button id="rejoin" hidden>Join with a new invitation</button>
+    </main>
+    <footer>
+      Outgoing HTTPS · durable relay · no automatic context adoption. The relay operator can read
+      shared project content.
+    </footer>
+  </body>
+</html>

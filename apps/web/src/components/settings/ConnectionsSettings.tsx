@@ -1,3 +1,4 @@
+import { SchnozzleSettings } from "./SchnozzleSettings";
 import {
   ChevronDownIcon,
   DownloadIcon,
@@ -1813,6 +1814,7 @@ export function ConnectionsSettings() {
   return (
     <SettingsPageContainer>
       <SavedEnvironmentsSettings />
+      <SchnozzleSettings />
       {canManageLocalBackend ? (
         <>
           <SettingsSection title="Manage local backend">
