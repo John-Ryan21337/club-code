@@ -9,6 +9,7 @@ import {
   ThreadId,
 } from "@cafecode/contracts";
 import { stopStartupCpuProfiler } from "@cafecode/shared/startupProfiler";
+import { savedProfilesMayReferenceImage } from "./settingsProfileAssets.ts";
 import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -440,13 +441,19 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
       yield* runStartupPhase(
         "ambient-images.orphan-sweep",
         Effect.gen(function* () {
+          const profileFileSystem = yield* FileSystem.FileSystem;
+          const profilePath = yield* Path.Path;
           const result = yield* ambientImages.sweepUnreferencedImages({
             isReferenced: (id) =>
               clientSettings.getSettings.pipe(
-                Effect.map(
-                  (settings) =>
-                    settings.ambientImageAsset?.id === id ||
-                    settings.ambientImageCycleAssets.some((asset) => asset.id === id),
+                Effect.flatMap((settings) =>
+                  settings.ambientImageAsset?.id === id ||
+                  settings.ambientImageCycleAssets.some((asset) => asset.id === id)
+                    ? Effect.succeed(true)
+                    : savedProfilesMayReferenceImage(serverConfig.stateDir, id).pipe(
+                        Effect.provideService(FileSystem.FileSystem, profileFileSystem),
+                        Effect.provideService(Path.Path, profilePath),
+                      ),
                 ),
                 // Storage cleanup always fails closed when the current settings
                 // reference cannot be confirmed.

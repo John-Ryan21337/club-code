@@ -23,6 +23,7 @@ import {
 } from "@cafecode/contracts";
 import { CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT } from "@cafecode/shared/codexCompaction";
 import { createModelSelection } from "@cafecode/shared/model";
+import { withCodexDelegationRequest } from "../CodexDelegation.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, vi } from "@effect/vitest";
 
@@ -258,6 +259,35 @@ const providerSessionDirectoryTestLayer = Layer.succeed(ProviderSessionDirectory
 });
 
 const validationRuntimeFactory = makeRuntimeFactory();
+it.effect("reads custom guidance into the Codex session without changing user input", () =>
+  Effect.gen(function* () {
+    const config = yield* ServerConfig;
+    fs.writeFileSync(config.systemPromptPath, "  Follow project rules.  ", "utf8");
+    const runtimeFactory = makeRuntimeFactory();
+    const adapter = yield* makeCodexAdapter(decodeCodexSettings({}), {
+      makeRuntime: runtimeFactory.factory,
+    });
+    yield* adapter.startSession({
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("native-custom"),
+      runtimeMode: "approval-required",
+    });
+    assert.equal(runtimeFactory.lastRuntime?.options.customInstructions, "Follow project rules.");
+    yield* adapter.sendTurn({
+      threadId: asThreadId("native-custom"),
+      input: "Implement the feature.",
+    });
+    assert.equal(
+      runtimeFactory.lastRuntime?.sendTurnImpl.mock.calls[0]?.[0].input,
+      "Implement the feature.",
+    );
+  }).pipe(
+    Effect.provide(ServerConfig.layerTest(process.cwd(), { prefix: "club-native-custom-" })),
+    Effect.provide(providerSessionDirectoryTestLayer),
+    Effect.provide(ServerSettingsService.layerTest()),
+    Effect.provide(NodeServices.layer),
+  ),
+);
 const validationLayer = it.layer(
   Layer.effect(
     CodexAdapter,
@@ -299,6 +329,39 @@ validationLayer("CodexAdapterLive validation", (it) => {
       assert.equal(validationRuntimeFactory.factory.mock.calls.length, 0);
     }),
   );
+  it.effect("defaults new Codex sessions and subsequent turns to explicit standard speed", () =>
+    Effect.gen(function* () {
+      validationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("default-fast-off"),
+        runtimeMode: "full-access",
+      });
+      assert.equal(validationRuntimeFactory.factory.mock.calls[0]?.[0].serviceTier, "default");
+      const runtime = validationRuntimeFactory.lastRuntime;
+      assert.ok(runtime);
+      for (const fastMode of [true, undefined, false]) {
+        yield* Effect.ignore(
+          adapter.sendTurn({
+            threadId: asThreadId("default-fast-off"),
+            input: "hello",
+            modelSelection: createModelSelection(
+              ProviderInstanceId.make("codex"),
+              "gpt-6-astra",
+              fastMode === undefined ? [] : [{ id: "fastMode", value: fastMode }],
+            ),
+            attachments: [],
+          }),
+        );
+        assert.equal(
+          runtime.sendTurnImpl.mock.lastCall?.[0].serviceTier,
+          fastMode === true ? "priority" : "default",
+        );
+      }
+    }),
+  );
+
   it.effect("maps Codex model options and thread-bound agent limits before session start", () =>
     Effect.gen(function* () {
       validationRuntimeFactory.factory.mockClear();
@@ -338,6 +401,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
         cwd: process.cwd(),
         model: "gpt-5.3-codex",
         ossMode: false,
+        modelProvider: "openai",
         providerInstanceId: ProviderInstanceId.make("codex"),
         serviceTier: "priority",
         threadId: asThreadId("thread-1"),
@@ -431,7 +495,7 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       );
 
       assert.deepStrictEqual(runtime.sendTurnImpl.mock.calls[0]?.[0], {
-        input: "hello",
+        input: withCodexDelegationRequest("hello", true, 16),
         model: "gpt-5.3-codex",
         effort: "high",
         serviceTier: "priority",
@@ -466,6 +530,34 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
         expectedTurnId: asTurnId("turn-active"),
         input: "keep going but narrow the scope",
       });
+    }),
+  );
+
+  it.effect("sends the exact thread's delegation choice and worker ceiling", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("delegation-choice"),
+        runtimeMode: "approval-required",
+        codexSubagentThreadLimit: 64,
+      });
+      const runtime = sessionRuntimeFactory.lastRuntime;
+      assert.ok(runtime);
+      for (const enabled of [true, false]) {
+        yield* adapter.sendTurn({
+          threadId: asThreadId("delegation-choice"),
+          input: "Review this project.",
+          modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-6.1-sol", [
+            { id: "codexSubagentThreadLimit", value: "64" },
+            { id: "codexAutoDelegate", value: enabled },
+          ]),
+        });
+        assert.equal(
+          runtime.sendTurnImpl.mock.calls.at(-1)?.[0].input,
+          withCodexDelegationRequest("Review this project.", enabled, 64),
+        );
+      }
     }),
   );
 
@@ -516,7 +608,7 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       );
 
       assert.deepStrictEqual(runtime.sendTurnImpl.mock.calls[0]?.[0], {
-        input: "hello",
+        input: withCodexDelegationRequest("hello", true, 16),
         model: "gpt-5.3-codex",
         effort: "high",
         serviceTier: "priority",
@@ -633,6 +725,33 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       assert.ok(runtime);
       assert.equal(runtime.options.autoCompactTokenLimit, 120_000);
       assert.equal(runtime.options.ultraCaching, true);
+    }).pipe(Effect.provide(localLayer));
+  });
+
+  it.effect("routes Vertex AI through its own runtime instead of the OpenAI HTTP override", () => {
+    const localRuntimeFactory = makeRuntimeFactory();
+    const localLayer = Layer.effect(
+      CodexAdapter,
+      makeCodexAdapter(decodeCodexSettings({ modelProvider: "gcp" }), {
+        makeRuntime: localRuntimeFactory.factory,
+      }),
+    ).pipe(
+      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(providerSessionDirectoryTestLayer),
+      Layer.provideMerge(NodeServices.layer),
+    );
+    return Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("vertex-thread"),
+        runtimeMode: "approval-required",
+      });
+      const input = localRuntimeFactory.factory.mock.calls[0]?.[0];
+      assert.equal(input?.modelProvider, "gcp");
+      assert.equal(input?.transportPolicy, undefined);
+      assert.equal(input?.runtimeMode, "approval-required");
     }).pipe(Effect.provide(localLayer));
   });
 
@@ -1572,6 +1691,105 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       }
       assert.equal(firstEvent.value.turnId, "turn-1");
       assert.equal(firstEvent.value.payload.message, "Reconnecting... 2/5");
+    }),
+  );
+
+  for (const isChild of [false, true]) {
+    it.effect(`preserves safety findings without transport retries (child=${isChild})`, () =>
+      Effect.gen(function* () {
+        const { adapter, runtime } = yield* startLifecycleRuntime();
+        const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+        yield* runtime.emit({
+          id: asEventId("evt-safety-block"),
+          kind: "notification",
+          provider: ProviderDriverKind.make("codex"),
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-1"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+          method: isChild ? "codex.subagent/error" : "error",
+          payload: {
+            threadId: "provider-thread-1",
+            turnId: "turn-1",
+            error: {
+              message: "Blocked by provider safety systems.",
+              codexErrorInfo: "misalignmentPolicyViolation",
+              additionalDetails: null,
+              misalignment: {
+                detailedExplanation: "A private document may have been sent to another service.",
+                steer: { message: "Do not execute this fixture instruction." },
+                reviewTarget: "opaque-review-token",
+              },
+            },
+            willRetry: true,
+          },
+        } satisfies ProviderEvent);
+        const first = yield* Fiber.join(firstEventFiber);
+        assert.equal(first._tag, "Some");
+        if (first._tag !== "Some") return;
+        assert.equal(first.value.type, isChild ? "runtime.warning" : "runtime.error");
+        if (first.value.type !== "runtime.warning" && first.value.type !== "runtime.error") return;
+        assert.match(first.value.payload.message, /Review this thread's safety finding/);
+        assert.doesNotMatch(first.value.payload.message, /A private document may have been sent/);
+        assert.doesNotMatch(
+          JSON.stringify(first.value.payload),
+          /fixture instruction|opaque-review-token/,
+        );
+        assert.match(
+          JSON.stringify(first.value.payload.detail),
+          /A private document may have been sent/,
+        );
+        assert.equal((first.value.payload.detail as { willRetry: boolean }).willRetry, false);
+      }),
+    );
+  }
+
+  it.effect("retains safety findings when only turn completion supplies the error", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+      yield* runtime.emit({
+        id: asEventId("evt-completed-safety-block"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "turn/completed",
+        payload: {
+          threadId: "provider-thread-1",
+          turn: {
+            id: "turn-1",
+            items: [],
+            itemsView: "notLoaded",
+            status: "failed",
+            error: {
+              message: "Blocked by provider safety systems.",
+              codexErrorInfo: "misalignmentPolicyViolation",
+              additionalDetails: null,
+              misalignment: {
+                detailedExplanation: "A private document may have been sent to another service.",
+              },
+            },
+            startedAt: 1_781_212_032,
+            completedAt: 1_781_212_040,
+            durationMs: 7_502,
+          },
+        },
+      } satisfies ProviderEvent);
+      const first = yield* Fiber.join(firstEventFiber);
+      assert.equal(first._tag, "Some");
+      if (first._tag !== "Some" || first.value.type !== "turn.completed")
+        assert.fail("Expected turn completion");
+      assert.equal(first.value.payload.state, "failed");
+      assert.match(first.value.payload.errorMessage ?? "", /Review this thread's safety finding/);
+      assert.doesNotMatch(
+        first.value.payload.errorMessage ?? "",
+        /A private document may have been sent/,
+      );
+      assert.match(
+        JSON.stringify(first.value.raw?.payload),
+        /A private document may have been sent/,
+      );
     }),
   );
 
@@ -2545,6 +2763,20 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
 
       const ignoredEvents = [
         {
+          id: asEventId("evt-codex-gateway-login"),
+          kind: "notification" as const,
+          provider: ProviderDriverKind.make("codex"),
+          threadId: asThreadId("thread-1"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+          method: "account/gatewayOAuth/changed",
+          payload: {
+            providerId: "private-gateway-account",
+            status: "inProgress",
+            authUrl: "https://example.invalid/login?secret=private-token",
+            error: "private-gateway-error",
+          },
+        },
+        {
           id: asEventId("evt-codex-model-safety-buffering"),
           kind: "notification" as const,
           provider: ProviderDriverKind.make("codex"),
@@ -3134,6 +3366,20 @@ it.effect("flushes managed native logs when the adapter layer shuts down", () =>
 
       const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
       yield* runtime.emit({
+        id: asEventId("evt-native-log-gateway-login"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-logger"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "account/gatewayOAuth/changed",
+        payload: {
+          providerId: "native-log-secret-gateway-account",
+          status: "inProgress",
+          authUrl: "https://example.invalid/login?secret=native-log-secret-token",
+          error: "native-log-secret-gateway-error",
+        },
+      } satisfies ProviderEvent);
+      yield* runtime.emit({
         id: asEventId("evt-native-log"),
         kind: "notification",
         provider: ProviderDriverKind.make("codex"),
@@ -3177,6 +3423,7 @@ it.effect("flushes managed native logs when the adapter layer shuts down", () =>
       assert.equal(fs.existsSync(threadLogPath), true);
       const contents = fs.readFileSync(threadLogPath, "utf8");
       assert.match(contents, /NTIVE: .*"model":"gpt-5\.4"/);
+      assert.doesNotMatch(contents, /account\/gatewayOAuth\/changed/);
       assert.doesNotMatch(contents, /native-log-secret/);
     } finally {
       if (!scopeClosed) {

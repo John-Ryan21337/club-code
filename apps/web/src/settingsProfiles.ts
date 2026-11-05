@@ -6,30 +6,26 @@ import {
 import * as Schema from "effect/Schema";
 import { useEffect, useSyncExternalStore } from "react";
 
+import {
+  captureProfileExtras,
+  sanitizeProfileExtras,
+  type SettingsProfileExtras,
+} from "./settingsProfileExtras";
+
 export const SETTINGS_PROFILE_LIBRARY_STORAGE_KEY = "cafe-code:settings-profile-library:v1";
-export const SETTINGS_PROFILE_LIBRARY_VERSION = 4;
-const LEGACY_SETTINGS_PROFILE_LIBRARY_VERSIONS = new Set([1, 2, 3]);
+export const SETTINGS_PROFILE_LIBRARY_VERSION = 5;
+const LEGACY_SETTINGS_PROFILE_LIBRARY_VERSIONS = new Set([1, 2, 3, 4]);
 export const SETTINGS_PROFILE_MAX_COUNT = 32;
 export const SETTINGS_PROFILE_MAX_NAME_LENGTH = 64;
-export const SETTINGS_PROFILE_MAX_STORAGE_BYTES = 512 * 1024;
+export const SETTINGS_PROFILE_MAX_STORAGE_BYTES = 2 * 1024 * 1024;
 
 export type SettingsProfileTheme = "light" | "dark" | "system";
 
 /**
- * Settings profiles are local presentation presets, not server snapshots.
- *
- * This exhaustive policy is a security boundary. Every ClientSettings field must be classified,
- * so adding a field to the shared schema fails typecheck until profiles deliberately include or
- * exclude it. Include renderer-only appearance, layout, theme-adjacent, and usability preferences.
- * Exclude fields that carry identity, raw paths/assets, consent, or authority data, and fields whose
- * application activates providers, native-machine behavior, or exact-thread behavior. Ambient
- * media configuration is deliberately profile-owned: YouTube sources are validated public
- * identifiers and image references are authenticated, content-addressed server assets rather than
- * local paths or bytes. Media activation remains an explicit choice on each client.
- *
- * Add compatible client preferences deliberately in a later document version or as an
- * optional field in this version. Older profiles patch only the keys they actually contain,
- * so a newly allowlisted preference is never reset just because an older profile is loaded.
+ * Profiles capture user preferences, including feature switches. Loading a profile is an
+ * explicit request to restore them. Credentials, OS permissions, bookkeeping, and
+ * exact-thread execution grants remain outside this document. Every new client field
+ * must be classified here. Older sparse profiles only patch the fields they contain.
  */
 export type SettingsProfileClientFieldPolicy =
   | "include"
@@ -52,22 +48,18 @@ export type SettingsProfileClientFieldPolicy =
 
 export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   autoOpenPlanSidebar: "include",
-  // Language belongs to the person using this renderer, not to a project or
-  // presentation profile that another operator might load.
-  uiLanguage: "renderer-identity",
+  uiLanguage: "include",
   onboardingCompleted: "client-bookkeeping",
   dismissedFirstRunHints: "client-bookkeeping",
-  // Notification permission/subscription state is owned by its settings controller.
   notificationsEnabled: "consent",
-  completionAlertSoundEnabled: "event-output-activation",
-  completionAlertSpeechEnabled: "event-output-activation",
+  completionAlertSoundEnabled: "include",
+  completionAlertSpeechEnabled: "include",
   completionAlertLanguage: "include",
   completionAlertEnglishVoiceGender: "include",
   completionAlertJapaneseVoiceGender: "include",
   completionAlertDualStereoOrder: "include",
-  // A profile must not weaken or silently change destructive-action confirmations.
-  confirmThreadArchive: "destructive-action-safety",
-  confirmThreadDelete: "destructive-action-safety",
+  confirmThreadArchive: "include",
+  confirmThreadDelete: "include",
   dismissedProviderUpdateNotificationKeys: "client-bookkeeping",
   diffIgnoreWhitespace: "include",
   diffWordWrap: "include",
@@ -77,24 +69,18 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   worldClockEnabled: "include",
   worldClockStyle: "include",
   worldClockLocationIds: "include",
-  // Weather is a separate network/approximate-location consent.
-  worldClockWeatherEnabled: "consent",
-  // The imported document contains normalized presentation only. Loading a
-  // profile may select it, but a profile must not activate the renderer.
-  hexagonsBackgroundEnabled: "ambient-activation",
+  worldClockWeatherEnabled: "include",
+  hexagonsBackgroundEnabled: "include",
   hexagonsBackgroundPresetJson: "include",
   ambientBackgroundManuscriptOpacity: "include",
   ambientBackgroundSidebarOpacity: "include",
-  fallingEffectsEnabled: "ambient-activation",
-  atmosphereConsoleEnabled: "ambient-activation",
-  fallingEffectsOverCinemaEnabled: "ambient-activation",
-  // Lighting sync controls native hardware and therefore requires a direct
-  // operator choice on this host; presentation profiles cannot activate or
-  // retarget it implicitly.
-  hardwareLightingSyncEnabled: "native-machine-control",
-  hardwareLightingControllerIds: "native-machine-control",
-  hardwareLightingBrightness: "native-machine-control",
-  hardwareLightingRestoreOnDisable: "native-machine-control",
+  fallingEffectsEnabled: "include",
+  atmosphereConsoleEnabled: "include",
+  fallingEffectsOverCinemaEnabled: "include",
+  hardwareLightingSyncEnabled: "include",
+  hardwareLightingControllerIds: "include",
+  hardwareLightingBrightness: "include",
+  hardwareLightingRestoreOnDisable: "include",
   fallingEffectKind: "include",
   fallingEffectMatrixBaseFontSize: "include",
   fallingEffectColor: "include",
@@ -108,26 +94,19 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   fallingEffectOpacity: "include",
   fallingEffectSpeed: "include",
   fallingEffectDensity: "include",
-  // Aggregate token timing reveals when any project on this server is active.
-  // Loading a visual/layout profile must not begin observing it implicitly.
-  fallingEffectUsageReactive: "live-operational-input",
+  fallingEffectUsageReactive: "include",
   fallingEffectJapaneseRatio: "include",
   fallingEffect2chEnriched: "include",
-  // These switches admit live provider/thread activity into an ambient renderer.
-  // Keep that choice local and explicit instead of carrying it in a layout profile.
-  fallingEffectLiveWorkVocabulary: "live-operational-input",
-  fallingEffectActivityLinks: "live-operational-input",
-  fallingEffectActivityLinkNetworkEnabled: "live-operational-input",
-  fallingEffectActivityLinkDatabaseEnabled: "live-operational-input",
-  fallingEffectActivityLinkBuildEnabled: "live-operational-input",
-  fallingEffectActivityLinkAgentEnabled: "live-operational-input",
-  fallingEffectActivityLinkWorkEnabled: "live-operational-input",
+  fallingEffectLiveWorkVocabulary: "include",
+  fallingEffectActivityLinks: "include",
+  fallingEffectActivityLinkNetworkEnabled: "include",
+  fallingEffectActivityLinkDatabaseEnabled: "include",
+  fallingEffectActivityLinkBuildEnabled: "include",
+  fallingEffectActivityLinkAgentEnabled: "include",
+  fallingEffectActivityLinkWorkEnabled: "include",
   fallingEffectActivityLinkColorMode: "include",
   fallingEffectActivityLinkRetentionSeconds: "include",
-  // A profile can save bounded media sources and presentation, but it must not
-  // start playback or an image cycle. Activation remains an explicit choice on
-  // this client after the profile loads.
-  ambientVideoEnabled: "external-media-activation",
+  ambientVideoEnabled: "include",
   ambientVideoSource: "include",
   ambientVideoLayoutMode: "include",
   ambientVideoPresetPlacement: "include",
@@ -137,10 +116,10 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   ambientVideoGlowMode: "include",
   ambientVideoGlowColor: "include",
   ambientVideoGlowOpacity: "include",
-  ambientImageEnabled: "external-media-activation",
+  ambientImageEnabled: "include",
   ambientImageAsset: "include",
   ambientImageCycleAssets: "include",
-  ambientImageCycleEnabled: "external-media-activation",
+  ambientImageCycleEnabled: "include",
   ambientImageCycleSeconds: "include",
   ambientImagePresentationMode: "include",
   ambientImageLayoutMode: "include",
@@ -153,38 +132,36 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   showSidebarMascot: "include",
   showSidebarAttribution: "include",
   showComposerThreadAutomationControls: "include",
+  promptSuggestionsEnabled: "include",
   brandWordmarkPrefix: "include",
-  sidebarBrandImage: "local-asset-reference",
-  sidebarBrandImageDataUrl: "local-asset-reference",
+  sidebarBrandImage: "include",
+  sidebarBrandImageDataUrl: "include",
   sidebarStarSpeed: "include",
   workflowObservatoryEnabled: "include",
   workflowStallWarningSeconds: "include",
-  // Enabling or polling provider usage can invoke provider/account-specific work.
-  providerUsageWidgetEnabled: "provider-operation",
-  providerUsagePollMinutes: "provider-operation",
-  modelPacingEnabled: "execution-policy",
-  modelPacingReservePercent: "execution-policy",
-  // These compatibility fields cannot authorize or reconfigure exact-thread Auto Nudge.
+  providerUsageWidgetEnabled: "include",
+  providerUsagePollMinutes: "include",
+  modelPacingEnabled: "include",
+  modelPacingReservePercent: "include",
   autoNudgeMode: "exact-thread-authority",
   autoNudgeBackgroundContinuation: "exact-thread-authority",
   autoNudgeMaxRounds: "exact-thread-authority",
-  ambianceEnabled: "ambient-activation",
+  ambianceEnabled: "include",
   ambianceEffect: "include",
   ambianceIntensity: "include",
-  // This controls whether ambiance observes the current thread's live signals.
-  ambianceReactMode: "live-operational-input",
+  ambianceReactMode: "include",
   ambianceSurfaceSidebar: "include",
   ambianceSurfaceThread: "include",
   ambianceSurfaceComposer: "include",
   ambianceColor: "include",
   themeAccentColor: "include",
   appAccentColor: "include",
-  defaultEditor: "native-machine-control",
-  favorites: "provider-model-state",
-  providerModelPreferences: "provider-model-state",
-  powerSaveBlockerMode: "native-machine-control",
+  defaultEditor: "include",
+  favorites: "include",
+  providerModelPreferences: "include",
+  powerSaveBlockerMode: "include",
   sidebarProjectGroupingMode: "include",
-  sidebarProjectGroupingOverrides: "project-specific",
+  sidebarProjectGroupingOverrides: "include",
   sidebarProjectSortOrder: "include",
   sidebarThreadSortOrder: "include",
   sidebarThreadPreviewCount: "include",
@@ -214,12 +191,12 @@ function includedSettingsProfileClientKeys(): readonly SettingsProfileClientKey[
 export const SETTINGS_PROFILE_CLIENT_KEYS = includedSettingsProfileClientKeys();
 export type SettingsProfileClientSettings = Partial<Pick<ClientSettings, SettingsProfileClientKey>>;
 
-export interface SettingsProfilePayload {
+export interface SettingsProfilePayload extends SettingsProfileExtras {
   readonly theme: SettingsProfileTheme;
   readonly clientSettings: SettingsProfileClientSettings;
 }
 
-export interface SettingsProfile {
+export interface SettingsProfile extends SettingsProfileExtras {
   readonly id: string;
   readonly name: string;
   readonly theme: SettingsProfileTheme;
@@ -256,6 +233,8 @@ export interface SettingsProfileLibraryStore {
   readonly remove: (profileId: string) => boolean;
   /** Re-read the current document after another tab or window changes local storage. */
   readonly refreshFromStorage: () => void;
+  /** Restore the desktop copy even when the browser cache cannot be written. */
+  readonly restoreFromDisk: (raw: string) => void;
   /** @internal Test-only reset for isolated browser lifecycle coverage. */
   readonly resetForTests: (clearStorage?: boolean) => void;
 }
@@ -267,7 +246,7 @@ export class SettingsProfileError extends Error {
   }
 }
 
-interface PersistedSettingsProfile {
+interface PersistedSettingsProfile extends SettingsProfileExtras {
   readonly name: string;
   readonly theme: SettingsProfileTheme;
   readonly clientSettings: SettingsProfileClientSettings;
@@ -383,6 +362,10 @@ export function captureSettingsProfilePayload(
   return {
     theme,
     clientSettings: sanitizeSettingsProfileClientSettings(settings),
+    ...captureProfileExtras(
+      settings,
+      typeof window === "undefined" ? undefined : (resolveStorage() ?? undefined),
+    ),
   };
 }
 
@@ -391,6 +374,15 @@ export function settingsProfileMatches(
   payload: SettingsProfilePayload,
 ): boolean {
   if (profile.theme !== payload.theme) return false;
+  // Sparse older profiles only compare the sections they contain.
+  for (const key of ["localPreferences", "serverPreferences", "windowOpacity"] as const) {
+    if (
+      profile[key] !== undefined &&
+      payload[key] !== undefined &&
+      JSON.stringify(profile[key]) !== JSON.stringify(payload[key])
+    )
+      return false;
+  }
   for (const key of SETTINGS_PROFILE_CLIENT_KEYS) {
     const profileHasKey = Object.prototype.hasOwnProperty.call(profile.clientSettings, key);
     const payloadHasKey = Object.prototype.hasOwnProperty.call(payload.clientSettings, key);
@@ -468,6 +460,7 @@ function parsePersistedProfiles(raw: string | null): ParsedSettingsProfileLibrar
         name,
         theme: record.theme,
         clientSettings: sanitizeSettingsProfileClientSettings(record.clientSettings),
+        ...sanitizeProfileExtras(candidate),
         createdAt,
         updatedAt,
       });
@@ -501,6 +494,7 @@ function toPersistedProfile(profile: SettingsProfile): PersistedSettingsProfile 
     // already sanitize. This prevents a stale or externally mutated object
     // from smuggling authority, consent, identity, or raw local asset fields to storage.
     clientSettings: sanitizeSettingsProfileClientSettings(profile.clientSettings),
+    ...cloneAndFreezeProfileValue(sanitizeProfileExtras(profile)),
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
   };
@@ -513,6 +507,7 @@ function freezeSettingsProfileLibrarySnapshot(
     Object.freeze({
       ...profile,
       clientSettings: sanitizeSettingsProfileClientSettings(profile.clientSettings),
+      ...cloneAndFreezeProfileValue(sanitizeProfileExtras(profile)),
     }),
   );
   return Object.freeze({
@@ -554,11 +549,16 @@ export function createSettingsProfileLibraryStore(
     try {
       const serialized = JSON.stringify({
         version: SETTINGS_PROFILE_LIBRARY_VERSION,
+        savedAt: new Date().toISOString(),
         activeProfileId: next.activeProfileId,
         profiles: next.profiles.map(toPersistedProfile),
       });
       if (new TextEncoder().encode(serialized).byteLength > SETTINGS_PROFILE_MAX_STORAGE_BYTES) {
         return false;
+      }
+      const previous = storage.getItem(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY);
+      if (previous !== null && previous !== serialized) {
+        storage.setItem(`${SETTINGS_PROFILE_LIBRARY_STORAGE_KEY}:previous`, previous);
       }
       storage.setItem(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY, serialized);
       lastObservedStorageDocument = serialized;
@@ -574,12 +574,31 @@ export function createSettingsProfileLibraryStore(
     return persisted;
   };
 
-  if (parsedInitialDocument.requiresRewrite) {
-    // Best-effort migration/scrub. The in-memory snapshot is safe even when
-    // storage is blocked; a later mutation or activation retries persistence.
-    persist(snapshot);
-  }
-
+  const refreshBeforeMutation = () => {
+    const document = readStorageDocument();
+    if (!document.ok)
+      throw new SettingsProfileError(
+        "Profile storage could not be read. Try again before changing profiles.",
+      );
+    if (document.raw !== null) {
+      let decoded;
+      try {
+        decoded = JSON.parse(document.raw);
+      } catch {
+        throw new SettingsProfileError(
+          "Profile storage is damaged. The saved data has been preserved.",
+        );
+      }
+      if (![1, 2, 3, 4, 5].includes(decoded.version) || !Array.isArray(decoded.profiles)) {
+        throw new SettingsProfileError(
+          "This profile library needs a compatible app version. The saved data has been preserved.",
+        );
+      }
+    }
+    if (document.raw === lastObservedStorageDocument) return;
+    lastObservedStorageDocument = document.raw;
+    emit(parsePersistedProfiles(document.raw).snapshot);
+  };
   return {
     getSnapshot: () => snapshot,
     subscribe: (listener) => {
@@ -588,6 +607,7 @@ export function createSettingsProfileLibraryStore(
     },
     resolve: (profileId) => snapshot.profiles.find((profile) => profile.id === profileId) ?? null,
     upsert: (nameInput, payload) => {
+      refreshBeforeMutation();
       const name = normalizedName(nameInput);
       if (!isTheme(payload.theme)) {
         throw new SettingsProfileError("Choose a valid light, dark, or system theme.");
@@ -605,6 +625,7 @@ export function createSettingsProfileLibraryStore(
         name,
         theme: payload.theme,
         clientSettings: sanitizeSettingsProfileClientSettings(payload.clientSettings),
+        ...sanitizeProfileExtras(payload),
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       };
@@ -619,11 +640,13 @@ export function createSettingsProfileLibraryStore(
       return { profile: storedProfile, persisted, replaced: existing !== undefined };
     },
     updateActive: (payload) => {
+      const expectedActiveId = snapshot.activeProfileId;
+      refreshBeforeMutation();
       if (!isTheme(payload.theme)) {
         throw new SettingsProfileError("Choose a valid light, dark, or system theme.");
       }
-      const active = snapshot.activeProfileId
-        ? snapshot.profiles.find((profile) => profile.id === snapshot.activeProfileId)
+      const active = expectedActiveId
+        ? snapshot.profiles.find((profile) => profile.id === expectedActiveId)
         : undefined;
       if (!active) {
         throw new SettingsProfileError("Choose an active profile before updating it.");
@@ -632,6 +655,7 @@ export function createSettingsProfileLibraryStore(
         ...active,
         theme: payload.theme,
         clientSettings: sanitizeSettingsProfileClientSettings(payload.clientSettings),
+        ...sanitizeProfileExtras(payload),
         updatedAt: new Date().toISOString(),
       };
       const profiles = snapshot.profiles.map((candidate) =>
@@ -645,6 +669,7 @@ export function createSettingsProfileLibraryStore(
       return { profile: storedProfile, persisted, replaced: true };
     },
     rename: (profileId, nameInput) => {
+      refreshBeforeMutation();
       const active = snapshot.profiles.find((profile) => profile.id === profileId);
       if (!active) throw new SettingsProfileError("That settings profile no longer exists.");
       const name = normalizedName(nameInput);
@@ -674,6 +699,7 @@ export function createSettingsProfileLibraryStore(
       return { profile: storedProfile, persisted, replaced: true };
     },
     activate: (profileId) => {
+      refreshBeforeMutation();
       if (profileId !== null && !snapshot.profiles.some((profile) => profile.id === profileId)) {
         return false;
       }
@@ -684,6 +710,7 @@ export function createSettingsProfileLibraryStore(
       return replace({ ...snapshot, activeProfileId: profileId });
     },
     remove: (profileId) => {
+      refreshBeforeMutation();
       if (!snapshot.profiles.some((profile) => profile.id === profileId)) return false;
       const profiles = snapshot.profiles.filter((profile) => profile.id !== profileId);
       return replace({
@@ -696,11 +723,12 @@ export function createSettingsProfileLibraryStore(
       if (!nextDocument.ok || nextDocument.raw === lastObservedStorageDocument) return;
       lastObservedStorageDocument = nextDocument.raw;
       const parsed = parsePersistedProfiles(nextDocument.raw);
-      if (parsed.requiresRewrite) {
-        replace(parsed.snapshot);
-      } else {
-        emit(parsed.snapshot);
-      }
+      emit(parsed.snapshot);
+    },
+    restoreFromDisk: (raw) => {
+      const current = readStorageDocument();
+      lastObservedStorageDocument = current.ok ? current.raw : null;
+      emit(parsePersistedProfiles(raw).snapshot);
     },
     resetForTests: (clearStorage = true) => {
       if (clearStorage && storage !== null) {
@@ -734,8 +762,132 @@ export function useSettingsProfileLibrary(): SettingsProfileLibrarySnapshot {
       }
     };
     window.addEventListener("storage", refreshFromOtherWindow);
+    void hydrateSettingsProfileLibrary();
     settingsProfileLibraryStore.refreshFromStorage();
     return () => window.removeEventListener("storage", refreshFromOtherWindow);
   }, []);
   return snapshot;
+}
+
+let profileHydration: Promise<void> | null = null;
+let profileHydrationError: string | null = null;
+let profilesReady =
+  typeof window === "undefined" || !window.desktopBridge?.getSettingsProfileLibrary;
+const hydrationListeners = new Set<() => void>();
+export function hydrateSettingsProfileLibrary(): Promise<void> {
+  if (profilesReady) return Promise.resolve();
+  if (profileHydration) return profileHydration;
+  profileHydration = (async () => {
+    const diskDocument = await window.desktopBridge?.getSettingsProfileLibrary?.();
+    const storage = resolveStorage();
+    const localDocument = storage?.getItem(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY) ?? null;
+    const timestamp = (raw: string | null | undefined): number => {
+      if (!raw) return -1;
+      try {
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed.profiles)) return -1;
+        if (parsed.version > SETTINGS_PROFILE_LIBRARY_VERSION)
+          throw new SettingsProfileError("This profile library requires a newer app version.");
+        return Math.max(
+          Date.parse(parsed.savedAt) || 0,
+          ...parsed.profiles.map(
+            (profile: { updatedAt?: string }) => Date.parse(profile.updatedAt ?? "") || 0,
+          ),
+        );
+      } catch (error) {
+        if (error instanceof SettingsProfileError) throw error;
+        return -1;
+      }
+    };
+    // A renderer save may have completed just before an interrupted disk write.
+    // Keep that newer library instead of rolling it back to the older disk copy.
+    const preferLocal = timestamp(localDocument) > timestamp(diskDocument);
+    const document = preferLocal ? localDocument : diskDocument;
+    if (document) {
+      try {
+        const previous = storage?.getItem(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY);
+        if (previous && previous !== document)
+          storage?.setItem(`${SETTINGS_PROFILE_LIBRARY_STORAGE_KEY}:previous`, previous);
+        storage?.setItem(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY, document);
+      } catch {
+        /* The disk copy remains available when the browser cache is full. */
+      }
+      settingsProfileLibraryStore.restoreFromDisk(document);
+      if (preferLocal) await window.desktopBridge?.setSettingsProfileLibrary?.(document);
+    }
+    if (!document && storage) {
+      const raw = storage.getItem(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY);
+      if (raw !== null) {
+        const decoded = JSON.parse(raw);
+        if (![1, 2, 3, 4, 5].includes(decoded.version) || !Array.isArray(decoded.profiles))
+          throw new Error("The saved profile library cannot be migrated safely.");
+        const snapshot = settingsProfileLibraryStore.getSnapshot();
+        await window.desktopBridge?.setSettingsProfileLibrary?.(
+          JSON.stringify({
+            version: SETTINGS_PROFILE_LIBRARY_VERSION,
+            activeProfileId: snapshot.activeProfileId,
+            profiles: snapshot.profiles.map(toPersistedProfile),
+          }),
+        );
+      }
+    }
+    profilesReady = true;
+    profileHydrationError = null;
+    for (const listener of hydrationListeners) listener();
+  })().catch(() => {
+    profileHydration = null;
+    profileHydrationError =
+      "Profile storage could not be read. Your saved files have not been changed. Restart Club Code to retry.";
+    for (const listener of hydrationListeners) listener();
+    console.error("Profile disk storage could not be read; saving remains disabled.");
+  });
+  return profileHydration;
+}
+export function useSettingsProfilesReady(): boolean {
+  useEffect(() => {
+    void hydrateSettingsProfileLibrary();
+  }, []);
+  return useSyncExternalStore(
+    (listener) => {
+      hydrationListeners.add(listener);
+      return () => {
+        hydrationListeners.delete(listener);
+      };
+    },
+    () => profilesReady,
+    () => false,
+  );
+}
+export function useSettingsProfilesError(): string | null {
+  return useSyncExternalStore(
+    (listener) => {
+      hydrationListeners.add(listener);
+      return () => {
+        hydrationListeners.delete(listener);
+      };
+    },
+    () => profileHydrationError,
+    () => null,
+  );
+}
+let diskWrite: Promise<void> = Promise.resolve();
+export async function flushSettingsProfileLibrary(localPersisted = true): Promise<boolean> {
+  const writer =
+    typeof window === "undefined" ? undefined : window.desktopBridge?.setSettingsProfileLibrary;
+  if (!writer) return localPersisted;
+  const snapshot = settingsProfileLibraryStore.getSnapshot();
+  const raw = JSON.stringify({
+    version: SETTINGS_PROFILE_LIBRARY_VERSION,
+    savedAt: new Date().toISOString(),
+    activeProfileId: snapshot.activeProfileId,
+    profiles: snapshot.profiles.map(toPersistedProfile),
+  });
+  const pending = diskWrite.catch(() => {}).then(() => writer(raw));
+  diskWrite = pending;
+  try {
+    await pending;
+    return true;
+  } catch {
+    return false;
+  }
 }

@@ -1922,61 +1922,90 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
-  it("does not replace streamed output with a divergent completed item", async () => {
-    const harness = await createHarness({ serverSettings: { enableAssistantStreaming: true } });
-    const now = "2026-01-01T00:00:00.000Z";
-    const turnId = asTurnId("turn-divergent-completion");
-    const itemId = asItemId("item-divergent-completion");
-    const streamedText = "Streamed provider text.";
+  it.each([true, false])(
+    "repairs missing words from the exact Codex completed item (streaming=%s)",
+    async (enableAssistantStreaming) => {
+      const harness = await createHarness({ serverSettings: { enableAssistantStreaming } });
+      const now = "2026-01-01T00:00:00.000Z";
+      const turnId = asTurnId("turn-divergent-completion");
+      const itemId = asItemId("item-divergent-completion");
+      const streamedText = "The app separate for text special symbols sogar could different.";
+      const finalText =
+        "The app has separate handling for streamed text and special citation symbols, so “garbled” could mean different failures.";
 
-    harness.emit({
-      type: "content.delta",
-      eventId: asEventId("evt-divergent-completion-delta"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId,
-      itemId,
-      payload: {
-        streamKind: "assistant_text",
-        delta: streamedText,
-      },
-    });
-    await waitForThread(harness.readModel, (entry) =>
-      entry.messages.some(
-        (message: ProviderRuntimeTestMessage) =>
-          message.id === "assistant:item-divergent-completion" && message.streaming,
-      ),
-    );
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId("evt-divergent-completion-delta"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId,
+        itemId,
+        payload: {
+          streamKind: "assistant_text",
+          delta: streamedText,
+        },
+      });
+      if (enableAssistantStreaming)
+        await waitForThread(harness.readModel, (entry) =>
+          entry.messages.some(
+            (message: ProviderRuntimeTestMessage) =>
+              message.id === "assistant:item-divergent-completion" && message.streaming,
+          ),
+        );
 
-    harness.emit({
-      type: "item.completed",
-      eventId: asEventId("evt-divergent-completion-completed"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId,
-      itemId,
-      payload: {
-        itemType: "assistant_message",
-        status: "completed",
-        detail: "Different completed provider text.",
-      },
-    });
+      harness.emit({
+        type: "item.completed",
+        eventId: asEventId("evt-divergent-completion-completed"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId,
+        itemId,
+        payload: {
+          itemType: "assistant_message",
+          status: "completed",
+          detail: finalText,
+          data: {
+            threadId: "native-thread",
+            turnId,
+            item: { type: "agentMessage", id: itemId, text: finalText },
+          },
+        },
+        raw: {
+          source: "codex.app-server.notification",
+          method: "item/completed",
+          payload: {
+            threadId: "native-thread",
+            turnId,
+            item: { type: "agentMessage", id: itemId, text: finalText },
+          },
+        },
+      });
 
-    const thread = await waitForThread(harness.readModel, (entry) =>
-      entry.messages.some(
-        (message: ProviderRuntimeTestMessage) =>
-          message.id === "assistant:item-divergent-completion" && !message.streaming,
-      ),
-    );
-    expect(
-      thread.messages.find(
-        (message: ProviderRuntimeTestMessage) =>
-          message.id === "assistant:item-divergent-completion",
-      )?.text,
-    ).toBe(streamedText);
-  });
+      const thread = await waitForThread(harness.readModel, (entry) =>
+        entry.messages.some(
+          (message: ProviderRuntimeTestMessage) =>
+            message.id === "assistant:item-divergent-completion" && !message.streaming,
+        ),
+      );
+      expect(
+        thread.messages.find(
+          (message: ProviderRuntimeTestMessage) =>
+            message.id === "assistant:item-divergent-completion",
+        )?.text,
+      ).toBe(finalText);
+      const events = await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0)));
+      const completionEvents = Array.from(events).filter(
+        (event) =>
+          event.type === "thread.message-sent" &&
+          event.payload.messageId === `assistant:${itemId}` &&
+          !event.payload.streaming,
+      );
+      expect(completionEvents).toHaveLength(1);
+      expect(completionEvents[0]).toMatchObject({ payload: { text: finalText } });
+    },
+  );
 
   it("ignores Codex snapshot backfill assistant completions that duplicate live assistant output", async () => {
     const harness = await createHarness({ serverSettings: { enableAssistantStreaming: false } });
@@ -4538,6 +4567,108 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBe("runtime exploded");
     expect(activity?.kind).toBe("runtime.error");
     expect(activityPayload?.message).toBe("runtime exploded");
+  });
+
+  it.each(["runtime.error", "runtime.warning"] as const)(
+    "shows the bounded native safety finding without exposing continuation metadata (%s)",
+    async (type) => {
+      const harness = await createHarness();
+      harness.emit({
+        type,
+        eventId: asEventId("evt-safety-finding"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-3"),
+        payload: {
+          message: "Blocked by provider safety systems.",
+          detail: {
+            error: {
+              codexErrorInfo: "misalignmentPolicyViolation",
+              misalignment: {
+                detailedExplanation: "A private document may have been sent to another service.",
+                steer: { message: "DO NOT EXECUTE THIS INSTRUCTION" },
+                reviewTarget: "opaque-review-token",
+              },
+            },
+          },
+        },
+      });
+      const thread = await waitForThread(harness.readModel, (entry) =>
+        entry.activities.some(
+          (activity: ProviderRuntimeTestActivity) => activity.id === "evt-safety-finding",
+        ),
+      );
+      const activity = thread.activities.find(
+        (entry: ProviderRuntimeTestActivity) => entry.id === "evt-safety-finding",
+      );
+      expect(activity?.summary).toBe(
+        type === "runtime.error" ? "Provider safety block" : "Subagent safety block",
+      );
+      expect(JSON.stringify(activity?.payload)).toContain("A private document may have been sent");
+      if (type === "runtime.error") {
+        expect(JSON.stringify(activity?.payload)).toContain(
+          "Repeating the prompt does not clear this block",
+        );
+        expect(thread.session?.status).toBe("error");
+      } else {
+        expect(thread.session?.status).not.toBe("error");
+      }
+      expect(JSON.stringify(activity?.payload)).not.toContain("DO NOT EXECUTE");
+      expect(JSON.stringify(activity?.payload)).not.toContain("opaque-review-token");
+      expect(thread.session?.lastError ?? "").not.toContain("A private document");
+    },
+  );
+
+  it("keeps completion-only safety findings in the exact thread activity, outside session errors", async () => {
+    const harness = await createHarness();
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-completion-safety-finding"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-3"),
+      payload: {
+        state: "failed",
+        errorMessage: "Codex ended this task after a provider safety review.",
+      },
+      raw: {
+        source: "codex.app-server.notification",
+        method: "turn/completed",
+        payload: {
+          turn: {
+            error: {
+              codexErrorInfo: "misalignmentPolicyViolation",
+              misalignment: {
+                detailedExplanation: "A private document may have been sent to another service.",
+                steer: { message: "DO NOT EXECUTE THIS INSTRUCTION" },
+                reviewTarget: "opaque-review-token",
+              },
+            },
+          },
+        },
+      },
+    });
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.session?.lastError === "Codex ended this task after a provider safety review." &&
+        entry.activities.some(
+          (activity: ProviderRuntimeTestActivity) =>
+            activity.id === "evt-completion-safety-finding",
+        ),
+    );
+    const activity = thread.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.id === "evt-completion-safety-finding",
+    );
+    expect(activity?.summary).toBe("Provider safety block");
+    expect(activity?.turnId).toBe("turn-3");
+    expect(JSON.stringify(activity?.payload)).toContain("A private document may have been sent");
+    expect(JSON.stringify(activity?.payload)).not.toContain("DO NOT EXECUTE");
+    expect(JSON.stringify(activity?.payload)).not.toContain("opaque-review-token");
+    expect(thread.session?.lastError).not.toContain("A private document");
+    expect(thread.session?.status).toBe("error");
   });
 
   it("keeps the session running and records transient retry warnings during an active turn", async () => {

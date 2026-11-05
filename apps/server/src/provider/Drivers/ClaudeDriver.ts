@@ -324,9 +324,13 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         // cannot interrupt or pause agents.
         refreshAccountUsage: ({ settings, snapshot }) =>
           supportsClaudeAccountUsage(snapshot)
-            ? probeClaudeAccountUsage(settings, snapshot.auth, effectiveEnvironment).pipe(
-                Effect.provideService(Path.Path, path),
-              )
+            ? probeClaudeAccountUsage(
+                settings,
+                snapshot.auth,
+                effectiveEnvironment,
+                undefined,
+                snapshot.accountRateLimits,
+              ).pipe(Effect.provideService(Path.Path, path))
             : Effect.succeed(undefined),
         enrichSnapshot: ({ snapshot, publishSnapshot }) =>
           enrichProviderSnapshotWithVersionAdvisory(snapshot, maintenanceCapabilities).pipe(

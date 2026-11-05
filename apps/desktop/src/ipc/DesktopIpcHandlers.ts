@@ -4,6 +4,10 @@ import { requestMicrophoneAccess } from "./methods/microphone.ts";
 import * as DesktopIpc from "./DesktopIpc.ts";
 import { getClientSettings, setClientSettings } from "./methods/clientSettings.ts";
 import {
+  getSettingsProfileLibrary,
+  setSettingsProfileLibrary,
+} from "./methods/settingsProfiles.ts";
+import {
   getSavedEnvironmentRegistry,
   getSavedEnvironmentSecret,
   removeSavedEnvironmentSecret,
@@ -73,6 +77,8 @@ export const installDesktopIpcHandlers = Effect.gen(function* () {
 
   yield* ipc.handle(getClientSettings);
   yield* ipc.handle(setClientSettings);
+  yield* ipc.handle(getSettingsProfileLibrary);
+  yield* ipc.handle(setSettingsProfileLibrary);
   yield* ipc.handle(setPowerSaveBlockerState);
   yield* ipc.handle(getSavedEnvironmentRegistry);
   yield* ipc.handle(setSavedEnvironmentRegistry);

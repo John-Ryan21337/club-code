@@ -31,6 +31,8 @@ import {
   type ModelPacingResult,
 } from "../../modelPacing";
 
+import { claudeUsageStatus } from "./claudeUsageStatus";
+
 interface UsageWindowRow {
   readonly key: string;
   readonly label: string;
@@ -84,6 +86,7 @@ interface ProviderUsageRow {
   readonly paidUsage: ServerProviderPaidUsage | null;
   readonly paidUsageStale: boolean;
   readonly resetCredits: ProviderResetCredits;
+  readonly accountStatus: ReturnType<typeof claudeUsageStatus>;
 }
 
 export const PROVIDER_USAGE_HEIGHT_STORAGE_KEY = "cafe-code:provider-usage-height:v1";
@@ -121,6 +124,11 @@ export function ProviderUsageScrollRegion({ children }: { readonly children: Rea
   const regionRef = useRef<HTMLElement>(null);
   const dragRef = useRef<{ readonly pointerY: number; readonly height: number } | null>(null);
   const [height, setHeight] = useState(readStoredProviderUsageHeight);
+  useEffect(() => {
+    const restore = () => setHeight(readStoredProviderUsageHeight());
+    window.addEventListener("cafe-code:profile-layout-restored", restore);
+    return () => window.removeEventListener("cafe-code:profile-layout-restored", restore);
+  }, []);
 
   useEffect(() => {
     const clampToViewport = () => {
@@ -468,6 +476,7 @@ export function buildProviderUsageRows(
         paidUsage: null,
         paidUsageStale: false,
         resetCredits: resetCreditsForProvider(provider),
+        accountStatus: claudeUsageStatus(provider, nowMs),
       };
     }
 
@@ -520,6 +529,7 @@ export function buildProviderUsageRows(
       paidUsage,
       paidUsageStale,
       resetCredits: resetCreditsForProvider(provider),
+      accountStatus: claudeUsageStatus(provider, nowMs),
     };
   });
 }
@@ -829,6 +839,17 @@ export function ProviderUsageWidget() {
                   </div>
                 </div>
                 <div className="space-y-2">
+                  {provider.accountStatus &&
+                  (provider.state === "available" || provider.state === "no-data") ? (
+                    <div
+                      className="rounded border border-sidebar-border/60 px-1.5 py-1 text-[9px] leading-relaxed text-sidebar-foreground/70"
+                      data-claude-verification={provider.accountStatus.verification}
+                      data-claude-verification-stale={provider.accountStatus.stale || undefined}
+                      title={provider.accountStatus.source}
+                    >
+                      {provider.accountStatus.message}
+                    </div>
+                  ) : null}
                   {provider.stateMessage ? (
                     <div
                       className="rounded border border-sidebar-border/60 bg-sidebar-accent/35 px-1.5 py-1 text-[9px] leading-relaxed text-sidebar-foreground/55"

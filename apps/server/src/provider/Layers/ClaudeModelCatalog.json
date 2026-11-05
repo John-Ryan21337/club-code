@@ -2,6 +2,78 @@
   "schemaVersion": 1,
   "models": [
     {
+      "slug": "claude-opus-5-5",
+      "name": "Claude Opus 5.5",
+      "isCustom": false,
+      "minimumClaudeCodeVersion": "2.1.280",
+      "capabilities": {
+        "optionDescriptors": [
+          {
+            "id": "effort",
+            "label": "Reasoning",
+            "type": "select",
+            "options": [
+              { "id": "low", "label": "Low" },
+              { "id": "medium", "label": "Medium" },
+              { "id": "high", "label": "High", "isDefault": true },
+              { "id": "xhigh", "label": "Extra High" },
+              { "id": "max", "label": "Max" },
+              { "id": "ultrathink", "label": "Ultrathink" }
+            ],
+            "currentValue": "high",
+            "promptInjectedValues": ["ultrathink"]
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast Mode",
+            "type": "boolean"
+          },
+          {
+            "id": "contextWindow",
+            "label": "Context Window",
+            "type": "select",
+            "options": [{ "id": "1m", "label": "1M", "isDefault": true }],
+            "currentValue": "1m"
+          }
+        ]
+      }
+    },
+    {
+      "slug": "claude-fable-5-1",
+      "name": "Claude Fable 5.1",
+      "isCustom": false,
+      "minimumClaudeCodeVersion": "2.1.257",
+      "capabilities": {
+        "optionDescriptors": [
+          {
+            "id": "effort",
+            "label": "Reasoning",
+            "type": "select",
+            "options": [
+              { "id": "low", "label": "Low" },
+              { "id": "medium", "label": "Medium" },
+              { "id": "high", "label": "High" },
+              { "id": "xhigh", "label": "Extra High", "isDefault": true },
+              { "id": "max", "label": "Max" },
+              { "id": "ultrathink", "label": "Ultrathink" }
+            ],
+            "currentValue": "xhigh",
+            "promptInjectedValues": ["ultrathink"]
+          },
+          {
+            "id": "contextWindow",
+            "label": "Context Window",
+            "type": "select",
+            "options": [
+              { "id": "200k", "label": "200k", "isDefault": true },
+              { "id": "1m", "label": "1M" }
+            ],
+            "currentValue": "200k"
+          }
+        ]
+      }
+    },
+    {
       "slug": "claude-opus-5",
       "name": "Claude Opus 5",
       "isCustom": false,
@@ -203,6 +275,31 @@
       }
     },
     {
+      "slug": "claude-sonnet-5-5",
+      "name": "Claude Sonnet 5.5",
+      "isCustom": false,
+      "minimumClaudeCodeVersion": "2.1.284",
+      "capabilities": {
+        "optionDescriptors": [
+          {
+            "id": "effort",
+            "label": "Reasoning",
+            "type": "select",
+            "options": [
+              { "id": "low", "label": "Low" },
+              { "id": "medium", "label": "Medium" },
+              { "id": "high", "label": "High", "isDefault": true },
+              { "id": "xhigh", "label": "Extra High" },
+              { "id": "max", "label": "Max" },
+              { "id": "ultrathink", "label": "Ultrathink" }
+            ],
+            "currentValue": "high",
+            "promptInjectedValues": ["ultrathink"]
+          }
+        ]
+      }
+    },
+    {
       "slug": "claude-sonnet-5",
       "name": "Claude Sonnet 5",
       "isCustom": false,
@@ -255,6 +352,29 @@
               { "id": "1m", "label": "1M" }
             ],
             "currentValue": "200k"
+          }
+        ]
+      }
+    },
+    {
+      "slug": "claude-haiku-5-5",
+      "name": "Claude Haiku 5.5",
+      "isCustom": false,
+      "minimumClaudeCodeVersion": "2.1.293",
+      "capabilities": {
+        "optionDescriptors": [
+          {
+            "id": "effort",
+            "label": "Reasoning",
+            "type": "select",
+            "options": [
+              { "id": "low", "label": "Low" },
+              { "id": "medium", "label": "Medium" },
+              { "id": "high", "label": "High", "isDefault": true },
+              { "id": "xhigh", "label": "Extra High" },
+              { "id": "max", "label": "Max" }
+            ],
+            "currentValue": "high"
           }
         ]
       }

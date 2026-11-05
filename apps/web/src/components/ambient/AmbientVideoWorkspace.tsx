@@ -427,6 +427,12 @@ export function AmbientVideoWorkspace({
   const [customGeometry, setCustomGeometry] = useState<NormalizedAmbientMediaGeometry | null>(
     () => readAmbientMediaGeometry("video") ?? DEFAULT_AMBIENT_MEDIA_GEOMETRY.video,
   );
+  useEffect(() => {
+    const restore = () =>
+      setCustomGeometry(readAmbientMediaGeometry("video") ?? DEFAULT_AMBIENT_MEDIA_GEOMETRY.video);
+    window.addEventListener("cafe-code:profile-layout-restored", restore);
+    return () => window.removeEventListener("cafe-code:profile-layout-restored", restore);
+  }, []);
   const customGeometryRef = useRef(customGeometry);
   const pendingGeometryRef = useRef<NormalizedAmbientMediaGeometry | null>(null);
   const interactionRef = useRef<PointerInteraction | null>(null);

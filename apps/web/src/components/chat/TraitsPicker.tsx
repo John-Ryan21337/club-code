@@ -12,6 +12,7 @@ import {
   getProviderOptionCurrentLabel,
   getProviderOptionCurrentValue,
   getProviderOptionDescriptors,
+  getProviderOptionBooleanSelectionValue,
   isClaudeUltrathinkPrompt,
 } from "@cafecode/shared/model";
 import { memo, useCallback, useState } from "react";
@@ -27,9 +28,10 @@ import {
   MenuSeparator as MenuDivider,
   MenuTrigger,
 } from "../ui/menu";
-import { useComposerDraftStore, DraftId } from "../../composerDraftStore";
+import { useComposerDraftStore, type DraftId } from "../../composerDraftStore";
 import { getProviderModelCapabilities } from "../../providerModels";
 import { cn } from "~/lib/utils";
+import { getProviderThreadOptions } from "./providerThreadOptions";
 
 type ProviderOptions = ReadonlyArray<ProviderOptionSelection>;
 
@@ -88,7 +90,14 @@ function getSelectedTraits(
   const descriptors = getProviderOptionDescriptors({
     caps,
     selections: modelOptions,
-  });
+  }).map((descriptor) =>
+    descriptor.id === "fastMode" && descriptor.type === "boolean"
+      ? {
+          ...descriptor,
+          currentValue: getProviderOptionBooleanSelectionValue(modelOptions, "fastMode") === true,
+        }
+      : descriptor,
+  );
   const selectDescriptors = descriptors.filter(
     (descriptor): descriptor is Extract<ProviderOptionDescriptor, { type: "select" }> =>
       descriptor.type === "select",
@@ -255,7 +264,11 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     allowPromptInjectedEffort,
   });
   const updateDescriptors = (nextDescriptors: ReadonlyArray<ProviderOptionDescriptor>) => {
-    updateModelOptions(buildProviderOptionSelectionsFromDescriptors(nextDescriptors));
+    const nextOptions = [
+      ...(buildProviderOptionSelectionsFromDescriptors(nextDescriptors) ?? []),
+      ...getProviderThreadOptions(provider, modelOptions),
+    ];
+    updateModelOptions(nextOptions.length > 0 ? nextOptions : undefined);
   };
 
   const handleSelectChange = (
@@ -327,6 +340,13 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
             <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
               {descriptor.label}
             </div>
+            {descriptor.id === "fastMode" ? (
+              <p className="max-w-64 px-2 pb-2 text-xs text-muted-foreground">
+                {provider === "claudeAgent"
+                  ? "Uses paid usage credits on Claude subscriptions. Account access is required."
+                  : "Uses more allowance or credits. Account access is required."}
+              </p>
+            ) : null}
             <MenuRadioGroup
               value={descriptor.currentValue === true ? "on" : "off"}
               onValueChange={(value) => {
@@ -388,7 +408,7 @@ export const TraitsPicker = memo(function TraitsPicker({
         }
         if (descriptor.type === "boolean") {
           if (descriptor.id === "fastMode") {
-            return descriptor.currentValue === true ? "Fast" : "Normal";
+            return `Fast ${descriptor.currentValue === true ? "On" : "Off"}`;
           }
           return `${descriptor.label} ${descriptor.currentValue === true ? "On" : "Off"}`;
         }

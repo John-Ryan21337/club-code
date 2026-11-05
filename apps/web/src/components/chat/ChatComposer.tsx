@@ -75,6 +75,7 @@ import {
 import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../ComposerPromptEditor";
 import { ProviderModelPicker } from "./ProviderModelPicker";
 import { ThreadAgentControl } from "./ThreadAgentControl";
+import { ComposerFastMode } from "./ComposerFastMode";
 import { CameraCaptureDialog } from "./CameraCaptureDialog";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
@@ -93,6 +94,10 @@ import { getComposerProviderState, renderProviderTraitsPicker } from "./composer
 import { ContextWindowMeter } from "./ContextWindowMeter";
 import { ThreadGoalFooterButton } from "./ThreadGoalControl";
 import { AsyncQuestionsPanel } from "./AsyncQuestionsPanel";
+import { PromptSuggestion } from "./PromptSuggestion";
+import { ComposerResearchButton } from "./ComposerResearchButton";
+import { NativeResearchPanel, type NativeResearchHandle } from "./NativeResearchPanel";
+import { useDeepResearch } from "../../hooks/useDeepResearch";
 import { CodexAttachmentsControl } from "./CodexAttachmentsControl";
 import { CodexExperimentalControl } from "./CodexExperimentalControl";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -503,6 +508,9 @@ export interface ChatComposerHandle {
   getSendContext: () => {
     prompt: string;
     ephemeralBrowserContext: string;
+    deepResearch: boolean;
+    nativeResearch: boolean;
+    researchScopeKey: string;
     images: ComposerImageAttachment[];
     selectedPromptEffort: string | null;
     selectedModelOptionsForDispatch: unknown;
@@ -513,6 +521,8 @@ export interface ChatComposerHandle {
   };
   clearEphemeralBrowserContext: () => void;
   restoreEphemeralBrowserContext: (text: string) => void;
+  setDeepResearch: (enabled: boolean) => void;
+  prepareNativeResearch: (prompt: string) => Promise<void>;
 }
 
 export interface FollowUpQueueViewItem {
@@ -1292,6 +1302,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerFocused, setIsComposerFocused] = useState(false);
   const [composerFocusRequestRevision, setComposerFocusRequestRevision] = useState(0);
   const [ephemeralBrowserContext, setEphemeralBrowserContext] = useState("");
+  const [deepResearch, setDeepResearch] = useDeepResearch(
+    JSON.stringify([environmentId, activeThreadId ?? draftId]),
+  );
+  const [researchWorkflow, setResearchWorkflow] = useState<"agent" | "api">("agent");
+  const nativeResearchRef = useRef<NativeResearchHandle>(null);
   const [videoReferenceJobs, setVideoReferenceJobs] = useState(0);
   const cameraCaptureScopeKey = `${String(environmentId)}\u0000${String(
     activeThreadId ?? draftId ?? "",
@@ -2318,6 +2333,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       mobileDebugLog("submit-start", { keepKeyboardClosed, ...domSnapshot() });
       void Promise.resolve(onSend(event)).finally(() => {
         mobileDebugLog("submit-settled", { keepKeyboardClosed, ...domSnapshot() });
+        if (deepResearch && researchWorkflow === "api") return;
         if (keepKeyboardClosed) {
           dismissMobileComposerKeyboard();
           return;
@@ -2329,6 +2345,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       dismissMobileComposerKeyboard,
       isOnScreenKeyboardDevice,
       onSend,
+      deepResearch,
+      researchWorkflow,
       promptRef,
       requestComposerEditorFocus,
     ],
@@ -2960,6 +2978,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       getSendContext: () => ({
         prompt: promptRef.current,
         ephemeralBrowserContext,
+        deepResearch: deepResearch && researchWorkflow === "agent",
+        nativeResearch: deepResearch && researchWorkflow === "api",
+        researchScopeKey: JSON.stringify([environmentId, activeThreadId ?? draftId]),
         images: composerImagesRef.current,
         selectedPromptEffort,
         selectedModelOptionsForDispatch,
@@ -2974,6 +2995,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       restoreEphemeralBrowserContext: (text: string) => {
         setEphemeralBrowserContext(text);
       },
+      setDeepResearch,
+      prepareNativeResearch: async (prompt: string) => {
+        if (!nativeResearchRef.current) throw new Error("The research panel is not ready.");
+        await nativeResearchRef.current.prepare(prompt);
+      },
     }),
     [
       promptRef,
@@ -2982,6 +3008,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       composerEditorDisabled,
       composerFocusRequestRevision,
       ephemeralBrowserContext,
+      deepResearch,
+      researchWorkflow,
+      environmentId,
+      draftId,
+      setDeepResearch,
       isComposerModelPickerOpen,
       isComposerCollapsedMobile,
       isComposerFocused,
@@ -3009,6 +3040,54 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       className="cafe-composer-width mx-auto w-full min-w-0"
       data-chat-composer-form="true"
     >
+      <NativeResearchPanel
+        ref={nativeResearchRef}
+        key={JSON.stringify([environmentId, activeThreadId ?? draftId])}
+        environmentId={environmentId}
+        scope={JSON.stringify([activeThreadId ?? draftId])}
+      />
+      {settings.promptSuggestionsEnabled &&
+        activeThreadId &&
+        activeThread?.latestTurn?.state === "completed" &&
+        selectedProvider === "claudeAgent" &&
+        selectedInstanceId === activeThread.modelSelection.instanceId &&
+        selectedModel === activeThread.modelSelection.model && (
+          <PromptSuggestion
+            key={JSON.stringify([
+              environmentId,
+              activeThreadId,
+              activeThread.latestTurn.turnId,
+              activeThread.modelSelection,
+            ])}
+            environmentId={environmentId}
+            threadId={activeThreadId}
+            turnId={activeThread.latestTurn.turnId}
+            eligible={
+              phase === "ready" &&
+              !isConnecting &&
+              !isSendBusy &&
+              !environmentUnavailable &&
+              !prompt &&
+              composerImages.length === 0 &&
+              !ephemeralBrowserContext &&
+              pendingApprovals.length === 0 &&
+              pendingUserInputs.length === 0 &&
+              followUpQueueItems.length === 0 &&
+              steeringFollowUpItems.length === 0 &&
+              interactionMode !== "plan" &&
+              activeThread.autoNudge.mode === "off" &&
+              activeThread.goal?.status !== "active"
+            }
+            onAccept={(suggestion) => {
+              if (promptRef.current.length > 0 || composerImagesRef.current.length > 0)
+                return false;
+              onManualActivity?.();
+              setPromptFromTraits(suggestion);
+              scheduleComposerFocus();
+              return true;
+            }}
+          />
+        )}
       {selectedProvider === "codex" && activeThreadId && activeThread?.session && (
         <CodexExperimentalControl
           key={`experimental:${environmentId}:${activeThreadId}:${selectedInstanceId}`}
@@ -3027,6 +3106,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       )}
       <AsyncQuestionsPanel
         key={`${environmentId}:${activeThreadId ?? draftId}`}
+        scopeKey={JSON.stringify([environmentId, activeThreadId ?? draftId])}
         activities={activeThreadActivities}
         disabled={composerEditorDisabled}
         onAddAnswer={(answer) => {
@@ -3485,6 +3565,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         className="bg-background/80 hover:bg-background/90"
                         onClick={openComposerCamera}
                       />
+                      <ComposerResearchButton
+                        enabled={deepResearch}
+                        workflow={researchWorkflow}
+                        onWorkflowChange={setResearchWorkflow}
+                        onOpenApi={() => nativeResearchRef.current?.open()}
+                        disabled={composerEditorDisabled}
+                        preserveComposerFocusOnPointerDown
+                        onToggle={() => setDeepResearch(!deepResearch)}
+                      />
                     </>
                   ) : null}
                   <ComposerPrimaryActions
@@ -3547,6 +3636,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   disabled={pendingUserInputs.length > 0 || activeThreadId === null}
                   onClick={openComposerCamera}
                 />
+                <ComposerResearchButton
+                  enabled={deepResearch}
+                  workflow={researchWorkflow}
+                  onWorkflowChange={setResearchWorkflow}
+                  onOpenApi={() => nativeResearchRef.current?.open()}
+                  disabled={composerEditorDisabled || pendingUserInputs.length > 0}
+                  onToggle={() => setDeepResearch(!deepResearch)}
+                />
                 <ComposerPresentationToggle
                   mobileOptimized={presentationProfiles.activeMode === "mobile"}
                   viewportMobile={viewportMatchesMobile}
@@ -3586,6 +3683,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 />
 
                 {providerTraitsPicker}
+                <ComposerFastMode
+                  provider={selectedProvider}
+                  providerInstanceId={selectedInstanceId}
+                  model={selectedModel}
+                  models={selectedProviderModels}
+                  modelOptions={selectedComposerModelOptions}
+                  threadTarget={composerDraftTarget}
+                />
                 {isComposerFooterCompact ? (
                   <CompactComposerControlsMenu
                     activePlan={showPlanSidebarToggle}

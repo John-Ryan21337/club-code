@@ -80,6 +80,12 @@ export interface AtmosphereCommandGenerationResult {
   proposal: unknown;
 }
 
+export interface NextPromptGenerationInput {
+  cwd: string;
+  context: string;
+  modelSelection: ModelSelection;
+}
+
 export interface TextGenerationService {
   generateCommitMessage(
     input: CommitMessageGenerationInput,
@@ -96,6 +102,9 @@ export interface TextGenerationService {
  * TextGenerationShape - Service API for commit/PR text generation.
  */
 export interface TextGenerationShape {
+  readonly generateNextPrompt?: (
+    input: NextPromptGenerationInput,
+  ) => Effect.Effect<{ suggestion: string }, TextGenerationError>;
   /**
    * Generate a commit message from staged change context.
    */
@@ -137,6 +146,7 @@ export class TextGeneration extends Context.Service<TextGeneration, TextGenerati
 ) {}
 
 type TextGenerationOp =
+  | "generateNextPrompt"
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
@@ -164,6 +174,14 @@ const resolveInstance = (
 export const makeTextGenerationFromRegistry = (
   registry: ProviderInstanceRegistryShape,
 ): TextGenerationShape => ({
+  generateNextPrompt: (input) =>
+    resolveInstance(registry, "generateNextPrompt", input.modelSelection.instanceId).pipe(
+      Effect.flatMap((textGeneration) =>
+        textGeneration.generateNextPrompt
+          ? textGeneration.generateNextPrompt(input)
+          : Effect.succeed({ suggestion: "" }),
+      ),
+    ),
   generateCommitMessage: (input) =>
     resolveInstance(registry, "generateCommitMessage", input.modelSelection.instanceId).pipe(
       Effect.flatMap((textGeneration) => textGeneration.generateCommitMessage(input)),

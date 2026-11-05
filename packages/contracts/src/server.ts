@@ -208,6 +208,17 @@ export type ServerProviderRateLimitResetCreditOutcome =
   typeof ServerProviderRateLimitResetCreditOutcome.Type;
 
 export const ServerProviderAccountRateLimits = Schema.Struct({
+  // Ultra verification is inferred only from a complete provider usage response.
+  // Its timestamp stays separate from incremental rate-limit events.
+  claudeAccount: Schema.optionalKey(
+    Schema.Struct({
+      plan: Schema.Literals(["pro", "max", "ultra", "team", "enterprise"]),
+      verification: Schema.Literals(["verified", "pending", "unknown"]),
+      fiveHourLimit: Schema.Literals(["removed", "applies", "unknown"]),
+      checkedAt: IsoDateTime,
+    }),
+  ),
+
   rateLimits: ServerProviderAccountRateLimitSnapshot,
   rateLimitsByLimitId: Schema.optionalKey(
     Schema.NullOr(Schema.Record(TrimmedNonEmptyString, ServerProviderAccountRateLimitSnapshot)),

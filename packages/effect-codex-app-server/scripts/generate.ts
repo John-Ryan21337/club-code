@@ -19,14 +19,15 @@ import {
 } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-// Codex 0.155.1 release commit. Keep generation attached to an immutable
+// Codex 0.165.0 release commit. Keep generation attached to an immutable
 // upstream commit rather than a moving tag so regeneration is reproducible.
-const UPSTREAM_REF = "be2951ea34f0d295ed0becf97079f92fa5f6950e";
+const UPSTREAM_REF = "6ff1e1ca3b30fc8b914720681fcf5fe62e95f856";
 const USER_AGENT = "effect-codex-app-server-generator";
 // These opt-in methods are deliberately absent from upstream's stable fixtures.
 // Read their exact release exports instead of maintaining handwritten wire shapes.
 const EXPERIMENTAL_METHODS = new Set([
   "memory/status",
+  "thread/memory/read",
   "userVerification/status",
   "userVerification/enroll",
   "userVerification/delete",
@@ -384,6 +385,12 @@ function resolveResponseTypeName(
   generatedSchemaNames: ReadonlySet<string>,
 ): string {
   const overrides: Record<string, string> = {
+    // These parameterless account methods use response names without the
+    // account namespace. Resolve their exact upstream types instead of
+    // inventing an AccountGatewayOAuth* schema from the wire method name.
+    "account/gatewayOAuth/read": "GatewayOAuthReadResponse",
+    "account/gatewayOAuth/login": "GatewayOAuthLoginResponse",
+    "account/gatewayOAuth/cancel": "GatewayOAuthCancelResponse",
     "account/logout": "LogoutAccountResponse",
     "account/rateLimits/read": "GetAccountRateLimitsResponse",
     "account/usage/read": "GetAccountTokenUsageResponse",
@@ -608,7 +615,7 @@ const generateFiles = Effect.fn("generateFiles")(function* () {
     throw new Error("Missing experimental release methods");
   const experimentalFiles = Object.keys(archive.json_schema).filter(
     (file) =>
-      /^v2\/(MemoryStatus|UserVerification|ThreadRealtime(Start|Stop|AppendText))(Params|Response)\.json$/.test(
+      /^v2\/(MemoryStatus|ThreadMemoryRead|UserVerification|ThreadRealtime(Start|Stop|AppendText))(Params|Response)\.json$/.test(
         file,
       ) ||
       /^v2\/UserVerification(Status|Enroll|Delete|Verify|Cancel)(Params|Response)\.json$/.test(

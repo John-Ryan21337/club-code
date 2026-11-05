@@ -248,6 +248,7 @@ function buildBoundedProviderBootstrapTranscript(input: {
 }
 
 function composeProviderContinuationBootstrapInput(input: {
+  readonly systemPrompt?: string | undefined;
   readonly messages: ReadonlyArray<OrchestrationMessage>;
   readonly currentMessageId: MessageId | undefined;
   readonly currentUserInput: string | undefined;
@@ -262,7 +263,13 @@ function composeProviderContinuationBootstrapInput(input: {
   const suffix = `\n\nCurrent user request:\n${currentUserInput}`;
   const transcriptBudget = Math.min(
     PROVIDER_CONTINUATION_BOOTSTRAP_TRANSCRIPT_MAX_CHARS,
-    PROVIDER_SEND_TURN_MAX_INPUT_CHARS - prefix.length - suffix.length,
+    PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
+      prefix.length -
+      suffix.length -
+      (input.systemPrompt
+        ? (composeSystemPromptProviderInput({ systemPrompt: input.systemPrompt, userMessage: "x" })
+            ?.length ?? 1) - 1
+        : 0),
   );
   const transcript = buildBoundedProviderBootstrapTranscript({
     messages: input.messages,
@@ -1389,7 +1396,6 @@ const make = Effect.gen(function* () {
         !Equal.equals(previousModelSelection, requestedModelSelection);
       const codexSubagentThreadLimitChanged =
         preferredProvider === "codex" &&
-        activeSession.codexSubagentThreadLimit !== undefined &&
         activeSession.codexSubagentThreadLimit !== desiredCodexSubagentThreadLimit;
 
       if (
@@ -1713,23 +1719,30 @@ const make = Effect.gen(function* () {
       input.messageId !== undefined &&
       thread.messages.filter((entry) => entry.role === "user" && entry.id !== input.messageId)
         .length === 0;
-    const systemPrompt = isFirstUserMessageTurn
-      ? yield* readSystemPromptFileForInjection(serverConfig.systemPromptPath)
-      : undefined;
+    // Codex and Claude receive guidance through native session instructions.
+    // Other providers retain the existing first-turn compatibility path.
+    const systemPrompt =
+      isFirstUserMessageTurn &&
+      ensuredSession.provider !== "codex" &&
+      ensuredSession.provider !== "claudeAgent"
+        ? yield* readSystemPromptFileForInjection(serverConfig.systemPromptPath)
+        : undefined;
+    const contextualInput = shouldBootstrapProviderContext
+      ? yield* resolveThread(input.threadId).pipe(
+          Effect.map((latestThread) =>
+            composeProviderContinuationBootstrapInput({
+              systemPrompt,
+              messages: (latestThread ?? thread).messages,
+              currentMessageId: input.messageId,
+              currentUserInput: normalizedInput,
+            }),
+          ),
+        )
+      : normalizedInput;
     const providerInput =
       systemPrompt !== undefined
-        ? composeSystemPromptProviderInput({ systemPrompt, userMessage: normalizedInput })
-        : shouldBootstrapProviderContext
-          ? yield* resolveThread(input.threadId).pipe(
-              Effect.map((latestThread) =>
-                composeProviderContinuationBootstrapInput({
-                  messages: (latestThread ?? thread).messages,
-                  currentMessageId: input.messageId,
-                  currentUserInput: normalizedInput,
-                }),
-              ),
-            )
-          : normalizedInput;
+        ? composeSystemPromptProviderInput({ systemPrompt, userMessage: contextualInput })
+        : contextualInput;
     const normalizedAttachments = input.attachments ?? [];
     const sessionModelSwitch = projectedSessionCanRoute
       ? ("unsupported" as const)

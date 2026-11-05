@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID,
+  CODEX_AUTO_DELEGATE_OPTION_ID,
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderOptionDescriptor,
@@ -64,6 +65,63 @@ const ULTRATHINK_FRAME_CLASSES = {
 } as const;
 
 describe("getComposerProviderState", () => {
+  it.each([
+    ["unset", undefined, false],
+    ["saved On", true, true],
+    ["saved Off", false, false],
+  ] as const)(
+    "dispatches %s Fast independently of a native On default",
+    (_label, saved, expected) => {
+      const models = modelWith([
+        { ...booleanDescriptor("fastMode"), currentValue: true },
+        { ...booleanDescriptor("thinking"), currentValue: true },
+      ]);
+      const state = getComposerProviderState({
+        provider: PROVIDER,
+        model: MODEL,
+        models,
+        prompt: "",
+        modelOptions: [
+          ...(saved === undefined ? [] : selections(["fastMode", saved])),
+          ...selections(
+            ["thinking", false],
+            [CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID, "64"],
+            [CODEX_AUTO_DELEGATE_OPTION_ID, false],
+          ),
+        ],
+      });
+      expect(state.modelOptionsForDispatch).toEqual(
+        selections(
+          ["fastMode", expected],
+          ["thinking", false],
+          [CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID, "64"],
+          [CODEX_AUTO_DELEGATE_OPTION_ID, false],
+        ),
+      );
+      expect(models[0]?.capabilities?.optionDescriptors?.[0]).toMatchObject({ currentValue: true });
+    },
+  );
+
+  it("preserves the explicit automatic delegation off choice beside traits and worker capacity", () => {
+    const state = getComposerProviderState({
+      provider: PROVIDER,
+      model: MODEL,
+      models: modelWith([booleanDescriptor("fastMode")]),
+      prompt: "",
+      modelOptions: selections(
+        ["fastMode", true],
+        [CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID, "64"],
+        [CODEX_AUTO_DELEGATE_OPTION_ID, false],
+      ),
+    });
+    expect(state.modelOptionsForDispatch).toEqual(
+      selections(
+        ["fastMode", true],
+        [CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID, "64"],
+        [CODEX_AUTO_DELEGATE_OPTION_ID, false],
+      ),
+    );
+  });
   it.each([
     ["codex", "reasoningEffort"],
     ["claudeAgent", "effort"],

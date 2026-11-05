@@ -28,6 +28,55 @@ const props = {
   threadId: ThreadId.make("t-1"),
   providerInstanceId: ProviderInstanceId.make("codex-1"),
 };
+
+it("reads thread memory only on an explicit enabled action and clears it on a thread change", async () => {
+  harness.request.mockResolvedValue({
+    kind: "memoryRead",
+    summary: "Line one\nLine two",
+    truncated: false,
+  });
+  const screen = await render(<CodexExperimentalControl {...props} />);
+  await page.getByText("Codex experimental controls", { exact: true }).click();
+  await expect
+    .element(page.getByRole("button", { name: "Read thread memory", exact: true }))
+    .toBeDisabled();
+  expect(harness.request).not.toHaveBeenCalled();
+  await page.getByRole("checkbox").click();
+  await page.getByRole("button", { name: "Read thread memory", exact: true }).click();
+  await expect
+    .element(page.getByRole("textbox", { name: "Thread memory summary" }))
+    .toHaveValue("Line one\nLine two");
+  expect(harness.request).toHaveBeenCalledWith({
+    threadId: props.threadId,
+    providerInstanceId: props.providerInstanceId,
+    action: { kind: "memoryRead" },
+  });
+  await screen.rerender(<CodexExperimentalControl {...props} threadId={ThreadId.make("t-2")} />);
+  await expect
+    .element(page.getByRole("textbox", { name: "Thread memory summary" }))
+    .not.toBeInTheDocument();
+  await screen.unmount();
+});
+
+it("does not display a memory response arriving after the selected thread changes", async () => {
+  let resolve!: (value: unknown) => void;
+  harness.request.mockImplementation(
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  );
+  const screen = await render(<CodexExperimentalControl {...props} />);
+  await page.getByText("Codex experimental controls", { exact: true }).click();
+  await page.getByRole("checkbox").click();
+  await page.getByRole("button", { name: "Read thread memory", exact: true }).click();
+  await screen.rerender(<CodexExperimentalControl {...props} threadId={ThreadId.make("t-2")} />);
+  resolve({ kind: "memoryRead", summary: "Previous thread summary", truncated: false });
+  await expect
+    .element(page.getByRole("textbox", { name: "Thread memory summary" }))
+    .not.toBeInTheDocument();
+  await screen.unmount();
+});
 const stopTrack = vi.fn();
 const closePeer = vi.fn();
 const track = { stop: stopTrack, enabled: true, addEventListener: vi.fn() };

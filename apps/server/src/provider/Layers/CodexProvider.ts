@@ -41,6 +41,7 @@ import {
 } from "@cafecode/contracts";
 
 import { createModelCapabilities } from "@cafecode/shared/model";
+import { compareSemverVersions, parseSemver } from "@cafecode/shared/semver";
 import {
   AUTH_PROBE_TIMEOUT_MS,
   DEFAULT_TIMEOUT_MS,
@@ -150,6 +151,7 @@ function codexAccountAuthLabel(account: CodexSchema.V2GetAccountResponse["accoun
   if (!account) return undefined;
   if (account.type === "apiKey") return "OpenAI API Key";
   if (account.type === "amazonBedrock") return "Amazon Bedrock";
+  if (account.type === "gcp") return "Google Cloud Vertex AI";
   if (account.type !== "chatgpt") return undefined;
 
   switch (account.planType) {
@@ -163,6 +165,9 @@ function codexAccountAuthLabel(account: CodexSchema.V2GetAccountResponse["accoun
       return "ChatGPT Pro 20x Subscription";
     case "prolite":
       return "ChatGPT Pro 5x Subscription";
+    case "promax":
+      // Codex 0.163 labels this plan "Pro (Max)" (protocol/src/auth.rs).
+      return "ChatGPT Pro Max Subscription";
     case "team":
       return "ChatGPT Team Subscription";
     case "self_serve_business_prolite":
@@ -178,6 +183,10 @@ function codexAccountAuthLabel(account: CodexSchema.V2GetAccountResponse["accoun
     case "edu_plus":
     case "edu_pro":
       return "ChatGPT Edu Subscription";
+    case "sci":
+      return "Academic Researchers";
+    case "sci_plus":
+      return "Academic Researchers Plus";
     case "unknown":
       return "ChatGPT Subscription";
     default:
@@ -975,7 +984,7 @@ function makeStaticCodexReasoningCapabilities(input: {
 
 const CODEX_STANDARD_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
 const CODEX_MAX_REASONING_EFFORTS = [...CODEX_STANDARD_REASONING_EFFORTS, "max"] as const;
-// Mirrors Codex app-server `model/list` from codex-cli 0.154.0. The live
+// Includes the visible Codex 0.165.0 catalog and older fallback entries. The live
 // app-server response remains authoritative when available; this fallback keeps
 // fresh installs usable before the full Codex probe refreshes provider cache.
 const CODEX_ULTRA_REASONING_EFFORTS = [...CODEX_MAX_REASONING_EFFORTS, "ultra"] as const;
@@ -1000,6 +1009,46 @@ const KNOWN_CUSTOM_CODEX_MODELS: ReadonlyMap<string, ServerProviderModel> = new 
 
 const STATIC_CODEX_MODELS: ReadonlyArray<ServerProviderModel> = [
   ASTRA_CODEX_MODEL,
+  {
+    slug: "gpt-6.1-sol",
+    name: "GPT-6.1-Sol",
+    isCustom: false,
+    capabilities: makeStaticCodexReasoningCapabilities({
+      defaultEffort: "low",
+      supportedEfforts: CODEX_ULTRA_REASONING_EFFORTS,
+      supportsFastMode: true,
+    }),
+  },
+  {
+    slug: "gpt-6.1-terra",
+    name: "GPT-6.1 Terra",
+    isCustom: false,
+    capabilities: makeStaticCodexReasoningCapabilities({
+      defaultEffort: "low",
+      supportedEfforts: CODEX_ULTRA_REASONING_EFFORTS,
+      supportsFastMode: true,
+    }),
+  },
+  {
+    slug: "gpt-6-sol",
+    name: "GPT-6-Sol",
+    isCustom: false,
+    capabilities: makeStaticCodexReasoningCapabilities({
+      defaultEffort: "medium",
+      supportedEfforts: CODEX_ULTRA_REASONING_EFFORTS,
+      supportsFastMode: true,
+    }),
+  },
+  {
+    slug: "gpt-6-luna",
+    name: "GPT-6-Luna",
+    isCustom: false,
+    capabilities: makeStaticCodexReasoningCapabilities({
+      defaultEffort: "medium",
+      supportedEfforts: CODEX_MAX_REASONING_EFFORTS,
+      supportsFastMode: true,
+    }),
+  },
   {
     slug: "gpt-5.6-sol",
     name: "GPT-5.6-Sol",
@@ -1168,8 +1217,15 @@ const requestAllCodexModels = Effect.fn("requestAllCodexModels")(function* (
   return models;
 });
 
-export function buildCodexProviderAppServerArgs(ossMode = false): ReadonlyArray<string> {
-  return ossMode ? ["--oss", "--local-provider", "lmstudio", "app-server"] : ["app-server"];
+export function buildCodexProviderAppServerArgs(
+  ossMode = false,
+  modelProvider: CodexSettings["modelProvider"] = "openai",
+): ReadonlyArray<string> {
+  return ossMode
+    ? ["--oss", "--local-provider", "lmstudio", "app-server"]
+    : modelProvider === "gcp"
+      ? ["app-server", "-c", 'model_provider="gcp"']
+      : ["app-server"];
 }
 
 export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
@@ -1186,6 +1242,7 @@ export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
 }
 
 const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(function* (input: {
+  readonly modelProvider?: CodexSettings["modelProvider"];
   readonly binaryPath: string;
   readonly ossMode?: boolean;
   readonly homePath?: string;
@@ -1201,7 +1258,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   const clientContext = yield* Layer.build(
     CodexClient.layerCommand({
       command: input.binaryPath,
-      args: buildCodexProviderAppServerArgs(input.ossMode),
+      args: buildCodexProviderAppServerArgs(input.ossMode, input.modelProvider),
       cwd: input.cwd,
       env: {
         ...(input.environment ?? process.env),
@@ -1332,11 +1389,24 @@ const customCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProv
 
 export const fallbackCodexModelsFromSettings = (
   codexSettings: CodexSettings,
+  cliVersion?: string | null,
 ): ServerProvider["models"] =>
-  appendCustomCodexModels(STATIC_CODEX_MODELS, codexSettings.customModels);
+  appendCustomCodexModels(
+    STATIC_CODEX_MODELS.filter(
+      (model) =>
+        model.slug !== "gpt-6.1-terra" ||
+        (!!cliVersion &&
+          parseSemver(cliVersion) !== null &&
+          compareSemverVersions(cliVersion, "0.165.0") >= 0),
+    ),
+    codexSettings.customModels,
+  );
 
-const configuredCodexModels = (codexSettings: CodexSettings): ServerProvider["models"] =>
-  codexSettings.ossMode ? [] : fallbackCodexModelsFromSettings(codexSettings);
+const configuredCodexModels = (
+  codexSettings: CodexSettings,
+  cliVersion?: string | null,
+): ServerProvider["models"] =>
+  codexSettings.ossMode ? [] : fallbackCodexModelsFromSettings(codexSettings, cliVersion);
 
 export function parseLmStudioModelInventory(
   openAiPayload: unknown,
@@ -1774,6 +1844,7 @@ function accountProbeStatus(account: CodexAppServerProviderSnapshot["account"]):
 export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(function* (
   codexSettings: CodexSettings,
   probe: (input: {
+    readonly modelProvider?: CodexSettings["modelProvider"];
     readonly binaryPath: string;
     readonly ossMode?: boolean;
     readonly homePath?: string;
@@ -1817,6 +1888,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   const probeResult = yield* probe({
     binaryPath: codexSettings.binaryPath,
     ossMode: codexSettings.ossMode,
+    modelProvider: codexSettings.modelProvider,
     homePath: codexSettings.homePath,
     cwd: process.cwd(),
     customModels: codexSettings.customModels,
@@ -1921,7 +1993,7 @@ export const checkCodexCliProviderStatus = Effect.fn("checkCodexCliProviderStatu
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
 > {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
-  const models = configuredCodexModels(codexSettings);
+  let models = configuredCodexModels(codexSettings);
 
   if (!codexSettings.enabled) {
     return buildServerProvider({
@@ -1984,6 +2056,7 @@ export const checkCodexCliProviderStatus = Effect.fn("checkCodexCliProviderStatu
 
   const versionResult = versionProbe.success.value;
   const parsedVersion = parseGenericCliVersion(`${versionResult.stdout}\n${versionResult.stderr}`);
+  models = configuredCodexModels(codexSettings, parsedVersion);
   if (versionResult.code !== 0) {
     const detail = detailFromResult(versionResult);
     return buildServerProvider({
@@ -2026,6 +2099,23 @@ export const checkCodexCliProviderStatus = Effect.fn("checkCodexCliProviderStatu
     });
   }
 
+  if (codexSettings.modelProvider === "gcp") {
+    return buildServerProvider({
+      presentation: CODEX_PRESENTATION,
+      enabled: true,
+      checkedAt,
+      models: customCodexModelsFromSettings(codexSettings),
+      skills: [],
+      probe: {
+        installed: true,
+        version: parsedVersion,
+        status: "warning",
+        auth: { status: "unknown", label: "Google Cloud Vertex AI" },
+        message:
+          "Google Cloud is configured. Refresh this provider to check native authentication and available models.",
+      },
+    });
+  }
   const loginStatusProbe = yield* runCodexCommand(
     codexSettings,
     ["login", "status"],

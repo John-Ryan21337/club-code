@@ -88,16 +88,23 @@ describe("normalizeModelSlug", () => {
     expect(normalizeModelSlug("5.6-luna")).toBe("gpt-5.6-luna");
     expect(normalizeModelSlug("gpt-5-codex")).toBe("gpt-5.4");
     expect(normalizeModelSlug("5.3")).toBe("gpt-5.3-codex");
-    expect(normalizeModelSlug("fable", claude)).toBe("claude-fable-5");
-    expect(normalizeModelSlug("fable[1m]", claude)).toBe("claude-fable-5");
-    expect(normalizeModelSlug("default", claude)).toBe("claude-opus-5");
-    expect(normalizeModelSlug("opus", claude)).toBe("claude-opus-5");
+    // Family aliases follow Claude Code 2.1.303; explicit versioned
+    // spellings keep resolving to the model they name.
+    expect(normalizeModelSlug("fable", claude)).toBe("claude-fable-5-1");
+    expect(normalizeModelSlug("fable[1m]", claude)).toBe("claude-fable-5-1");
+    expect(normalizeModelSlug("fable-5", claude)).toBe("claude-fable-5");
+    expect(normalizeModelSlug("default", claude)).toBe("claude-opus-5-5");
+    expect(normalizeModelSlug("opus", claude)).toBe("claude-opus-5-5");
     expect(normalizeModelSlug("opus-5", claude)).toBe("claude-opus-5");
-    expect(normalizeModelSlug("opus[1m]", claude)).toBe("claude-opus-5");
+    expect(normalizeModelSlug("opus[1m]", claude)).toBe("claude-opus-5-5");
+    expect(normalizeModelSlug("opus-5.5", claude)).toBe("claude-opus-5-5");
     expect(normalizeModelSlug("opus-4.8", claude)).toBe("claude-opus-4-8");
     expect(normalizeModelSlug("opus-4.7", claude)).toBe("claude-opus-4-7");
-    expect(normalizeModelSlug("sonnet", claude)).toBe("claude-sonnet-5");
-    expect(normalizeModelSlug("sonnet[1m]", claude)).toBe("claude-sonnet-5");
+    expect(normalizeModelSlug("sonnet", claude)).toBe("claude-sonnet-5-5");
+    expect(normalizeModelSlug("sonnet[1m]", claude)).toBe("claude-sonnet-5-5");
+    expect(normalizeModelSlug("sonnet-5", claude)).toBe("claude-sonnet-5");
+    expect(normalizeModelSlug("haiku", claude)).toBe("claude-haiku-5-5");
+    expect(normalizeModelSlug("haiku-4.5", claude)).toBe("claude-haiku-4-5");
   });
 
   it("returns null for empty or missing values", () => {
@@ -136,6 +143,7 @@ describe("resolveSelectableModel", () => {
   it("resolves exact slugs, labels, and aliases", () => {
     const options = [
       { slug: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
+      { slug: "claude-sonnet-5-5", name: "Claude Sonnet 5.5" },
       { slug: "claude-sonnet-5", name: "Claude Sonnet 5" },
       { slug: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
     ];
@@ -146,7 +154,7 @@ describe("resolveSelectableModel", () => {
       "gpt-5.3-codex",
     );
     expect(resolveSelectableModel(ProviderDriverKind.make("claudeAgent"), "sonnet", options)).toBe(
-      "claude-sonnet-5",
+      "claude-sonnet-5-5",
     );
   });
 });

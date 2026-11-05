@@ -790,6 +790,29 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("keeps the provider safety finding readable in the visible work log", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "safety-block",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          kind: "runtime.error",
+          summary: "Provider safety block",
+          tone: "error",
+          payload: {
+            message: "Blocked by provider safety systems.",
+            detail:
+              "Review the preceding actions.\n\nProvider finding:\nA private document may have been sent to another service.",
+          },
+        }),
+      ],
+      undefined,
+    );
+    expect(entry?.label).toBe("Provider safety block");
+    expect(entry?.tone).toBe("error");
+    expect(entry?.detail).toContain("Provider finding:\nA private document may have been sent");
+  });
+
   it("hides retryable steer delivery failures from the normal work log", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

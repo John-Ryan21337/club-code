@@ -27,6 +27,37 @@ const isAccountRateLimitPlanType = Schema.is(
 const isThreadMetadataUpdateParams = Schema.is(CodexSchema.V2ThreadMetadataUpdateParams);
 const isItemStartedNotification = Schema.is(CodexSchema.V2ItemStartedNotification);
 
+it("decodes Codex 0.165 image handles alongside legacy inline images", () => {
+  const decode = Schema.decodeUnknownSync(CodexSchema.V2ItemCompletedNotification);
+  const base = { threadId: "thread-image", turnId: "turn-image", completedAtMs: 1_780_000_000_000 };
+  for (const image of [{ fileId: "generated-file" }, { result: "inline-image" }]) {
+    const notification = {
+      ...base,
+      item: {
+        type: "imageGeneration",
+        id: "image-1",
+        status: "completed",
+        ...image,
+        inputImages: [{ path: "/synthetic/input.png", sha256: "synthetic-sha" }],
+      },
+    } as const;
+    assert.deepEqual(decode(notification), notification);
+  }
+  assert.equal(
+    Schema.is(CodexSchema.V2ItemCompletedNotification)({
+      ...base,
+      item: {
+        type: "imageGeneration",
+        id: "image-1",
+        status: "completed",
+      },
+    }),
+    false,
+  );
+  assert.equal(CodexSchema.CLIENT_REQUEST_METHODS["feedback/save"], "feedback/save");
+  assert.equal(CodexSchema.CLIENT_REQUEST_METHODS["thread/memory/read"], "thread/memory/read");
+});
+
 it("tracks Codex 0.146 app-server compatibility additions", () => {
   assert.equal(
     CodexSchema.CLIENT_REQUEST_METHODS["externalAgentConfig/import/recordHistory"],
@@ -61,6 +92,57 @@ it("tracks Codex 0.146 app-server compatibility additions", () => {
 });
 
 it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
+  it.effect("retains a burst of raw notifications without blocking RPC responses", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio,
+        losslessNotifications: true,
+      });
+      const pending = yield* transport
+        .request("thread/read", { threadId: "thread-1" })
+        .pipe(Effect.forkScoped);
+      const request = yield* decodeJson(yield* Queue.take(output));
+      const count = 4096;
+      const notifications = Array.from({ length: count }, (_, index) => ({
+        method: "item/agentMessage/delta",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          delta: `word-${index} `,
+        },
+      }));
+      const completed = {
+        method: "item/completed",
+        params: {
+          item: {
+            id: "item-1",
+            type: "agentMessage",
+            text: notifications.map((n) => n.params.delta).join(""),
+          },
+        },
+      };
+      const response = { id: (request as { id: number }).id, result: { ok: true } };
+      yield* Queue.offer(
+        input,
+        encoder.encode(
+          [...notifications, completed, response]
+            .map((message) => encodeUnknownJsonString(message))
+            .join("\n") + "\n",
+        ),
+      );
+      // Wait for the trailing response before draining notifications. This
+      // exceeds the old sliding capacity and proves the reader stays live.
+      assert.deepEqual(yield* Fiber.join(pending), { ok: true });
+      const received = yield* transport.incomingNotifications.pipe(
+        Stream.take(count + 1),
+        Stream.runCollect,
+      );
+      assert.deepEqual(Array.from(received), [...notifications, completed]);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect(
     "encodes requests without a jsonrpc field and routes inbound requests and notifications",
     () =>
@@ -645,4 +727,179 @@ describe("incoming line buffer", () => {
     assert.deepEqual(takeLines(buffer, "\nnext\n"), ["next"]);
     assert.equal(buffer.pendingBytes, 0);
   });
+});
+
+it("keeps Codex 0.157 gateway login capability opt-in and its responses typed", () => {
+  const decodeCapabilities = Schema.decodeUnknownSync(
+    CodexSchema.V1InitializeParams__InitializeCapabilities,
+  );
+  const legacy = { experimentalApi: true };
+  assert.deepEqual(decodeCapabilities(legacy), legacy);
+  for (const explicitGatewayOauth of [false, true]) {
+    assert.deepEqual(decodeCapabilities({ ...legacy, explicitGatewayOauth }), {
+      ...legacy,
+      explicitGatewayOauth,
+    });
+  }
+  assert.equal(
+    Schema.is(CodexSchema.V1InitializeParams__InitializeCapabilities)({
+      explicitGatewayOauth: null,
+    }),
+    false,
+  );
+
+  // The new methods deliberately omit the account namespace in their response
+  // type names. Exercise the generated RPC map, not just standalone schemas,
+  // so a future regeneration cannot silently bind an unrelated response type.
+  const read = {
+    providerId: "gateway-example",
+    providerName: "Example gateway",
+    required: true,
+    status: "notReady",
+    error: null,
+  } as const;
+  assert.deepEqual(
+    Schema.decodeUnknownSync(CodexSchema.CLIENT_REQUEST_RESPONSES["account/gatewayOAuth/read"])(
+      read,
+    ),
+    read,
+  );
+  for (const method of ["account/gatewayOAuth/login", "account/gatewayOAuth/cancel"] as const) {
+    assert.equal(CodexSchema.CLIENT_REQUEST_METHODS[method], method);
+    assert.equal(CodexSchema.CLIENT_REQUEST_PARAMS[method], undefined);
+    assert.deepEqual(
+      Schema.decodeUnknownSync(CodexSchema.CLIENT_REQUEST_RESPONSES[method])({}),
+      {},
+    );
+  }
+  const changed = {
+    providerId: "gateway-example",
+    status: "succeeded",
+    authUrl: null,
+    error: null,
+  } as const;
+  assert.deepEqual(
+    Schema.decodeUnknownSync(
+      CodexSchema.SERVER_NOTIFICATION_PARAMS["account/gatewayOAuth/changed"],
+    )(changed),
+    changed,
+  );
+  assert.equal(
+    Schema.is(CodexSchema.V2GatewayOAuthReadResponse)({ ...read, status: "unknown" }),
+    false,
+  );
+});
+
+it("preserves Codex 0.157 item lifecycle timestamps and older history entries", () => {
+  const decodeEntry = Schema.decodeUnknownSync(
+    CodexSchema.V2ThreadItemsListResponse__ThreadItemEntry,
+  );
+  const legacy = {
+    turnId: "turn-1",
+    item: { type: "agentMessage", id: "item-1", text: "Done." },
+  } as const;
+  assert.deepEqual(decodeEntry(legacy), legacy);
+  for (const times of [
+    { startedAtMs: null, completedAtMs: null },
+    { startedAtMs: 1_721_234_567_000, completedAtMs: 1_721_234_567_890 },
+  ]) {
+    assert.deepEqual(decodeEntry({ ...legacy, ...times }), { ...legacy, ...times });
+  }
+  // Provider timestamps are optional display metadata, not a new lifecycle
+  // boundary. Keep wire type validation while retaining old timestamp-free
+  // entries; do not invent local timestamps during history decoding.
+  assert.equal(
+    Schema.is(CodexSchema.V2ThreadItemsListResponse__ThreadItemEntry)({
+      ...legacy,
+      completedAtMs: "1721234567890",
+    }),
+    false,
+  );
+});
+
+it("preserves Codex 0.157 MCP origins and explicit resource targets without requiring them", () => {
+  const decodeStatus = Schema.decodeUnknownSync(
+    CodexSchema.V2ListMcpServerStatusResponse__McpServerStatus,
+  );
+  const legacyStatus = {
+    name: "test-server",
+    tools: {},
+    resources: [],
+    resourceTemplates: [],
+    authStatus: "unknown",
+  } as const;
+  assert.deepEqual(decodeStatus(legacyStatus), legacyStatus);
+  for (const httpOrigin of [null, "https://example.invalid"]) {
+    assert.deepEqual(decodeStatus({ ...legacyStatus, httpOrigin }), {
+      ...legacyStatus,
+      httpOrigin,
+    });
+  }
+
+  const decodeRead = Schema.decodeUnknownSync(CodexSchema.V2McpResourceReadParams);
+  const legacyRead = { server: "test-server", uri: "ui://example/resource" };
+  assert.deepEqual(decodeRead(legacyRead), legacyRead);
+  // Null explicitly selects no-auth resource access under upstream policy;
+  // it must remain distinguishable from a selected account's opaque link id.
+  for (const linkId of [null, "account-link-1"]) {
+    const targeted = { ...legacyRead, target: { connectorId: "app-example", linkId } };
+    assert.deepEqual(decodeRead(targeted), targeted);
+  }
+  assert.equal(
+    Schema.is(CodexSchema.V2McpResourceReadParams)({
+      ...legacyRead,
+      target: { linkId: "account-link-1" },
+    }),
+    false,
+  );
+  assert.equal(
+    Schema.is(CodexSchema.V2McpResourceReadParams)({
+      ...legacyRead,
+      target: { connectorId: "app-example" },
+    }),
+    false,
+  );
+});
+
+it("decodes Codex 0.163 hosted plugin interfaces while retaining older summaries", () => {
+  const decodePlugin = Schema.decodeUnknownSync(CodexSchema.V2PluginListResponse__PluginSummary);
+  const legacy = {
+    id: "plugin-example",
+    name: "Example plugin",
+    source: { type: "remote" },
+    installed: true,
+    enabled: true,
+    installPolicy: "AVAILABLE",
+    authPolicy: "ON_USE",
+  } as const;
+  assert.deepEqual(decodePlugin(legacy), legacy);
+  // Codex 0.163 removed the 0.157 `extensions` entrypoint surface from plugin
+  // summaries. A legacy payload carrying it must still decode, with the
+  // retired key dropped rather than rejected.
+  assert.deepEqual(decodePlugin({ ...legacy, extensions: null }), legacy);
+  // The replacement descriptive surface is `interface` plus availability and
+  // install metadata. These are descriptive provider records; recognizing
+  // them does not grant Club a resource host or authorize any plugin tool.
+  const pluginInterface = {
+    capabilities: ["composer"],
+    screenshotUrls: [],
+    screenshots: [],
+    displayName: "Example plugin",
+    developerName: null,
+  };
+  const enriched = {
+    ...legacy,
+    availability: "AVAILABLE",
+    interface: pluginInterface,
+    installedAt: 1_760_000_000,
+    keywords: ["example"],
+  } as const;
+  assert.deepEqual(decodePlugin(enriched), enriched);
+  assert.equal(
+    Schema.is(CodexSchema.V2PluginListResponse__PluginSummary)({
+      ...legacy,
+      availability: "RETIRED",
+    }),
+    false,
+  );
 });

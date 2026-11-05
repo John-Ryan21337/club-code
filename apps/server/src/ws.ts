@@ -1,4 +1,5 @@
 import { withCodexAttachmentOwner } from "./provider/CodexThreadAttachments.ts";
+import { suggestNextPrompt } from "./textGeneration/PromptSuggestions.ts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -763,6 +764,17 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "atmosphere" },
           ),
+        [WS_METHODS.serverSuggestNextPrompt]: (input) =>
+          suggestNextPrompt({
+            ...input,
+            cwd: config.cwd,
+            textGeneration,
+            enabled: clientSettings.getSettings.pipe(
+              Effect.map((settings) => settings.promptSuggestionsEnabled),
+            ),
+            readShell: () => projectionSnapshotQuery.getThreadShellById(input.threadId),
+            readThread: () => projectionSnapshotQuery.getThreadDetailById(input.threadId),
+          }),
         [WS_METHODS.agentBrowserGrant]: (input) =>
           observeRpcEffect(
             WS_METHODS.agentBrowserGrant,

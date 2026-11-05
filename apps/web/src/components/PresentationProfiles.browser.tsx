@@ -28,8 +28,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock("../hooks/useSettings", () => ({
   getClientSettings: () => mocks.settings,
   useClientSettingsHydrated: () => true,
-  useSettings: (selector: (settings: Record<string, unknown>) => unknown) =>
-    selector(mocks.settings),
+  useSettings: (selector?: (settings: Record<string, unknown>) => unknown) =>
+    selector ? selector(mocks.settings) : mocks.settings,
   useUpdateSettings: () => ({
     updateClientSettingsConfirmed: mocks.updateClientSettingsConfirmed,
   }),

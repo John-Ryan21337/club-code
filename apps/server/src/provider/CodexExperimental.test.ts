@@ -3,6 +3,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import type { CodexAppServerClientShape } from "effect-codex-app-server/client";
@@ -16,9 +17,11 @@ const identity = {
 };
 const harness = Effect.gen(function* () {
   const events = yield* PubSub.unbounded<CodexAppServerIncomingNotification>();
+  const rawNotifications = yield* Queue.unbounded<CodexAppServerIncomingNotification>();
   const calls: { method: string; params: unknown }[] = [];
   let failStop = false;
   let emitClosed = true;
+  let memorySummary: string | null = "Synthetic thread memory.";
   const request = (method: string, params: unknown) =>
     Effect.gen(function* () {
       calls.push({ method, params });
@@ -53,20 +56,29 @@ const harness = Effect.gen(function* () {
           });
       }
       if (method === "memory/status") return { v2ConsolidatedThreads: 24, v2Ready: true };
+      if (method === "thread/memory/read") return { summary: memorySummary };
       if (method === "userVerification/status")
         return { credentialId: "private-native-id", unavailableReason: null };
       return {};
     });
   const client = {
     request,
-    raw: { notifications: Stream.fromPubSub(events) },
+    raw: { notifications: Stream.fromQueue(rawNotifications) },
   } as unknown as CodexAppServerClientShape;
-  const run = yield* makeCodexExperimentalController(client, Effect.succeed("native-thread"));
+  const run = yield* makeCodexExperimentalController(
+    client,
+    Effect.succeed("native-thread"),
+    Stream.fromPubSub(events),
+  );
   return {
     calls,
     run,
     client,
     events,
+    rawNotifications,
+    setMemorySummary: (value: string | null) => {
+      memorySummary = value;
+    },
     setFailStop: (value: boolean) => {
       failStop = value;
     },
@@ -75,6 +87,30 @@ const harness = Effect.gen(function* () {
     },
   };
 });
+
+it.effect("does not consume chat notifications from the shared transport queue", () =>
+  Effect.gen(function* () {
+    const { rawNotifications } = yield* harness;
+    const notifications = [
+      ...["The", " quick", " brown", " fox"].map((delta) => ({
+        method: "item/agentMessage/delta",
+        params: { threadId: "native-thread", turnId: "turn-1", itemId: "item-1", delta },
+      })),
+      {
+        method: "item/completed",
+        params: {
+          threadId: "native-thread",
+          turnId: "turn-1",
+          item: { id: "item-1", type: "agentMessage", text: "The quick brown fox" },
+        },
+      },
+    ];
+    yield* Queue.offerAll(rawNotifications, notifications);
+    yield* Effect.yieldNow;
+    assert.equal(yield* Queue.size(rawNotifications), notifications.length);
+    assert.deepEqual(Array.from(yield* Queue.takeAll(rawNotifications)), notifications);
+  }),
+);
 
 it.effect("returns bounded readiness metadata without exposing native credential identifiers", () =>
   Effect.gen(function* () {
@@ -88,6 +124,33 @@ it.effect("returns bounded readiness metadata without exposing native credential
       kind: "verificationStatus",
       available: true,
       reason: null,
+    });
+  }),
+);
+
+it.effect("reads memory only for the resolved native thread and bounds the returned summary", () =>
+  Effect.gen(function* () {
+    const { run, calls, setMemorySummary } = yield* harness;
+    assert.deepEqual(yield* run({ ...identity, action: { kind: "memoryRead" } }), {
+      kind: "memoryRead",
+      summary: "Synthetic thread memory.",
+      truncated: false,
+    });
+    assert.deepEqual(calls[0], {
+      method: "thread/memory/read",
+      params: { threadId: "native-thread" },
+    });
+    setMemorySummary("x".repeat(65_537));
+    const bounded = yield* run({ ...identity, action: { kind: "memoryRead" } });
+    assert.equal(bounded.kind, "memoryRead");
+    if (bounded.kind !== "memoryRead") return;
+    assert.equal(bounded.summary?.length, 65_536);
+    assert.equal(bounded.truncated, true);
+    setMemorySummary(null);
+    assert.deepEqual(yield* run({ ...identity, action: { kind: "memoryRead" } }), {
+      kind: "memoryRead",
+      summary: null,
+      truncated: false,
     });
   }),
 );
@@ -221,7 +284,11 @@ it.effect("masks provider failures before they reach daemon diagnostics", () =>
           }),
         ),
     } as CodexAppServerClientShape;
-    const run = yield* makeCodexExperimentalController(failing, Effect.succeed("native-thread"));
+    const run = yield* makeCodexExperimentalController(
+      failing,
+      Effect.succeed("native-thread"),
+      Stream.empty,
+    );
     const error = yield* run({ ...identity, action: { kind: "memoryStatus" } }).pipe(Effect.flip);
     assert.equal(JSON.stringify(error).includes("private SDP"), false);
     assert.equal("cause" in error, false);

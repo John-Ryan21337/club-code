@@ -33,6 +33,7 @@ import {
   isRecoverableThreadResumeError,
   isCodexContextCompactionItemType,
   isCodexChildConversationWorkNotification,
+  isCodexPrivateAccountNotification,
   isCodexUserMessageItemType,
   isTerminalCodexChildThreadReadError,
   openCodexThread,
@@ -334,6 +335,32 @@ describe("buildCodexAppServerArgs", () => {
 
   it("uses the Codex OSS transport for local LM Studio sessions", () => {
     assert.deepStrictEqual(buildCodexAppServerArgs({ responsesWebsockets: "disabled" }, true), [
+      "--oss",
+      "--local-provider",
+      "lmstudio",
+      "app-server",
+    ]);
+  });
+
+  it("keeps native Vertex AI credentials and HTTPS when an OpenAI fallback policy exists", () => {
+    assert.deepStrictEqual(
+      buildCodexAppServerArgs({ responsesWebsockets: "disabled" }, false, 7, "gcp"),
+      [
+        "app-server",
+        "-c",
+        'model_provider="gcp"',
+        "-c",
+        "agents.max_concurrent_threads_per_session=7",
+        "-c",
+        "features.multi_agent_v2.max_concurrent_threads_per_session=8",
+      ],
+    );
+    assert.deepStrictEqual(buildCodexAppServerArgs(undefined, false, undefined, "gcp"), [
+      "app-server",
+      "-c",
+      'model_provider="gcp"',
+    ]);
+    assert.deepStrictEqual(buildCodexAppServerArgs(undefined, true, undefined, "gcp"), [
       "--oss",
       "--local-provider",
       "lmstudio",
@@ -1906,6 +1933,152 @@ describe("selectCodexActiveSnapshotTurn", () => {
 });
 
 describe("openCodexThread", () => {
+  it("leaves native instructions and config discovery untouched for blank Club guidance", async () => {
+    let reads = 0;
+    let payload: unknown;
+    const client = {
+      raw: {
+        request: (_method: "thread/start" | "thread/resume", input: unknown) => {
+          payload = input;
+          return Effect.succeed(makeThreadOpenResponse("native-thread"));
+        },
+      },
+    };
+    await Effect.runPromise(
+      openCodexThread({
+        client,
+        threadId: ThreadId.make("native-guidance"),
+        cwd: "/tmp/project",
+        runtimeMode: "approval-required",
+        requestedModel: undefined,
+        serviceTier: undefined,
+        resumeThreadId: undefined,
+        customInstructions: " \n ",
+        readConfig: () => {
+          reads += 1;
+          return Effect.succeed({ config: {}, origins: {} });
+        },
+      }),
+    );
+    assert.equal(reads, 0);
+    assert.equal(Object.hasOwn(payload as object, "developerInstructions"), false);
+  });
+  it.each([undefined, "existing-thread"])(
+    "forwards native custom instructions on open %s",
+    async (resumeThreadId) => {
+      const calls: unknown[] = [];
+      const client = {
+        raw: {
+          request: (_method: "thread/start" | "thread/resume", payload: unknown) => {
+            calls.push(payload);
+            return Effect.succeed(makeThreadOpenResponse("native-thread"));
+          },
+        },
+      };
+      await Effect.runPromise(
+        openCodexThread({
+          client,
+          threadId: ThreadId.make("native-guidance"),
+          cwd: "/tmp/project",
+          runtimeMode: "approval-required",
+          requestedModel: undefined,
+          serviceTier: undefined,
+          resumeThreadId,
+          customInstructions: "Follow project rules.",
+          readConfig: () =>
+            Effect.succeed({
+              config: { developer_instructions: "Preserve native guidance." },
+              origins: {},
+            }),
+        }),
+      );
+      assert.equal(
+        (calls[0] as { developerInstructions?: string }).developerInstructions,
+        "Preserve native guidance.\n\n<user-instructions>\nFollow project rules.\n</user-instructions>",
+      );
+    },
+  );
+  it.each([null, undefined, ""])(
+    "retains custom guidance when native instructions are %s",
+    async (native) => {
+      let payload: unknown;
+      const client = {
+        raw: {
+          request: (_method: "thread/start" | "thread/resume", input: unknown) => {
+            payload = input;
+            return Effect.succeed(makeThreadOpenResponse("native-thread"));
+          },
+        },
+      };
+      await Effect.runPromise(
+        openCodexThread({
+          client,
+          threadId: ThreadId.make("native-guidance"),
+          cwd: "/tmp/project",
+          runtimeMode: "approval-required",
+          requestedModel: undefined,
+          serviceTier: undefined,
+          resumeThreadId: undefined,
+          customInstructions: "Follow project rules.",
+          readConfig: () =>
+            Effect.succeed({
+              config: native === undefined ? {} : { developer_instructions: native },
+              origins: {},
+            }),
+        }),
+      );
+      assert.equal(
+        (payload as { developerInstructions: string }).developerInstructions,
+        "<user-instructions>\nFollow project rules.\n</user-instructions>",
+      );
+    },
+  );
+  it.each(["read failure", "malformed native instructions", "missing reader"])(
+    "does not open a thread or expose config values after %s",
+    async (failure) => {
+      let opened = false;
+      const client = {
+        raw: {
+          request: (_method: "thread/start" | "thread/resume", _payload: unknown) => {
+            opened = true;
+            return Effect.succeed(makeThreadOpenResponse("native-thread"));
+          },
+        },
+      };
+      const result = await Effect.runPromiseExit(
+        openCodexThread({
+          client,
+          threadId: ThreadId.make("native-guidance"),
+          cwd: "/tmp/project",
+          runtimeMode: "approval-required",
+          requestedModel: undefined,
+          serviceTier: undefined,
+          resumeThreadId: "existing-thread",
+          customInstructions: "Club custom private text.",
+          ...(failure === "missing reader"
+            ? {}
+            : {
+                readConfig: () =>
+                  failure === "read failure"
+                    ? Effect.fail(
+                        new CodexErrors.CodexAppServerRequestError({
+                          code: -32603,
+                          errorMessage: "Native private text.",
+                        }),
+                      )
+                    : Effect.succeed({
+                        config: { developer_instructions: ["Native private text."] },
+                        origins: {},
+                      } as unknown as CodexRpc.ClientRequestResponsesByMethod["config/read"]),
+              }),
+        }),
+      );
+      assert.equal(result._tag, "Failure");
+      assert.equal(opened, false);
+      assert.equal(JSON.stringify(result).includes("Native private text."), false);
+      assert.equal(JSON.stringify(result).includes("Club custom private text."), false);
+    },
+  );
   it("falls back to thread/start when resume fails recoverably", async () => {
     const calls: Array<{ method: "thread/start" | "thread/resume"; payload: unknown }> = [];
     const started = makeThreadOpenResponse("fresh-thread");
@@ -2231,5 +2404,28 @@ describe("trimCodexThreadSnapshotForDecode", () => {
     const result = trimCodexThreadSnapshotForDecode(raw, { tailLimit: 1 });
     assert.strictEqual(result.value, raw);
     assert.equal(result.totalTurnCount, 0);
+  });
+});
+
+describe("Codex private account notifications", () => {
+  it("drops gateway login notifications before projection and native logging", () => {
+    assert.equal(isCodexPrivateAccountNotification("account/gatewayOAuth/changed"), true);
+    assert.equal(isCodexPrivateAccountNotification("account/updated"), false);
+    assert.equal(isCodexPrivateAccountNotification("thread/attachment/updated"), false);
+    assert.equal(isCodexPrivateAccountNotification("item/agentMessage/delta"), false);
+    // Gateway login activity is account-level; it must never count as live
+    // child conversation work for aggregate turn liveness either.
+    assert.equal(
+      isCodexChildConversationWorkNotification({
+        method: "account/gatewayOAuth/changed",
+        params: {
+          providerId: "gateway-private-account",
+          status: "inProgress",
+          authUrl: "https://example.invalid/login?secret=private-token",
+          error: null,
+        },
+      }),
+      false,
+    );
   });
 });

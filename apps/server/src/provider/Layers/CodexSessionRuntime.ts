@@ -1,5 +1,6 @@
 import {
   type CodexExperimentalInput,
+  type CodexModelProvider,
   type CodexExperimentalResult,
   type CodexThreadAttachmentsInput,
   CodexThreadAttachmentsResult,
@@ -59,7 +60,10 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 import { applyStderrWarningBudget, makeStderrWarningBudgetState } from "../stderrWarningBudget.ts";
 
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
+import { rewindCodexThreadWithClient } from "./CodexThreadRewind.ts";
+import type { ProviderAdapterRewindOutcomeUnknownError } from "../Errors.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
+import { composeNativeCustomInstructions } from "../NativeCustomInstructions.ts";
 import type { AgentBrowserMcpConfig } from "../AgentBrowserBridge.ts";
 import { lowerProviderProcessTreePriority } from "../ProviderProcessPriority.ts";
 import {
@@ -239,7 +243,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Bounds a raw `thread/resume`, `thread/read`, or `thread/rollback` response
+ * Bounds a raw `thread/resume`, `thread/read`, or legacy rewind response
  * before Schema decoding. Keeps the last `tailLimit` turns plus every turn
  * that is still `inProgress` or explicitly listed in `keepTurnIds`, preserving
  * upstream order. The untouched `thread.status` and metadata still describe
@@ -319,7 +323,7 @@ export type CodexResumeCursor = typeof CodexResumeCursorSchema.Type;
 type CodexServiceTier = NonNullable<EffectCodexSchema.V2ThreadStartParams["serviceTier"]>;
 type CodexThreadItem =
   | EffectCodexSchema.V2ThreadReadResponse["thread"]["turns"][number]["items"][number]
-  | EffectCodexSchema.V2ThreadRollbackResponse["thread"]["turns"][number]["items"][number];
+  | EffectCodexSchema.V2ThreadRevertResponse["thread"]["turns"][number]["items"][number];
 type CodexSnapshotThreadItem = CodexThreadItem;
 type CodexSnapshotTurn = {
   readonly completedAt?: number | null;
@@ -335,7 +339,7 @@ type CodexSnapshotThreadStatus =
   | EffectCodexSchema.V2ThreadReadResponse["thread"]["status"]
   | EffectCodexSchema.V2ThreadResumeResponse["thread"]["status"]
   | EffectCodexSchema.V2ThreadStartResponse["thread"]["status"]
-  | EffectCodexSchema.V2ThreadRollbackResponse["thread"]["status"];
+  | EffectCodexSchema.V2ThreadRevertResponse["thread"]["status"];
 type CodexSnapshotThread = {
   readonly id: string;
   readonly status?: CodexSnapshotThreadStatus | undefined;
@@ -363,6 +367,7 @@ export function buildCodexAppServerArgs(
   transportPolicy: CodexTransportPolicy | undefined,
   ossMode = false,
   codexSubagentThreadLimit?: number,
+  modelProvider: CodexModelProvider = "openai",
 ): ReadonlyArray<string> {
   if (
     codexSubagentThreadLimit !== undefined &&
@@ -370,13 +375,13 @@ export function buildCodexAppServerArgs(
   ) {
     throw new RangeError("Codex worker limit must be an integer from 1 to 128.");
   }
-  // Codex rust-v0.155.1 config/mod.rs resolves agents.N as N spawned workers.
+  // Codex rust-v0.165.0 config/mod.rs resolves agents.N as N spawned workers.
   // Its V2-specific setting takes precedence and counts the coordinator too.
   // Set both keys so a saved V2 value cannot override this session's limit.
-  // https://github.com/openai/codex/blob/rust-v0.155.1/codex-rs/core/src/config/mod.rs#L2717
+  // https://github.com/openai/codex/blob/rust-v0.165.0/codex-rs/core/src/config/mod.rs#L2837
   // The pinned config merger preserves an existing boolean feature toggle as
   // `enabled`, so this nested limit does not enable a disabled V2 backend.
-  // https://github.com/openai/codex/blob/rust-v0.155.1/codex-rs/config/src/merge.rs#L78
+  // https://github.com/openai/codex/blob/rust-v0.165.0/codex-rs/config/src/merge.rs#L79
   const subagentThreadLimitArgs =
     codexSubagentThreadLimit === undefined
       ? []
@@ -391,6 +396,10 @@ export function buildCodexAppServerArgs(
     // LM Studio explicitly so a non-interactive session never opens Codex's
     // local-provider picker or silently chooses Ollama.
     return ["--oss", "--local-provider", "lmstudio", "app-server", ...subagentThreadLimitArgs];
+  }
+  if (modelProvider === "gcp") {
+    // Native Vertex AI already uses HTTPS and its own credential source.
+    return ["app-server", "-c", 'model_provider="gcp"', ...subagentThreadLimitArgs];
   }
   if (transportPolicy?.responsesWebsockets !== "disabled") {
     return ["app-server", ...subagentThreadLimitArgs];
@@ -420,6 +429,8 @@ export function buildCodexAppServerArgs(
 }
 
 export interface CodexSessionRuntimeOptions {
+  readonly customInstructions?: string | undefined;
+  readonly modelProvider?: CodexModelProvider;
   readonly threadId: ThreadId;
   readonly providerInstanceId?: ProviderInstanceId;
   readonly binaryPath: string;
@@ -515,6 +526,7 @@ export interface CodexSessionRuntimeShape {
 
 export type CodexSessionRuntimeError =
   | CodexErrors.CodexAppServerError
+  | ProviderAdapterRewindOutcomeUnknownError
   | CodexSessionRuntimePendingApprovalNotFoundError
   | CodexSessionRuntimePendingUserInputNotFoundError
   | CodexSessionRuntimeInvalidUserInputAnswersError
@@ -991,6 +1003,8 @@ function buildLocalCodexTurnEnvironments(input: {
 }
 
 function buildThreadStartParams(input: {
+  readonly nativeDeveloperInstructions?: string | undefined;
+  readonly customInstructions?: string | undefined;
   readonly cwd: string;
   readonly runtimeMode: RuntimeMode;
   readonly model: string | undefined;
@@ -1001,6 +1015,10 @@ function buildThreadStartParams(input: {
   readonly agentBrowserMcp?: AgentBrowserMcpConfig | undefined;
 }): CodexThreadStartParamsWithRuntimeWorkspaceRoots {
   const config = runtimeModeToThreadConfig(input.runtimeMode);
+  const developerInstructions = composeNativeCustomInstructions(
+    input.customInstructions,
+    input.nativeDeveloperInstructions,
+  );
   const runtimeWorkspaceRoots = buildRuntimeWorkspaceRoots({
     cwd: input.cwd,
     additionalDirectories: input.additionalDirectories,
@@ -1050,6 +1068,7 @@ function buildThreadStartParams(input: {
     approvalPolicy: config.approvalPolicy,
     sandbox: config.sandbox,
     config: threadConfig,
+    ...(developerInstructions !== undefined ? { developerInstructions } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
   };
@@ -1788,6 +1807,13 @@ const requestCodexThreadOpen = <M extends CodexThreadOpenMethod>(
   );
 
 export const openCodexThread = (input: {
+  readonly readConfig?:
+    | (() => Effect.Effect<
+        CodexRpc.ClientRequestResponsesByMethod["config/read"],
+        CodexErrors.CodexAppServerError
+      >)
+    | undefined;
+  readonly customInstructions?: string | undefined;
   readonly client: CodexThreadOpenClient;
   readonly threadId: ThreadId;
   readonly runtimeMode: RuntimeMode;
@@ -1799,47 +1825,86 @@ export const openCodexThread = (input: {
   readonly autoCompactTokenLimit?: number | undefined;
   readonly ultraCaching?: boolean | undefined;
   readonly agentBrowserMcp?: AgentBrowserMcpConfig | undefined;
-}): Effect.Effect<CodexThreadOpenResponse, CodexErrors.CodexAppServerError> => {
-  const resumeThreadId = input.resumeThreadId;
-  const startParams = buildThreadStartParams({
-    cwd: input.cwd,
-    runtimeMode: input.runtimeMode,
-    model: input.requestedModel,
-    serviceTier: input.serviceTier,
-    additionalDirectories: input.additionalDirectories,
-    autoCompactTokenLimit: input.autoCompactTokenLimit,
-    ultraCaching: input.ultraCaching,
-    agentBrowserMcp: input.agentBrowserMcp,
-  });
+}): Effect.Effect<CodexThreadOpenResponse, CodexErrors.CodexAppServerError> =>
+  Effect.gen(function* () {
+    // Request instructions override native config. Preserve its resolved layer
+    // before adding Club's guidance, and fail without opening if it cannot be read.
+    const configReadError = () =>
+      new CodexErrors.CodexAppServerRequestError({
+        code: -32603,
+        errorMessage: "Unable to read native developer instructions.",
+      });
+    const nativeDeveloperInstructions = input.customInstructions?.trim()
+      ? yield* (input.readConfig ? input.readConfig() : Effect.fail(configReadError())).pipe(
+          Effect.flatMap((response) => {
+            const native = response.config.developer_instructions;
+            return native === undefined || native === null || typeof native === "string"
+              ? Effect.succeed(native ?? undefined)
+              : Effect.fail(configReadError());
+          }),
+          Effect.mapError(configReadError),
+        )
+      : undefined;
+    const resumeThreadId = input.resumeThreadId;
+    const startParams = buildThreadStartParams({
+      nativeDeveloperInstructions,
+      customInstructions: input.customInstructions,
+      cwd: input.cwd,
+      runtimeMode: input.runtimeMode,
+      model: input.requestedModel,
+      serviceTier: input.serviceTier,
+      additionalDirectories: input.additionalDirectories,
+      autoCompactTokenLimit: input.autoCompactTokenLimit,
+      ultraCaching: input.ultraCaching,
+      agentBrowserMcp: input.agentBrowserMcp,
+    });
 
-  if (resumeThreadId === undefined) {
-    return requestCodexThreadOpen(input.client, "thread/start", startParams, input.threadId);
-  }
+    if (resumeThreadId === undefined) {
+      return yield* requestCodexThreadOpen(
+        input.client,
+        "thread/start",
+        startParams,
+        input.threadId,
+      );
+    }
 
-  return requestCodexThreadOpen(
-    input.client,
-    "thread/resume",
-    {
-      threadId: resumeThreadId,
-      ...startParams,
-    },
-    input.threadId,
-  ).pipe(
-    Effect.catchIf(isRecoverableThreadResumeError, (error) =>
-      Effect.logWarning("codex app-server thread resume fell back to fresh start", {
-        threadId: input.threadId,
-        requestedRuntimeMode: input.runtimeMode,
-        resumeThreadId,
-        recoverable: true,
-        cause: error.message,
-      }).pipe(
-        Effect.andThen(
-          requestCodexThreadOpen(input.client, "thread/start", startParams, input.threadId),
+    return yield* requestCodexThreadOpen(
+      input.client,
+      "thread/resume",
+      {
+        threadId: resumeThreadId,
+        ...startParams,
+      },
+      input.threadId,
+    ).pipe(
+      Effect.catchIf(isRecoverableThreadResumeError, (error) =>
+        Effect.logWarning("codex app-server thread resume fell back to fresh start", {
+          threadId: input.threadId,
+          requestedRuntimeMode: input.runtimeMode,
+          resumeThreadId,
+          recoverable: true,
+          cause: error.message,
+        }).pipe(
+          Effect.andThen(
+            requestCodexThreadOpen(input.client, "thread/start", startParams, input.threadId),
+          ),
         ),
       ),
-    ),
-  );
-};
+    );
+  });
+
+/**
+ * Codex 0.157 adds account/gatewayOAuth/changed with a full authorization URL
+ * and a provider-authored error. Club does not opt into gateway-login UI
+ * ownership; projecting this account-level notification would publish those
+ * private values into native provider logs and durable diagnostics and count
+ * login activity as thread work. Source: rust-v0.157.0 app-server-protocol
+ * v2/account.rs, GatewayOAuthChangedNotification. A future login UI must
+ * consume it via a private, live-only channel, not the durable event stream.
+ */
+export function isCodexPrivateAccountNotification(method: string): boolean {
+  return method === "account/gatewayOAuth/changed";
+}
 
 function readNotificationThreadId(notification: CodexServerNotification): string | undefined {
   switch (notification.method) {
@@ -2522,7 +2587,7 @@ export function codexTerminalSessionPatch(input: {
 }
 
 function parseThreadSnapshot(
-  response: EffectCodexSchema.V2ThreadReadResponse | EffectCodexSchema.V2ThreadRollbackResponse,
+  response: EffectCodexSchema.V2ThreadReadResponse | EffectCodexSchema.V2ThreadRevertResponse,
 ): CodexThreadSnapshot {
   return {
     threadId: response.thread.id,
@@ -2915,6 +2980,7 @@ export const makeCodexSessionRuntime = (
       options.transportPolicy,
       options.ossMode,
       options.codexSubagentThreadLimit,
+      options.modelProvider,
     );
     const appServerCwd = options.appServerCwd ?? process.cwd();
     const child = yield* spawner
@@ -2956,6 +3022,9 @@ export const makeCodexSessionRuntime = (
     );
 
     const clientContext = yield* CodexClient.layerChildProcess(child, {
+      // This runtime continuously drains raw notifications into its scoped
+      // event pipeline. A sliding queue can drop words during a provider burst.
+      losslessNotifications: true,
       logger: (event) =>
         Effect.logWarning("codex.app-server.protocol.diagnostic", {
           threadId: options.threadId,
@@ -2970,6 +3039,8 @@ export const makeCodexSessionRuntime = (
       Effect.provide(clientContext),
     );
     const serverNotifications = yield* Queue.unbounded<CodexServerNotification>();
+    const realtimeNotifications =
+      yield* Queue.unbounded<CodexProtocol.CodexAppServerIncomingNotification>();
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const observeNotification = (notification: CodexServerNotification) =>
       Clock.currentTimeMillis.pipe(
@@ -4566,6 +4637,9 @@ export const makeCodexSessionRuntime = (
 
     const handleRawNotification = (notification: CodexServerNotification) =>
       Effect.gen(function* () {
+        if (isCodexPrivateAccountNotification(notification.method)) {
+          return;
+        }
         const observation = yield* observeNotification(notification);
         const preparedNotifications = yield* Ref.modify(completedAgentMessagesRef, (current) => {
           const reconciliation = reconcileCodexCompletedAgentMessageNotifications(
@@ -4816,16 +4890,19 @@ export const makeCodexSessionRuntime = (
     yield* client.raw.notifications.pipe(
       // Voice signaling, lease keys, transcripts, audio, and provider errors
       // stay transient. Errors and arbitrary realtime items can contain SDP.
-      Stream.filter((notification) => !notification.method.startsWith("thread/realtime/")),
+      // This is the only consumer of the transport queue. Filtering separate
+      // consumers would split and discard both chat text and voice signaling.
       Stream.runForEach((notification) =>
-        Queue.offer(
-          serverNotifications,
-          makeCodexServerNotification(
-            notification.method,
-            notification.params,
-            notification.emittedAtMs,
-          ),
-        ).pipe(Effect.asVoid),
+        notification.method.startsWith("thread/realtime/")
+          ? Queue.offer(realtimeNotifications, notification).pipe(Effect.asVoid)
+          : Queue.offer(
+              serverNotifications,
+              makeCodexServerNotification(
+                notification.method,
+                notification.params,
+                notification.emittedAtMs,
+              ),
+            ).pipe(Effect.asVoid),
       ),
       Effect.catchCause((cause) =>
         Effect.logWarning("codex.raw.notification.stream.failed", {
@@ -4959,7 +5036,11 @@ export const makeCodexSessionRuntime = (
 
     const start = Effect.fn("CodexSessionRuntime.start")(function* () {
       yield* emitSessionEvent("session/connecting", "Starting Codex App Server session.");
-      if (options.transportPolicy?.responsesWebsockets === "disabled") {
+      if (
+        !options.ossMode &&
+        options.modelProvider !== "gcp" &&
+        options.transportPolicy?.responsesWebsockets === "disabled"
+      ) {
         yield* emitEvent({
           kind: "notification",
           threadId: options.threadId,
@@ -4981,6 +5062,8 @@ export const makeCodexSessionRuntime = (
       const requestedModel = normalizeCodexModelSlug(options.model);
 
       const opened = yield* openCodexThread({
+        readConfig: () => client.request("config/read", { cwd: options.cwd, includeLayers: false }),
+        customInstructions: options.customInstructions,
         client,
         threadId: options.threadId,
         runtimeMode: options.runtimeMode,
@@ -5057,6 +5140,7 @@ export const makeCodexSessionRuntime = (
     const codexExperimental = yield* makeCodexExperimentalController(
       client,
       readProviderThreadId,
+      Stream.fromQueue(realtimeNotifications),
     ).pipe(Effect.provideService(Scope.Scope, runtimeScope));
 
     const close = Effect.gen(function* () {
@@ -5073,6 +5157,7 @@ export const makeCodexSessionRuntime = (
       yield* emitSessionEvent("session/closed", "Session stopped");
       yield* Scope.close(runtimeScope, Exit.void);
       yield* Queue.shutdown(serverNotifications);
+      yield* Queue.shutdown(realtimeNotifications);
       yield* Queue.shutdown(events);
     });
 
@@ -5558,9 +5643,16 @@ export const makeCodexSessionRuntime = (
       }),
       rollbackThread: (numTurns) =>
         Effect.gen(function* () {
+          const current = yield* Ref.get(sessionRef);
+          if (current.activeTurnId || current.status === "running") {
+            return yield* CodexErrors.CodexAppServerRequestError.invalidRequest(
+              "Stop the active Codex turn before rewinding",
+            );
+          }
           const providerThreadId = yield* readProviderThreadId;
-          const response = yield* client.request("thread/rollback", {
-            threadId: providerThreadId,
+          const response = yield* rewindCodexThreadWithClient({
+            client,
+            providerThreadId,
             numTurns,
           });
           yield* updateSession(sessionRef, {

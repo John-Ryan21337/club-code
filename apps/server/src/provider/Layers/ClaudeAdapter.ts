@@ -78,6 +78,8 @@ import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { readSystemPromptFileForInjection } from "../../systemPromptFile.ts";
+import { composeNativeCustomInstructions } from "../NativeCustomInstructions.ts";
 import { getAgentBrowserBridge } from "../AgentBrowserBridge.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import { spawnProviderProcessAtLowerPriority } from "../ProviderProcessPriority.ts";
@@ -113,9 +115,12 @@ export const CLAUDE_ULTRA_CACHING_APPEND_PROMPT = [
 function runtimeModeToClaudePermissionMode(runtimeMode: RuntimeMode): PermissionMode | undefined {
   switch (runtimeMode) {
     case "approval-required":
-      // Omitting the initial flag lets Claude Code use its standard/manual
-      // permission behavior and matches the Agent SDK's documented default.
-      return undefined;
+      // Claude Code 2.1.283-2.1.302 churned the no-mode default between
+      // manual and classifier-backed auto depending on provider, telemetry,
+      // and install freshness. Approval-required is an explicit Cafe access
+      // policy, so request `default` (manual/ask) instead of relying on the
+      // CLI's ambient default-mode selection.
+      return "default";
     case "auto-accept-edits":
       return "acceptEdits";
     case "full-access":
@@ -322,6 +327,8 @@ interface ClaudeSessionContext {
   readonly query: ClaudeQueryRuntime;
   readonly runFork: RuntimeFork;
   streamFiber: Fiber.Fiber<void, Error> | undefined;
+  /** Retain the exact query until close and reader retirement both succeed. */
+  queryClosureUncertain: boolean;
   readonly startedAt: string;
   readonly basePermissionMode: PermissionMode | undefined;
   currentPermissionMode: PermissionMode;
@@ -693,7 +700,7 @@ export function resolveClaudeModelSessionOptions(modelSelection: ModelSelection 
   readonly effectiveEffort: ClaudeSdkEffort | null;
   readonly settings: {
     readonly alwaysThinkingEnabled?: boolean;
-    readonly fastMode?: true;
+    readonly fastMode?: boolean;
   };
 } {
   const caps = getClaudeModelCapabilities(modelSelection?.model);
@@ -718,7 +725,7 @@ export function resolveClaudeModelSessionOptions(modelSelection: ModelSelection 
     effectiveEffort: getEffectiveClaudeAgentEffort(effort),
     settings: {
       ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
-      ...(fastMode ? { fastMode: true as const } : {}),
+      fastMode,
     },
   };
 }
@@ -2097,7 +2104,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               }
             : {}),
           ...(itemId ? { itemId: ProviderItemId.make(itemId) } : {}),
-          payload: message,
+          payload:
+            message.type === "system" && message.subtype === "session_writes_lost"
+              ? { type: "system", subtype: "session_writes_lost" }
+              : message,
         },
       },
       context.session.threadId,
@@ -3611,6 +3621,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     switch (message.subtype) {
+      case "session_writes_lost":
+        yield* emitRuntimeWarning(
+          context,
+          "Claude could not save session data because the disk is full or its quota is used up. Free disk space before resuming.",
+          { subtype: "session_writes_lost" },
+        );
+        return;
       case "api_retry":
         if (isClaudeAuthFailureSystemMessage(message)) {
           context.terminalAccessError = "authentication_failed";
@@ -4313,16 +4330,21 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     yield* stopSessionInternal(context, {
       emitExitEvent: true,
-    });
+    }).pipe(
+      Effect.catch((cause) =>
+        emitRuntimeError(context, "Failed to close Claude runtime query.", cause),
+      ),
+    );
   });
 
   const stopSessionInternal = Effect.fn("stopSessionInternal")(function* (
     context: ClaudeSessionContext,
     options?: { readonly emitExitEvent?: boolean; readonly interruptStreamFiber?: boolean },
   ) {
-    if (context.stopped) return;
+    if (context.stopped && !context.queryClosureUncertain) return;
 
     context.stopped = true;
+    context.queryClosureUncertain = true;
 
     for (const [requestId, pending] of context.pendingApprovals) {
       yield* Deferred.succeed(pending.decision, "cancel");
@@ -4352,28 +4374,41 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     yield* Queue.shutdown(context.promptQueue);
 
     const streamFiber = context.streamFiber;
-    context.streamFiber = undefined;
-    if (
-      options?.interruptStreamFiber !== false &&
-      streamFiber &&
-      streamFiber.pollUnsafe() === undefined
-    ) {
-      yield* Fiber.interrupt(streamFiber);
-    }
-
-    yield* Effect.try({
-      try: () => context.query.close(),
-      catch: (cause) =>
-        new ProviderAdapterProcessError({
-          provider: PROVIDER,
-          threadId: context.session.threadId,
-          detail: toMessage(cause, "Failed to close Claude runtime query."),
-          cause,
-        }),
+    yield* Effect.gen(function* () {
+      // Query.close releases a pending SDK next(). Joining its reader first
+      // can wait forever because async-generator return() queues behind next().
+      yield* Effect.try({
+        try: () => context.query.close(),
+        catch: (cause) =>
+          new ProviderAdapterProcessError({
+            provider: PROVIDER,
+            threadId: context.session.threadId,
+            detail: toMessage(cause, "Failed to close Claude runtime query."),
+            cause,
+          }),
+      });
+      if (
+        options?.interruptStreamFiber !== false &&
+        streamFiber &&
+        streamFiber.pollUnsafe() === undefined
+      ) {
+        yield* Fiber.interrupt(streamFiber).pipe(Effect.interruptible);
+      }
+      if (context.streamFiber === streamFiber) context.streamFiber = undefined;
+      context.queryClosureUncertain = false;
     }).pipe(
-      Effect.catch((cause) =>
-        emitRuntimeError(context, "Failed to close Claude runtime query.", cause),
-      ),
+      Effect.timeoutOrElse({
+        duration: 10_000,
+        orElse: () =>
+          Effect.fail(
+            new ProviderAdapterProcessError({
+              provider: PROVIDER,
+              threadId: context.session.threadId,
+              detail:
+                "Claude session closure is not confirmed. Stop the session again before starting another session.",
+            }),
+          ),
+      }),
     );
 
     const updatedAt = yield* nowIso;
@@ -4436,6 +4471,19 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         });
       }
 
+      const customInstructions = composeNativeCustomInstructions(
+        yield* readSystemPromptFileForInjection(serverConfig.systemPromptPath).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.mapError(
+            () =>
+              new ProviderAdapterProcessError({
+                provider: PROVIDER,
+                threadId: input.threadId,
+                detail: "Unable to read custom instructions.",
+              }),
+          ),
+        ),
+      );
       const existingContext = sessions.get(input.threadId);
       if (existingContext) {
         yield* Effect.logWarning("claude.session.replacing", {
@@ -4445,16 +4493,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         });
         yield* stopSessionInternal(existingContext, {
           emitExitEvent: false,
-        }).pipe(
-          // Replacement cleanup is best-effort: never block the new session on
-          // either typed failures or unexpected defects from tearing down the old one.
-          Effect.catchCause((cause) =>
-            Effect.logWarning("claude.session.replace.stop-failed", {
-              threadId: input.threadId,
-              cause,
-            }),
-          ),
-        );
+        });
       }
 
       const startedAt = yield* nowIso;
@@ -4494,6 +4533,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           readonly toolUseID?: string;
         },
       ) {
+        if (callbackOptions.signal.aborted) {
+          return {
+            behavior: "deny",
+            message: "User cancelled tool execution.",
+          } satisfies PermissionResult;
+        }
         const requestId = ApprovalRequestId.make(yield* Random.nextUUIDv4);
 
         // Parse questions from the SDK's AskUserQuestion input.
@@ -4566,10 +4611,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         callbackOptions.signal.addEventListener("abort", onAbort, {
           once: true,
         });
+        if (callbackOptions.signal.aborted) onAbort();
 
         // Block until the user provides answers.
-        const answers = yield* Deferred.await(answersDeferred);
-        pendingUserInputs.delete(requestId);
+        const answers = yield* Deferred.await(answersDeferred).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              callbackOptions.signal.removeEventListener("abort", onAbort);
+              pendingUserInputs.delete(requestId);
+            }),
+          ),
+        );
 
         // Emit user-input.resolved so the UI knows the interaction completed.
         const resolvedStamp = yield* makeEventStamp();
@@ -4663,14 +4715,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         // of being silently auto-approved. Do not persist ruleContent here: it
         // can contain sensitive project policy and is not needed to honor the
         // upstream decision.
-        // Only true bypass mode may skip Cafe's callback. Auto mode can be
-        // layered over a historical full-access runtime policy, but upstream's
-        // classifier must remain authoritative. If Auto falls back to a human
-        // prompt, silently allowing it here would defeat the safety model.
-        if (context.currentPermissionMode === "bypassPermissions" && !matchedAskRule) {
+        // Claude Code 2.1.304 adds mod tool.check asks with decider: "person".
+        // SDK 0.3.308 has no public callback field that identifies those asks.
+        // Upstream applies bypassPermissions before invoking this callback;
+        // any remaining ask must reach the user, even in Bypass mode. Applying
+        // a second blanket allow here would defeat plugin-required consent.
+        // Auto-mode classifier fallbacks follow the same human approval path.
+
+        if (callbackOptions.signal.aborted) {
           return {
-            behavior: "allow",
-            updatedInput: toolInput,
+            behavior: "deny",
+            message: "User cancelled tool execution.",
           } satisfies PermissionResult;
         }
 
@@ -4736,9 +4791,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         callbackOptions.signal.addEventListener("abort", onAbort, {
           once: true,
         });
+        // The signal may have fired while the approval event was being emitted.
+        if (callbackOptions.signal.aborted) onAbort();
 
-        const decision = yield* Deferred.await(decisionDeferred);
-        pendingApprovals.delete(requestId);
+        const decision = yield* Deferred.await(decisionDeferred).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              callbackOptions.signal.removeEventListener("abort", onAbort);
+              pendingApprovals.delete(requestId);
+            }),
+          ),
+        );
 
         const resolvedStamp = yield* makeEventStamp();
         yield* offerRuntimeEvent({
@@ -4942,6 +5005,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             );
           },
         });
+      const promptAppend = [
+        ...(claudeSettings.ultraCaching ? [CLAUDE_ULTRA_CACHING_APPEND_PROMPT] : []),
+        ...(customInstructions !== undefined ? [customInstructions] : []),
+      ].join("\n\n");
       const queryOptions: ClaudeQueryOptions = {
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
@@ -4951,9 +5018,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               type: "preset",
               preset: "claude_code",
               excludeDynamicSections: true,
-              append: CLAUDE_ULTRA_CACHING_APPEND_PROMPT,
+              append: promptAppend,
             }
-          : { type: "preset", preset: "claude_code" },
+          : {
+              type: "preset",
+              preset: "claude_code",
+              ...(promptAppend ? { append: promptAppend } : {}),
+            },
         settingSources: [...CLAUDE_SETTING_SOURCES],
         mcpServers: {
           club_browser: {
@@ -5091,6 +5162,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         query: queryRuntime,
         runFork,
         streamFiber: undefined,
+        queryClosureUncertain: false,
         startedAt,
         basePermissionMode: permissionMode,
         currentPermissionMode: initialPermissionMode ?? "default",
@@ -5493,7 +5565,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const stopSession: ClaudeAdapterShape["stopSession"] = Effect.fn("stopSession")(
     function* (threadId) {
-      const context = yield* requireSession(threadId);
+      const context = sessions.get(threadId) ?? (yield* requireSession(threadId));
       yield* stopSessionInternal(context, {
         emitExitEvent: true,
       });
@@ -5592,7 +5664,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       ([, context]) =>
         stopSessionInternal(context, {
           emitExitEvent: false,
-        }),
+        }).pipe(
+          Effect.catch((cause) =>
+            emitRuntimeError(context, "Failed to close Claude runtime query.", cause),
+          ),
+        ),
       { discard: true },
     ).pipe(Effect.tap(() => Queue.shutdown(runtimeEventQueue))),
   );

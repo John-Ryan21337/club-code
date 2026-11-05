@@ -574,6 +574,8 @@ export interface DesktopBridge {
   getDebugEndpointState: () => Promise<DesktopDebugEndpointState>;
   publishDebugSnapshot: (snapshot: DesktopRendererDebugSnapshot) => Promise<void>;
   getClientSettings: () => Promise<ClientSettings | null>;
+  getSettingsProfileLibrary?: () => Promise<string | null>;
+  setSettingsProfileLibrary?: (document: string) => Promise<void>;
   setClientSettings: (settings: ClientSettings) => Promise<void>;
   setPowerSaveBlockerState: (state: DesktopPowerSaveBlockerState) => Promise<void>;
   getSavedEnvironmentRegistry: () => Promise<readonly PersistedSavedEnvironmentRecord[]>;

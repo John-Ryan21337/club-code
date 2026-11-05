@@ -1,5 +1,4 @@
 import {
-  CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID,
   type ProviderDriverKind,
   type ProviderInstanceId,
   type ProviderOptionSelection,
@@ -10,14 +9,15 @@ import {
   buildProviderOptionSelectionsFromDescriptors,
   getProviderOptionCurrentValue,
   getProviderOptionDescriptors,
+  getProviderOptionBooleanSelectionValue,
   isClaudeUltrathinkPrompt,
-  parseCodexSubagentThreadLimitOption,
 } from "@cafecode/shared/model";
 import type { ReactNode } from "react";
 
 import type { DraftId } from "../../composerDraftStore";
 import { getProviderModelCapabilities } from "../../providerModels";
 import { shouldRenderTraitsControls, TraitsMenuContent, TraitsPicker } from "./TraitsPicker";
+import { getProviderThreadOptions } from "./providerThreadOptions";
 
 export type ComposerProviderStateInput = {
   provider: ProviderDriverKind;
@@ -51,7 +51,15 @@ type TraitsRenderInput = {
 export function getComposerProviderState(input: ComposerProviderStateInput): ComposerProviderState {
   const { provider, model, models, prompt, modelOptions } = input;
   const caps = getProviderModelCapabilities(models, model, provider);
-  const descriptors = getProviderOptionDescriptors({ caps, selections: modelOptions });
+  const descriptors = getProviderOptionDescriptors({ caps, selections: modelOptions }).map(
+    (descriptor) =>
+      descriptor.id === "fastMode" && descriptor.type === "boolean"
+        ? {
+            ...descriptor,
+            currentValue: getProviderOptionBooleanSelectionValue(modelOptions, "fastMode") === true,
+          }
+        : descriptor,
+  );
   const primarySelectDescriptor = descriptors.find(
     (descriptor): descriptor is Extract<(typeof descriptors)[number], { type: "select" }> =>
       descriptor.type === "select",
@@ -62,24 +70,15 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
     (primarySelectDescriptor?.promptInjectedValues?.length ?? 0) > 0 &&
     isClaudeUltrathinkPrompt(prompt);
   const descriptorSelections = buildProviderOptionSelectionsFromDescriptors(descriptors);
-  const codexSubagentThreadLimit =
-    provider === "codex" ? parseCodexSubagentThreadLimitOption(modelOptions) : null;
+  const threadOptions = getProviderThreadOptions(provider, modelOptions);
 
   return {
     provider,
     promptEffort,
     modelOptionsForDispatch:
-      codexSubagentThreadLimit === null
+      threadOptions.length === 0
         ? descriptorSelections
-        : [
-            ...(descriptorSelections ?? []).filter(
-              (option) => option.id !== CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID,
-            ),
-            {
-              id: CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID,
-              value: String(codexSubagentThreadLimit),
-            },
-          ],
+        : [...(descriptorSelections ?? []), ...threadOptions],
     ...(ultrathinkActive
       ? {
           composerFrameClassName: "ultrathink-frame",

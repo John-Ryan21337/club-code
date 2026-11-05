@@ -1,4 +1,6 @@
 import {
+  CODEX_AUTO_DELEGATE_OPTION_ID,
+  CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID,
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
   defaultInstanceIdForDriver,
@@ -2458,6 +2460,12 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             DEFAULT_MODEL;
           const providerOpts =
             nextProviderOptions && nextProviderOptions.length > 0 ? nextProviderOptions : undefined;
+          const stickyProviderOpts = providerOpts?.filter(
+            (option) =>
+              normalizedProvider !== "codex" ||
+              (option.id !== CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID &&
+                option.id !== CODEX_AUTO_DELEGATE_OPTION_ID),
+          );
 
           set((state) => {
             const existing = state.draftsByThreadKey[threadKey];
@@ -2486,11 +2494,11 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 nextStickyMap[instanceKey] ??
                 base.modelSelectionByProvider[instanceKey] ??
                 createModelSelection(instanceKey, fallbackModel);
-              if (providerOpts) {
+              if (stickyProviderOpts && stickyProviderOpts.length > 0) {
                 nextStickyMap[instanceKey] = createModelSelection(
                   instanceKey,
                   stickyBase.model,
-                  providerOpts,
+                  stickyProviderOpts,
                 );
               } else if ((stickyBase.options?.length ?? 0) > 0) {
                 const { options: _, ...rest } = stickyBase;

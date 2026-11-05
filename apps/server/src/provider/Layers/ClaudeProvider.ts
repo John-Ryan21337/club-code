@@ -3,6 +3,7 @@ import {
   type ModelCapabilities,
   type ModelSelection,
   ProviderDriverKind,
+  type ServerProviderAccountRateLimits,
   type ServerProviderAuth,
   ServerProviderModel as ServerProviderModelSchema,
   type ServerProviderModel,
@@ -239,6 +240,11 @@ function claudeSubscriptionLabel(subscriptionType: string | undefined): string |
   if (!normalized) return undefined;
 
   switch (normalized) {
+    case "ultra":
+    case "claudeultra":
+    case "ultraplan":
+    case "claudeultrasubscription":
+      return "Ultra";
     case "claudemaxsubscription":
       return "Max";
     case "claudemax5xsubscription":
@@ -493,7 +499,9 @@ const probeClaudeCapabilities = (
  */
 type ClaudeUsageProbeQueryFactory = (input: Parameters<typeof claudeQuery>[0]) => {
   readonly initializationResult: () => Promise<unknown>;
-  readonly usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => Promise<unknown>;
+  readonly usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: (opts?: {
+    readonly skipBehaviors?: boolean;
+  }) => Promise<unknown>;
 };
 
 function normalizedAccountBinding(value: string | undefined): string | undefined {
@@ -536,10 +544,12 @@ const probeClaudeAccountUsage = (
   expectedAuth: ServerProviderAuth,
   environment: NodeJS.ProcessEnv = process.env,
   queryFactory: ClaudeUsageProbeQueryFactory = claudeQuery,
+  previous?: ServerProviderAccountRateLimits,
 ) => {
   const abort = new AbortController();
   return Effect.gen(function* () {
     const claudeEnvironment = yield* makeClaudeEnvironment(claudeSettings, environment);
+    let accountPlan: string | undefined;
     const raw = yield* Effect.tryPromise(async () => {
       const q = queryFactory({
         // Never yield: initialization and the control request do not create a
@@ -565,10 +575,14 @@ const probeClaudeAccountUsage = (
       if (!matchesExpectedClaudeAccount(expectedAuth, initialization)) {
         return undefined;
       }
-      return q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET();
+      accountPlan = (initialization as { account?: { subscriptionType?: string } })?.account
+        ?.subscriptionType;
+      // Club never renders the behaviors section; skipping it avoids a local
+      // transcript scan on every usage probe (Agent SDK 0.3.302+).
+      return q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({ skipBehaviors: true });
     });
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
-    return parseClaudeAccountUsage(raw, checkedAt);
+    return parseClaudeAccountUsage(raw, checkedAt, accountPlan, previous);
   }).pipe(
     Effect.ensuring(
       Effect.sync(() => {

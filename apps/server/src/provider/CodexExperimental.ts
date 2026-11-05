@@ -6,6 +6,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as Semaphore from "effect/Semaphore";
 import type { CodexAppServerClientShape } from "effect-codex-app-server/client";
+import type { CodexAppServerIncomingNotification } from "effect-codex-app-server/protocol";
 import { CodexAppServerProtocolParseError } from "effect-codex-app-server/errors";
 
 const failure = () =>
@@ -16,7 +17,11 @@ const failure = () =>
 // Audio travels over the browser's WebRTC connection. This controller holds only
 // short-lived signaling state; neither SDP nor audio belongs in the daemon journal.
 export const makeCodexExperimentalController = Effect.fn("makeCodexExperimentalController")(
-  function* (client: CodexAppServerClientShape, readThreadId: Effect.Effect<string, unknown>) {
+  function* (
+    client: CodexAppServerClientShape,
+    readThreadId: Effect.Effect<string, unknown>,
+    notifications: Stream.Stream<CodexAppServerIncomingNotification>,
+  ) {
     const lock = yield* Semaphore.make(1);
     let active: {
       key: string;
@@ -41,7 +46,7 @@ export const makeCodexExperimentalController = Effect.fn("makeCodexExperimentalC
         if (active === current) active = null;
       }).pipe(Effect.timeout("5 seconds"));
     });
-    yield* client.raw.notifications.pipe(
+    yield* notifications.pipe(
       Stream.filter((event) => event.method.startsWith("thread/realtime/")),
       Stream.runForEach((event) =>
         Effect.gen(function* () {
@@ -96,6 +101,15 @@ export const makeCodexExperimentalController = Effect.fn("makeCodexExperimentalC
         .withPermits(1)(
           Effect.gen(function* () {
             const action = input.action;
+            if (action.kind === "memoryRead") {
+              const threadId = yield* readThreadId.pipe(Effect.mapError(failure));
+              const result = yield* client.request("thread/memory/read", { threadId });
+              return {
+                kind: "memoryRead" as const,
+                summary: result.summary?.slice(0, 65_536) ?? null,
+                truncated: (result.summary?.length ?? 0) > 65_536,
+              };
+            }
             if (action.kind === "memoryStatus") {
               const status = yield* client.request("memory/status", {});
               return {

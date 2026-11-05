@@ -194,6 +194,9 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         codexConfig.binaryPath || "codex",
         [
           ...(codexConfig.ossMode ? ["--oss", "--local-provider", "lmstudio"] : []),
+          ...(!codexConfig.ossMode && codexConfig.modelProvider === "gcp"
+            ? ["-c", 'model_provider="gcp"']
+            : []),
           "exec",
           "--ephemeral",
           "--skip-git-repo-check",

@@ -7,16 +7,14 @@
  * the backend-owned value on first server startup.
  */
 import {
-  AMBIENT_CLIENT_SETTINGS_KEYS,
   ClientSettingsError,
   ClientSettingsSchema,
   CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS,
-  DEFAULT_AMBIENT_CLIENT_SETTINGS,
   DEFAULT_CLIENT_SETTINGS,
   type ClientSettings,
   type ClientSettingsPatch,
 } from "@cafecode/contracts";
-import { applyClientSettingsPatch } from "@cafecode/shared/clientSettings";
+import { applyClientSettingsPatch, recoverClientSettings } from "@cafecode/shared/clientSettings";
 import { fromJsonStringPretty, fromLenientJson } from "@cafecode/shared/schemaJson";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
@@ -48,7 +46,6 @@ const encodeClientSettingsJson = Schema.encodeUnknownEffect(
 const ClientSettingsJsonValue = fromLenientJson(Schema.Unknown);
 const decodeClientSettingsJsonValueExit = Schema.decodeUnknownExit(ClientSettingsJsonValue);
 const decodeClientSettingsDocumentExit = Schema.decodeUnknownExit(ClientSettingsSchema);
-const ambientClientSettingsKeySet = new Set<string>(AMBIENT_CLIENT_SETTINGS_KEYS);
 
 type PersistedClientSettingsDecode = {
   readonly settings: ClientSettings;
@@ -58,17 +55,7 @@ type PersistedClientSettingsDecode = {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-const removeAmbientSettings = (settings: Record<string, unknown>) =>
-  Object.fromEntries(
-    Object.entries(settings).filter(([key]) => !ambientClientSettingsKeySet.has(key)),
-  );
-
-/**
- * Decode historic direct documents and the desktop's older `{ settings: ... }`
- * wrapper. Only a malformed ambient group is recoverable: strip that complete
- * group and decode the rest normally, so unrelated corruption still fails
- * closed to the existing whole-document defaults path.
- */
+/** Recover invalid fields without discarding the rest of the saved preferences. */
 const decodePersistedClientSettingsExit = (
   raw: string,
 ): Exit.Exit<PersistedClientSettingsDecode, Schema.SchemaError> => {
@@ -92,18 +79,11 @@ const decodePersistedClientSettingsExit = (
     return Exit.failCause(decoded.cause);
   }
 
-  const recovered = decodeClientSettingsDocumentExit(removeAmbientSettings(document));
-  if (recovered._tag === "Failure") {
-    return Exit.failCause(decoded.cause);
-  }
-
+  const recovered = recoverClientSettings(document);
   return Exit.succeed({
-    settings: {
-      ...recovered.value,
-      ...DEFAULT_AMBIENT_CLIENT_SETTINGS,
-    },
-    recoveredAmbientSettings: true,
-  } satisfies PersistedClientSettingsDecode);
+    settings: recovered.settings,
+    recoveredAmbientSettings: recovered.invalidKeys.length > 0,
+  });
 };
 
 const normalizeClientSettings = (
@@ -276,12 +256,20 @@ const makeServerClientSettings = Effect.gen(function* () {
       return DEFAULT_CLIENT_SETTINGS;
     }
     if (decoded.value.recoveredAmbientSettings) {
-      yield* Effect.logWarning("recovered malformed ambient client settings", {
-        recovery: "ambient-defaults",
+      yield* Effect.logWarning("recovered invalid client settings fields", {
+        recovery: "invalid-fields-only",
       });
     }
     const migrated = yield* migrateLegacySidebarBrandImage(decoded.value.settings);
     if (decoded.value.recoveredAmbientSettings || migrated !== decoded.value.settings) {
+      // Keep the original document available before any automatic repair.
+      yield* fs
+        .writeFileString(`${clientSettingsPath}.before-recovery`, raw)
+        .pipe(
+          Effect.mapError((cause) =>
+            toSettingsError("failed to preserve client settings before recovery", cause),
+          ),
+        );
       yield* writeSettingsAtomically(migrated);
     }
     return migrated;

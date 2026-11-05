@@ -114,6 +114,7 @@ import {
   authWebSocketTokenRouteLayer,
 } from "./auth/http.ts";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
+import { researchRoutesLayer } from "./research/http.ts";
 import { ServerAuthLive } from "./auth/Layers/ServerAuth.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
@@ -372,6 +373,7 @@ export const youTubeAccountRoutesLayer = Layer.mergeAll(
 );
 
 export const makeRoutesLayer = Layer.mergeAll(
+  researchRoutesLayer,
   baseRoutesLayer,
   Layer.mergeAll(
     ambientImageServeRouteLayer,

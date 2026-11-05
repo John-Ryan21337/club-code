@@ -223,6 +223,12 @@ export function AmbientImagePanel({
   const [customGeometry, setCustomGeometry] = useState<NormalizedAmbientMediaGeometry | null>(
     () => readAmbientMediaGeometry("image") ?? DEFAULT_AMBIENT_MEDIA_GEOMETRY.image,
   );
+  useEffect(() => {
+    const restore = () =>
+      setCustomGeometry(readAmbientMediaGeometry("image") ?? DEFAULT_AMBIENT_MEDIA_GEOMETRY.image);
+    window.addEventListener("cafe-code:profile-layout-restored", restore);
+    return () => window.removeEventListener("cafe-code:profile-layout-restored", restore);
+  }, []);
   const geometryRef = useRef(customGeometry);
   const interactionRef = useRef<PointerInteraction | null>(null);
   const [reducedMotion, setReducedMotion] = useState(false);

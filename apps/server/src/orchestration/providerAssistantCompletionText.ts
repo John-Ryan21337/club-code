@@ -4,6 +4,51 @@ export function hasRenderableAssistantText(text: string | undefined): boolean {
   return (text?.trim().length ?? 0) > 0;
 }
 
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+/** Recover lost deltas only from an intact native completion for this exact item. */
+export function isAuthoritativeCodexAssistantCompletion(
+  event: ProviderRuntimeEvent,
+  messageId: string,
+): boolean {
+  if (
+    event.provider !== "codex" ||
+    event.type !== "item.completed" ||
+    event.payload.itemType !== "assistant_message" ||
+    event.payload.status !== "completed" ||
+    event.compaction !== undefined ||
+    event.itemId === undefined ||
+    messageId !== `assistant:${event.itemId}` ||
+    event.raw?.source !== "codex.app-server.notification" ||
+    event.raw.method !== "item/completed" ||
+    !hasRenderableAssistantText(event.payload.detail)
+  )
+    return false;
+
+  const data = record(event.payload.data);
+  const raw = record(event.raw.payload);
+  const item = record(data?.item);
+  const rawItem = record(raw?.item);
+  return (
+    typeof data?.threadId === "string" &&
+    data.threadId.length > 0 &&
+    data.threadId === raw?.threadId &&
+    typeof data.turnId === "string" &&
+    data.turnId === event.turnId &&
+    data.turnId === raw?.turnId &&
+    item?.type === "agentMessage" &&
+    rawItem?.type === "agentMessage" &&
+    item.id === event.itemId &&
+    rawItem.id === event.itemId &&
+    item.text === event.payload.detail &&
+    rawItem.text === event.payload.detail
+  );
+}
+
 export function completedAssistantTextDelta(input: {
   readonly projectedText: string | undefined;
   readonly bufferedText: string;

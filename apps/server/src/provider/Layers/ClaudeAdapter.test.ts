@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { getEventListeners } from "node:events";
 import os from "node:os";
 import path from "node:path";
 
@@ -168,6 +169,45 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
         });
       },
     };
+  }
+}
+
+class PendingReadClaudeQuery extends FakeClaudeQuery {
+  private releaseRead!: () => void;
+  private started!: () => void;
+  private readonly readGate = new Promise<void>((resolve) => {
+    this.releaseRead = resolve;
+  });
+  readonly readStarted = new Promise<void>((resolve) => {
+    this.started = resolve;
+  });
+  readerFinished = false;
+  failClose = false;
+  readonly retirementGate: Promise<void>;
+  releaseRetirement!: () => void;
+
+  constructor(blockRetirement = false) {
+    super();
+    this.retirementGate = new Promise<void>((resolve) => {
+      this.releaseRetirement = resolve;
+    });
+    if (!blockRetirement) this.releaseRetirement();
+  }
+
+  override readonly close = () => {
+    this.closeCalls++;
+    if (this.failClose) throw new Error("fixture close failure");
+    this.releaseRead();
+  };
+
+  override async *[Symbol.asyncIterator](): AsyncGenerator<SDKMessage> {
+    this.started();
+    try {
+      await this.readGate;
+    } finally {
+      await this.retirementGate;
+      this.readerFinished = true;
+    }
   }
 }
 
@@ -421,7 +461,9 @@ describe("ClaudeAdapterLive", () => {
 
       const createInput = harness.getLastCreateQueryInput();
       assert.deepEqual(createInput?.options.settingSources, ["user", "project", "local"]);
-      assert.equal(createInput?.options.permissionMode, undefined);
+      // Approval-required requests manual mode explicitly: Claude Code
+      // 2.1.283-2.1.302 made the omitted-mode default provider-dependent.
+      assert.equal(createInput?.options.permissionMode, "default");
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, undefined);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -470,6 +512,58 @@ describe("ClaudeAdapterLive", () => {
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
+    );
+  });
+
+  for (const ultraCaching of [false, true]) {
+    it.effect(
+      `appends native custom guidance without replacing Claude's preset (ultra caching ${ultraCaching})`,
+      () => {
+        const baseDir = mkdtempSync(path.join(os.tmpdir(), "club-native-claude-"));
+        const harness = makeHarness({ baseDir, claudeConfig: { ultraCaching } });
+        return Effect.gen(function* () {
+          const { systemPromptPath } = yield* ServerConfig;
+          mkdirSync(path.dirname(systemPromptPath), { recursive: true });
+          writeFileSync(systemPromptPath, "  Follow the repository rules.  \n", "utf8");
+          const adapter = yield* ClaudeAdapter;
+          const session = yield* adapter.startSession({
+            threadId: THREAD_ID,
+            provider: ProviderDriverKind.make("claudeAgent"),
+            runtimeMode: "approval-required",
+          });
+          const custom = "<user-instructions>\nFollow the repository rules.\n</user-instructions>";
+          assert.deepEqual(harness.getLastCreateQueryInput()?.options.systemPrompt, {
+            type: "preset",
+            preset: "claude_code",
+            ...(ultraCaching ? { excludeDynamicSections: true } : {}),
+            append: ultraCaching ? `${CLAUDE_ULTRA_CACHING_APPEND_PROMPT}\n\n${custom}` : custom,
+          });
+          assert.equal(JSON.stringify(session).includes("Follow the repository rules."), false);
+        }).pipe(
+          Effect.provideService(Random.Random, makeDeterministicRandomService()),
+          Effect.provide(harness.layer),
+          Effect.ensuring(Effect.sync(() => rmSync(baseDir, { recursive: true, force: true }))),
+        );
+      },
+    );
+  }
+
+  it.effect("keeps an existing Claude session when the custom guidance file cannot be read", () => {
+    const baseDir = mkdtempSync(path.join(os.tmpdir(), "club-unreadable-guidance-"));
+    const harness = makeHarness({ baseDir });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const input = { threadId: THREAD_ID, runtimeMode: "approval-required" as const };
+      yield* adapter.startSession(input);
+      const { systemPromptPath } = yield* ServerConfig;
+      mkdirSync(systemPromptPath, { recursive: true });
+      const result = yield* adapter.startSession(input).pipe(Effect.exit);
+      assert.equal(result._tag, "Failure");
+      assert.equal(harness.query.closeCalls, 0);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+      Effect.ensuring(Effect.sync(() => rmSync(baseDir, { recursive: true, force: true }))),
     );
   });
 
@@ -622,7 +716,7 @@ describe("ClaudeAdapterLive", () => {
           model: "claude-opus-5[1m]",
           effort: "high",
           context: 1000000,
-          settings: {},
+          settings: { fastMode: false },
         },
       },
       {
@@ -641,35 +735,60 @@ describe("ClaudeAdapterLive", () => {
       {
         name: "Opus 4.7 default effort",
         selection: createModelSelection(instanceId, "claude-opus-4-7"),
-        expected: { model: "claude-opus-4-7", effort: "xhigh", context: 200000, settings: {} },
+        expected: {
+          model: "claude-opus-4-7",
+          effort: "xhigh",
+          context: 200000,
+          settings: { fastMode: false },
+        },
       },
       {
         name: "Opus 4.7 explicit effort",
         selection: createModelSelection(instanceId, "claude-opus-4-7", [
           { id: "effort", value: "xhigh" },
         ]),
-        expected: { model: "claude-opus-4-7", effort: "xhigh", context: 200000, settings: {} },
+        expected: {
+          model: "claude-opus-4-7",
+          effort: "xhigh",
+          context: 200000,
+          settings: { fastMode: false },
+        },
       },
       {
         name: "Fable 5 default effort and 1M context",
         selection: createModelSelection(instanceId, "claude-fable-5", [
           { id: "contextWindow", value: "1m" },
         ]),
-        expected: { model: "claude-fable-5[1m]", effort: "xhigh", context: 1000000, settings: {} },
+        expected: {
+          model: "claude-fable-5[1m]",
+          effort: "xhigh",
+          context: 1000000,
+          settings: { fastMode: false },
+        },
       },
       {
         name: "Sonnet unsupported max falls back",
         selection: createModelSelection(instanceId, "claude-sonnet-4-6", [
           { id: "effort", value: "max" },
         ]),
-        expected: { model: "claude-sonnet-4-6", effort: "high", context: 200000, settings: {} },
+        expected: {
+          model: "claude-sonnet-4-6",
+          effort: "high",
+          context: 200000,
+          settings: { fastMode: false },
+        },
       },
       {
         name: "Haiku ignores adaptive effort",
         selection: createModelSelection(instanceId, "claude-haiku-4-5", [
           { id: "effort", value: "high" },
         ]),
-        expected: { model: "claude-haiku-4-5", effort: null, context: undefined, settings: {} },
+        expected: {
+          model: "claude-haiku-4-5",
+          effort: null,
+          context: undefined,
+          settings: { fastMode: false },
+        },
       },
       {
         name: "Haiku supports thinking toggle",
@@ -680,7 +799,7 @@ describe("ClaudeAdapterLive", () => {
           model: "claude-haiku-4-5",
           effort: null,
           context: undefined,
-          settings: { alwaysThinkingEnabled: false },
+          settings: { alwaysThinkingEnabled: false, fastMode: false },
         },
       },
       {
@@ -688,7 +807,12 @@ describe("ClaudeAdapterLive", () => {
         selection: createModelSelection(instanceId, "claude-sonnet-4-6", [
           { id: "thinking", value: false },
         ]),
-        expected: { model: "claude-sonnet-4-6", effort: "high", context: 200000, settings: {} },
+        expected: {
+          model: "claude-sonnet-4-6",
+          effort: "high",
+          context: 200000,
+          settings: { fastMode: false },
+        },
       },
       {
         name: "Opus 4.8 supports fast mode",
@@ -703,6 +827,18 @@ describe("ClaudeAdapterLive", () => {
         },
       },
       {
+        name: "Opus 5.5 explicit Fast off overrides CLI settings",
+        selection: createModelSelection(instanceId, "claude-opus-5-5", [
+          { id: "fastMode", value: false },
+        ]),
+        expected: {
+          model: "claude-opus-5-5[1m]",
+          effort: "high",
+          context: 1000000,
+          settings: { fastMode: false },
+        },
+      },
+      {
         name: "Opus 4.6 ignores removed fast mode",
         selection: createModelSelection(instanceId, "claude-opus-4-6", [
           { id: "fastMode", value: true },
@@ -711,7 +847,7 @@ describe("ClaudeAdapterLive", () => {
           model: "claude-opus-4-6",
           effort: "high",
           context: 200000,
-          settings: {},
+          settings: { fastMode: false },
         },
       },
       {
@@ -719,21 +855,36 @@ describe("ClaudeAdapterLive", () => {
         selection: createModelSelection(instanceId, "claude-sonnet-4-6", [
           { id: "fastMode", value: true },
         ]),
-        expected: { model: "claude-sonnet-4-6", effort: "high", context: 200000, settings: {} },
+        expected: {
+          model: "claude-sonnet-4-6",
+          effort: "high",
+          context: 200000,
+          settings: { fastMode: false },
+        },
       },
       {
         name: "Fable ultrathink uses max",
         selection: createModelSelection(instanceId, "claude-fable-5", [
           { id: "effort", value: "ultrathink" },
         ]),
-        expected: { model: "claude-fable-5", effort: "max", context: 200000, settings: {} },
+        expected: {
+          model: "claude-fable-5",
+          effort: "max",
+          context: 200000,
+          settings: { fastMode: false },
+        },
       },
       {
         name: "Sonnet ultrathink caps at high",
         selection: createModelSelection(instanceId, "claude-sonnet-4-6", [
           { id: "effort", value: "ultrathink" },
         ]),
-        expected: { model: "claude-sonnet-4-6", effort: "high", context: 200000, settings: {} },
+        expected: {
+          model: "claude-sonnet-4-6",
+          effort: "high",
+          context: 200000,
+          settings: { fastMode: false },
+        },
       },
     ];
 
@@ -763,6 +914,7 @@ describe("ClaudeAdapterLive", () => {
       const createInput = harness.getLastCreateQueryInput();
       assert.equal(createInput?.options.includePartialMessages, true);
       assert.equal(createInput?.options.agentProgressSummaries, true);
+      assert.deepEqual(createInput?.options.settings, { fastMode: false });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -2668,6 +2820,142 @@ describe("ClaudeAdapterLive", () => {
       Effect.provide(harness.layer),
     );
   });
+
+  for (const operation of ["stop", "replace"] as const) {
+    it.effect(`closes a real pending SDK generator before ${operation} joins its reader`, () => {
+      const query = new PendingReadClaudeQuery();
+      const replacement = new PendingReadClaudeQuery();
+      let creations = 0;
+      const layer = Layer.effect(
+        ClaudeAdapter,
+        makeClaudeAdapter(decodeClaudeSettings({}), {
+          createQuery: () => (++creations === 1 ? query : replacement),
+        }),
+      ).pipe(
+        Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+        Layer.provideMerge(ServerSettingsService.layerTest()),
+        Layer.provideMerge(NodeServices.layer),
+      );
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const input = { threadId: THREAD_ID, runtimeMode: "full-access" as const };
+        yield* adapter.startSession(input);
+        yield* Effect.promise(() => query.readStarted);
+        const retirement = yield* (
+          operation === "stop" ? adapter.stopSession(THREAD_ID) : adapter.startSession(input)
+        ).pipe(Effect.forkChild);
+        if (operation === "replace") {
+          // Replacement reads the custom instructions from disk first. Wait
+          // for its actual reader instead of treating mocked time as I/O completion.
+          yield* Effect.promise(() => replacement.readStarted);
+          yield* Fiber.join(retirement);
+        } else {
+          yield* TestClock.adjust("100 millis");
+          assert.notEqual(retirement.pollUnsafe(), undefined);
+        }
+        assert.equal(query.readerFinished, true);
+        assert.equal(query.closeCalls, 1);
+        assert.equal(creations, operation === "stop" ? 1 : 2);
+        yield* Fiber.join(retirement);
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            query.failClose = false;
+            query.close();
+            query.releaseRetirement();
+            replacement.close();
+            replacement.releaseRetirement();
+          }),
+        ),
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(layer),
+      );
+    });
+  }
+
+  it.effect(
+    "retains a query after failed close and retries its exact retirement before replacement",
+    () => {
+      const query = new PendingReadClaudeQuery();
+      let creations = 0;
+      const layer = Layer.effect(
+        ClaudeAdapter,
+        makeClaudeAdapter(decodeClaudeSettings({}), {
+          createQuery: () => (++creations === 1 ? query : new FakeClaudeQuery()),
+        }),
+      ).pipe(
+        Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+        Layer.provideMerge(ServerSettingsService.layerTest()),
+        Layer.provideMerge(NodeServices.layer),
+      );
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const input = { threadId: THREAD_ID, runtimeMode: "full-access" as const };
+        yield* adapter.startSession(input);
+        yield* Effect.promise(() => query.readStarted);
+        query.failClose = true;
+        assert.equal((yield* Effect.exit(adapter.stopSession(THREAD_ID)))._tag, "Failure");
+        assert.equal((yield* Effect.exit(adapter.startSession(input)))._tag, "Failure");
+        assert.equal(creations, 1);
+        assert.equal((yield* adapter.listSessions()).length, 1);
+        query.failClose = false;
+        yield* adapter.stopSession(THREAD_ID);
+        assert.equal(query.readerFinished, true);
+        yield* adapter.startSession(input);
+        assert.equal(creations, 2);
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            query.failClose = false;
+            query.close();
+            query.releaseRetirement();
+          }),
+        ),
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(layer),
+      );
+    },
+  );
+
+  it.effect(
+    "bounds a pending reader retirement and retains its owner until the exact reader exits",
+    () => {
+      const query = new PendingReadClaudeQuery(true);
+      const layer = Layer.effect(
+        ClaudeAdapter,
+        makeClaudeAdapter(decodeClaudeSettings({}), { createQuery: () => query }),
+      ).pipe(
+        Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+        Layer.provideMerge(ServerSettingsService.layerTest()),
+        Layer.provideMerge(NodeServices.layer),
+      );
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({ threadId: THREAD_ID, runtimeMode: "full-access" });
+        yield* Effect.promise(() => query.readStarted);
+        const stopping = yield* Effect.exit(adapter.stopSession(THREAD_ID)).pipe(Effect.forkChild);
+        yield* TestClock.adjust("10 seconds");
+        const result = yield* Fiber.join(stopping);
+        assert.equal(result._tag, "Failure");
+        assert.equal(query.closeCalls, 1);
+        assert.equal(query.readerFinished, false);
+        assert.equal((yield* adapter.listSessions()).length, 1);
+        query.releaseRetirement();
+        yield* adapter.stopSession(THREAD_ID);
+        assert.equal(query.readerFinished, true);
+        assert.equal((yield* adapter.listSessions()).length, 0);
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            query.close();
+            query.releaseRetirement();
+          }),
+        ),
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(layer),
+      );
+    },
+  );
 
   it.effect("closes the previous session before replacing an existing thread session", () => {
     const queries: FakeClaudeQuery[] = [];
@@ -4801,6 +5089,99 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  for (const decision of ["accept", "decline", "cancel"] as const) {
+    it.effect(`honors a required human callback in Bypass mode: ${decision}`, () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "full-access",
+        });
+        yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+        const options = harness.getLastCreateQueryInput()!.options;
+        assert.equal(options.permissionMode, "bypassPermissions");
+        const controller = new AbortController();
+        const permissionPromise = options.canUseTool!(
+          "Bash",
+          { command: "deploy-production" },
+          {
+            signal: controller.signal,
+            toolUseID: "person-required-tool",
+            requestId: "person-required-request",
+            // A mod's person-only ask does not carry matchedAskRule.
+            decisionReason: "A person must approve this action.",
+          },
+        );
+        const requested = yield* Stream.runHead(adapter.streamEvents);
+        assert.equal(requested._tag, "Some");
+        if (requested._tag !== "Some" || requested.value.type !== "request.opened") {
+          assert.fail("Expected a human approval request");
+        }
+        yield* adapter.respondToRequest(
+          session.threadId,
+          ApprovalRequestId.make(requested.value.requestId!),
+          decision,
+        );
+        const result = yield* Effect.promise(() => permissionPromise);
+        assert.equal(result?.behavior, decision === "accept" ? "allow" : "deny");
+        assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
+  }
+
+  for (const abortBeforeCallback of [true, false]) {
+    it.effect(
+      `cancels required Bypass approvals with ${abortBeforeCallback ? "an already aborted signal" : "an abort while waiting"}`,
+      () => {
+        const harness = makeHarness();
+        return Effect.gen(function* () {
+          const adapter = yield* ClaudeAdapter;
+          yield* adapter.startSession({
+            threadId: THREAD_ID,
+            provider: ProviderDriverKind.make("claudeAgent"),
+            runtimeMode: "full-access",
+          });
+          yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+          const controller = new AbortController();
+          if (abortBeforeCallback) controller.abort();
+          const permissionPromise = harness.getLastCreateQueryInput()!.options.canUseTool!(
+            "Bash",
+            { command: "deploy-production" },
+            {
+              signal: controller.signal,
+              toolUseID: "cancelled-tool",
+              requestId: "cancelled-request",
+            },
+          );
+          if (!abortBeforeCallback) {
+            const requested = yield* Stream.runHead(adapter.streamEvents);
+            assert.equal(
+              requested._tag === "Some" ? requested.value.type : undefined,
+              "request.opened",
+            );
+            controller.abort();
+            const resolved = yield* Stream.runHead(adapter.streamEvents);
+            assert.equal(
+              resolved._tag === "Some" ? resolved.value.type : undefined,
+              "request.resolved",
+            );
+          }
+          const result = yield* Effect.promise(() => permissionPromise);
+          assert.deepEqual(result, { behavior: "deny", message: "User cancelled tool execution." });
+          assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+        }).pipe(
+          Effect.provideService(Random.Random, makeDeterministicRandomService()),
+          Effect.provide(harness.layer),
+        );
+      },
+    );
+  }
+
   it.effect("surfaces an Auto-mode fallback prompt instead of bypassing the classifier", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -5117,6 +5498,53 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(createInput?.options.resume, sessionId);
       assert.equal(createInput?.options.resumeSessionAt, undefined);
       assert.equal(createInput?.options.sessionId, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("reports lost session writes without exposing transcript identifiers", () => {
+    const nativeEvents: unknown[] = [];
+    const harness = makeHarness({
+      nativeEventLogger: {
+        filePath: "memory://writes-lost",
+        write: (event) => {
+          nativeEvents.push(event);
+          return Effect.void;
+        },
+        close: () => Effect.void,
+      },
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const warningFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) =>
+          event.type === "runtime.warning" &&
+          event.payload.message.includes("could not save session data"),
+      ).pipe(Stream.runHead, Effect.forkChild);
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      harness.query.emit({
+        type: "system",
+        subtype: "session_writes_lost",
+        error_code: "ENOSPC",
+        lost: ["transcript"],
+        transcript_session_ids: ["private-transcript-id"],
+        uuid: "00000000-0000-0000-0000-000000000001",
+        session_id: "private-session-id",
+      });
+      const warning = yield* Fiber.join(warningFiber);
+      assert.equal(warning._tag, "Some");
+      if (warning._tag !== "Some" || warning.value.type !== "runtime.warning") return;
+      assert.equal(JSON.stringify(warning.value).includes("private-transcript-id"), false);
+      assert.equal(nativeEvents.length, 1);
+      assert.equal(JSON.stringify(nativeEvents).includes("private-transcript-id"), false);
+      assert.deepEqual(warning.value.payload.detail, { subtype: "session_writes_lost" });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -6104,8 +6532,9 @@ describe("ClaudeAdapterLive", () => {
         ],
       };
 
+      const questionController = new AbortController();
       const permissionPromise = canUseTool("AskUserQuestion", askInput, {
-        signal: new AbortController().signal,
+        signal: questionController.signal,
         toolUseID: "tool-ask-1",
         requestId: "permission-request-ask-1",
       });
@@ -6155,6 +6584,7 @@ describe("ClaudeAdapterLive", () => {
 
       // The canUseTool promise should resolve with the answers in SDK format.
       const permissionResult = yield* Effect.promise(() => permissionPromise);
+      assert.equal(getEventListeners(questionController.signal, "abort").length, 0);
       assert.equal((permissionResult as PermissionResult).behavior, "allow");
       const updatedInput = (permissionResult as { updatedInput: Record<string, unknown> })
         .updatedInput;
@@ -6200,7 +6630,7 @@ describe("ClaudeAdapterLive", () => {
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      // In full-access mode, regular tools are auto-approved.
+      // Upstream handles ordinary full-access tools without a host callback.
       // AskUserQuestion should still go through the user-input flow.
       const session = yield* adapter.startSession({
         threadId: THREAD_ID,
@@ -6258,6 +6688,37 @@ describe("ClaudeAdapterLive", () => {
       const updatedInput = (permissionResult as { updatedInput: Record<string, unknown> })
         .updatedInput;
       assert.deepEqual(updatedInput.answers, { "Deploy to which env?": "Staging" });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("denies an already cancelled AskUserQuestion without waiting for an answer", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "approval-required",
+      });
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+      const controller = new AbortController();
+      controller.abort();
+      const result = yield* Effect.promise(() =>
+        harness.getLastCreateQueryInput()!.options.canUseTool!(
+          "AskUserQuestion",
+          { questions: [{ question: "Continue?", options: [], multiSelect: false }] },
+          {
+            signal: controller.signal,
+            toolUseID: "cancelled-question",
+            requestId: "cancelled-question",
+          },
+        ),
+      );
+      assert.deepEqual(result, { behavior: "deny", message: "User cancelled tool execution." });
+      assert.equal(getEventListeners(controller.signal, "abort").length, 0);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
