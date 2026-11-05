@@ -13,6 +13,7 @@ import * as NodeFs from "node:fs";
 
 import {
   CODEX_AUTO_DELEGATE_OPTION_ID,
+  DEFAULT_MODEL_BY_PROVIDER,
   AsyncUserInputQuestions,
   type CanonicalItemType,
   type CanonicalRequestType,
@@ -73,6 +74,7 @@ import { getAgentBrowserBridge } from "../AgentBrowserBridge.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { readSystemPromptFileForInjection } from "../../systemPromptFile.ts";
+import { resolveCodexContextWindow } from "../CodexContextWindow.ts";
 import { withCodexDelegationRequest } from "../CodexDelegation.ts";
 import { codexSafetyBlockMessage, readCodexSafetyBlock } from "../CodexSafetyBlock.ts";
 import {
@@ -121,12 +123,35 @@ function codexServiceTierOverride(
   if (modelSelection?.instanceId !== instanceId) {
     return { serviceTier: "default" };
   }
+  const tier = getModelSelectionStringOptionValue(modelSelection, "serviceTier");
+  if (tier === "default" || tier === "priority" || tier === "ultrafast") {
+    return { serviceTier: tier };
+  }
+  if (modelSelection?.options?.some((option) => option.id === "serviceTier")) {
+    return { serviceTier: "default" };
+  }
   const fastMode = getModelSelectionBooleanOptionValue(modelSelection, "fastMode");
   // Codex 0.154.0 uses `priority` for Fast and `default` for an explicit
   // standard route. An unset preference explicitly selects standard speed. A
   // backend-advertised `ultrafast` tier is a distinct paid route and is never
   // selected by this boolean.
   return { serviceTier: fastMode === true ? "priority" : "default" };
+}
+
+function codexEffortOverride(
+  modelSelection: ProviderSendTurnInput["modelSelection"],
+  instanceId: ProviderInstanceId,
+  ossMode: boolean,
+): CodexSessionRuntimeOptions["effort"] {
+  const selection = modelSelection?.instanceId === instanceId ? modelSelection : undefined;
+  const explicit = getModelSelectionStringOptionValue(selection, "reasoningEffort");
+  if (explicit && !/^(?:cli[\s_-]*)?default$/i.test(explicit)) {
+    return explicit as CodexSessionRuntimeOptions["effort"];
+  }
+  // Native/local custom models may not support reasoning effort.
+  return !ossMode && (!selection || /^gpt-[56](?:[.-]|$)/.test(selection.model))
+    ? "high"
+    : undefined;
 }
 
 class CodexTransportPolicyFileError extends Data.TaggedError("CodexTransportPolicyFileError")<{
@@ -2854,6 +2879,23 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               }),
           ),
         );
+        const contextModelSelection =
+          input.modelSelection?.instanceId === boundInstanceId
+            ? input.modelSelection
+            : input.modelSelection === undefined && !codexConfig.ossMode
+              ? {
+                  instanceId: boundInstanceId,
+                  model: DEFAULT_MODEL_BY_PROVIDER[PROVIDER] ?? "gpt-6-astra",
+                }
+              : undefined;
+        const modelContextWindow = resolveCodexContextWindow(
+          contextModelSelection,
+          codexConfig.ossMode,
+        );
+        const sessionAutoCompactTokenLimit =
+          modelContextWindow === undefined
+            ? effectiveAutoCompactTokenLimit
+            : Math.min(effectiveAutoCompactTokenLimit, Math.floor(modelContextWindow * 0.9));
         const runtimeInput: CodexSessionRuntimeOptions = {
           ...(customInstructions !== undefined ? { customInstructions } : {}),
           threadId: input.threadId,
@@ -2877,15 +2919,15 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(input.codexSubagentThreadLimit !== undefined
             ? { codexSubagentThreadLimit: input.codexSubagentThreadLimit }
             : {}),
-          autoCompactTokenLimit: effectiveAutoCompactTokenLimit,
+          ...(modelContextWindow !== undefined ? { modelContextWindow } : {}),
+          autoCompactTokenLimit: sessionAutoCompactTokenLimit,
           ultraCaching: codexConfig.ultraCaching,
           ossMode: codexConfig.ossMode,
           modelProvider: codexConfig.modelProvider,
           agentBrowserMcp,
-          ...(input.modelSelection?.instanceId === boundInstanceId
-            ? { model: input.modelSelection.model }
-            : {}),
+          ...(contextModelSelection !== undefined ? { model: contextModelSelection.model } : {}),
           ...codexServiceTierOverride(input.modelSelection, boundInstanceId),
+          effort: codexEffortOverride(input.modelSelection, boundInstanceId, codexConfig.ossMode),
           ...(currentTransportPolicy !== undefined
             ? { transportPolicy: currentTransportPolicy }
             : {}),
@@ -2932,7 +2974,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             );
 
             const runtimeEvents = yield* Effect.sync(() =>
-              mapToRuntimeEvents(event, event.threadId, effectiveAutoCompactTokenLimit),
+              mapToRuntimeEvents(event, event.threadId, sessionAutoCompactTokenLimit),
             ).pipe(
               Effect.catchCause((cause) =>
                 Effect.logWarning("codex.runtime.bridge.map-failed", {
@@ -3116,10 +3158,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     );
 
     const session = yield* requireSession(input.threadId);
-    const reasoningEffort =
-      input.modelSelection?.instanceId === boundInstanceId
-        ? getModelSelectionStringOptionValue(input.modelSelection, "reasoningEffort")
-        : undefined;
+    const reasoningEffort = codexEffortOverride(
+      input.modelSelection,
+      boundInstanceId,
+      codexConfig.ossMode,
+    );
     const turnInput =
       input.modelSelection?.instanceId === boundInstanceId
         ? withCodexDelegationRequest(
@@ -3137,11 +3180,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         ...(input.modelSelection?.instanceId === boundInstanceId
           ? { model: input.modelSelection.model }
           : {}),
-        ...(reasoningEffort
-          ? {
-              effort: reasoningEffort as EffectCodexSchema.V2TurnStartParams__ReasoningEffort,
-            }
-          : {}),
+        ...(reasoningEffort ? { effort: reasoningEffort } : {}),
         ...codexServiceTierOverride(input.modelSelection, boundInstanceId),
         ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
         ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),

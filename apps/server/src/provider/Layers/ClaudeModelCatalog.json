@@ -32,8 +32,11 @@
             "id": "contextWindow",
             "label": "Context Window",
             "type": "select",
-            "options": [{ "id": "1m", "label": "1M", "isDefault": true }],
-            "currentValue": "1m"
+            "options": [
+              { "id": "200k", "label": "200k", "isDefault": true },
+              { "id": "1m", "label": "1M" }
+            ],
+            "currentValue": "200k"
           }
         ]
       }
@@ -104,8 +107,11 @@
             "id": "contextWindow",
             "label": "Context Window",
             "type": "select",
-            "options": [{ "id": "1m", "label": "1M", "isDefault": true }],
-            "currentValue": "1m"
+            "options": [
+              { "id": "200k", "label": "200k", "isDefault": true },
+              { "id": "1m", "label": "1M" }
+            ],
+            "currentValue": "200k"
           }
         ]
       }
@@ -295,6 +301,16 @@
             ],
             "currentValue": "high",
             "promptInjectedValues": ["ultrathink"]
+          },
+          {
+            "id": "contextWindow",
+            "label": "Context Window",
+            "type": "select",
+            "options": [
+              { "id": "200k", "label": "200k", "isDefault": true },
+              { "id": "1m", "label": "1M" }
+            ],
+            "currentValue": "200k"
           }
         ]
       }
@@ -320,6 +336,16 @@
             ],
             "currentValue": "high",
             "promptInjectedValues": ["ultrathink"]
+          },
+          {
+            "id": "contextWindow",
+            "label": "Context Window",
+            "type": "select",
+            "options": [
+              { "id": "200k", "label": "200k", "isDefault": true },
+              { "id": "1m", "label": "1M" }
+            ],
+            "currentValue": "200k"
           }
         ]
       }
@@ -375,6 +401,16 @@
               { "id": "max", "label": "Max" }
             ],
             "currentValue": "high"
+          },
+          {
+            "id": "contextWindow",
+            "label": "Context Window",
+            "type": "select",
+            "options": [
+              { "id": "200k", "label": "200k", "isDefault": true },
+              { "id": "1m", "label": "1M" }
+            ],
+            "currentValue": "200k"
           }
         ]
       }

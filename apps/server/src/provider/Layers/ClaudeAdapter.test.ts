@@ -659,6 +659,95 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("defaults Claude query effort to high instead of model or CLI defaults", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "claude-fable-5-1",
+        ),
+        runtimeMode: "full-access",
+      });
+      const options = harness.getLastCreateQueryInput()?.options;
+      assert.equal(options?.effort, "high");
+      assert.ok(options?.settings && typeof options.settings !== "string");
+      assert.equal(options.settings.fastMode, false);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect(
+    "binds smaller context or explicit 1M to each Claude query without changing effort",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        for (const model of ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]) {
+          for (const contextWindow of [undefined, "1m"] as const) {
+            const threadId = ThreadId.make(`${model}-${contextWindow ?? "small"}`);
+            yield* adapter.startSession({
+              threadId,
+              provider: ProviderDriverKind.make("claudeAgent"),
+              modelSelection: createModelSelection(
+                ProviderInstanceId.make("claudeAgent"),
+                model,
+                contextWindow ? [{ id: "contextWindow", value: contextWindow }] : [],
+              ),
+              runtimeMode: "full-access",
+            });
+            const options = harness.getLastCreateQueryInput()?.options;
+            const expectedFlag = contextWindow === "1m" ? "0" : "1";
+            assert.equal(options?.effort, "high");
+            assert.equal(options?.env?.CLAUDE_CODE_DISABLE_1M_CONTEXT, expectedFlag);
+            assert.ok(options?.env?.PATH);
+            assert.ok(options?.settings && typeof options.settings !== "string");
+            assert.equal(options.settings.env?.CLAUDE_CODE_DISABLE_1M_CONTEXT, expectedFlag);
+            yield* adapter.stopSession(threadId);
+          }
+        }
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  it.effect("uses Club defaults for missing or foreign-instance Claude selections", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      for (const modelSelection of [
+        undefined,
+        createModelSelection(ProviderInstanceId.make("other-claude"), "claude-opus-5-5", [
+          { id: "effort", value: "max" },
+          { id: "contextWindow", value: "1m" },
+        ]),
+      ]) {
+        const threadId = ThreadId.make(modelSelection ? "foreign-selection" : "no-selection");
+        yield* adapter.startSession({
+          threadId,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          ...(modelSelection ? { modelSelection } : {}),
+          runtimeMode: "full-access",
+        });
+        const options = harness.getLastCreateQueryInput()?.options;
+        assert.equal(options?.model, "claude-sonnet-5-5");
+        assert.equal(options?.effort, "high");
+        assert.equal(options?.env?.CLAUDE_CODE_DISABLE_1M_CONTEXT, "1");
+        yield* adapter.stopSession(threadId);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("forwards cwd and additional directories into claude query options", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -710,12 +799,12 @@ describe("ClaudeAdapterLive", () => {
     const instanceId = ProviderInstanceId.make("claudeAgent");
     const cases = [
       {
-        name: "Opus 5 defaults to high effort and its fixed 1M context",
+        name: "Opus 5 defaults to high effort and the smaller context",
         selection: createModelSelection(instanceId, "claude-opus-5"),
         expected: {
-          model: "claude-opus-5[1m]",
+          model: "claude-opus-5",
           effort: "high",
-          context: 1000000,
+          context: 200000,
           settings: { fastMode: false },
         },
       },
@@ -726,9 +815,9 @@ describe("ClaudeAdapterLive", () => {
           { id: "fastMode", value: true },
         ]),
         expected: {
-          model: "claude-opus-5[1m]",
+          model: "claude-opus-5",
           effort: "max",
-          context: 1000000,
+          context: 200000,
           settings: { fastMode: true },
         },
       },
@@ -737,7 +826,7 @@ describe("ClaudeAdapterLive", () => {
         selection: createModelSelection(instanceId, "claude-opus-4-7"),
         expected: {
           model: "claude-opus-4-7",
-          effort: "xhigh",
+          effort: "high",
           context: 200000,
           settings: { fastMode: false },
         },
@@ -761,7 +850,7 @@ describe("ClaudeAdapterLive", () => {
         ]),
         expected: {
           model: "claude-fable-5[1m]",
-          effort: "xhigh",
+          effort: "high",
           context: 1000000,
           settings: { fastMode: false },
         },
@@ -821,7 +910,7 @@ describe("ClaudeAdapterLive", () => {
         ]),
         expected: {
           model: "claude-opus-4-8",
-          effort: "xhigh",
+          effort: "high",
           context: 200000,
           settings: { fastMode: true },
         },
@@ -832,9 +921,9 @@ describe("ClaudeAdapterLive", () => {
           { id: "fastMode", value: false },
         ]),
         expected: {
-          model: "claude-opus-5-5[1m]",
+          model: "claude-opus-5-5",
           effort: "high",
-          context: 1000000,
+          context: 200000,
           settings: { fastMode: false },
         },
       },
@@ -914,7 +1003,10 @@ describe("ClaudeAdapterLive", () => {
       const createInput = harness.getLastCreateQueryInput();
       assert.equal(createInput?.options.includePartialMessages, true);
       assert.equal(createInput?.options.agentProgressSummaries, true);
-      assert.deepEqual(createInput?.options.settings, { fastMode: false });
+      assert.deepEqual(createInput?.options.settings, {
+        fastMode: false,
+        env: { CLAUDE_CODE_DISABLE_1M_CONTEXT: "1" },
+      });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

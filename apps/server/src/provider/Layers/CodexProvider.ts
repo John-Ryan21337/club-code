@@ -887,6 +887,8 @@ export const readCodexAccountRateLimits = Effect.fn("readCodexAccountRateLimits"
   return yield* Effect.promise(() => fetchCodexAccountRateLimits({ credentials, checkedAt }));
 });
 
+import { codexContextWindowDescriptor } from "../CodexContextWindow.ts";
+
 function mapCodexModelCapabilities(
   model: CodexSchema.V2ModelListResponse__Model,
 ): ModelCapabilities {
@@ -903,6 +905,7 @@ function mapCodexModelCapabilities(
         },
   );
   const defaultReasoning = reasoningOptions.find((option) => option.isDefault)?.id;
+  const contextDescriptor = codexContextWindowDescriptor(model.model);
   // Codex 0.154.0 advertises Fast with the `priority` service-tier wire id.
   // Keep the deprecated `additionalSpeedTiers` alias for older compatible CLIs.
   // A backend-advertised `ultrafast` tier is a distinct paid route: it must not
@@ -910,6 +913,7 @@ function mapCodexModelCapabilities(
   const supportsFastMode =
     model.serviceTiers?.some((tier) => tier.id === "priority") === true ||
     (model.additionalSpeedTiers ?? []).includes("fast");
+  const supportsUltraFast = model.serviceTiers?.some((tier) => tier.id === "ultrafast") === true;
   return createModelCapabilities({
     optionDescriptors: [
       ...(reasoningOptions.length > 0
@@ -923,15 +927,30 @@ function mapCodexModelCapabilities(
             },
           ]
         : []),
-      ...(supportsFastMode
+      ...(contextDescriptor ? [contextDescriptor] : []),
+      ...(supportsUltraFast
         ? [
             {
-              id: "fastMode",
-              label: "Fast Mode",
-              type: "boolean" as const,
+              id: "serviceTier",
+              label: "Speed",
+              type: "select" as const,
+              currentValue: "default",
+              options: [
+                { id: "default", label: "Standard", isDefault: true },
+                ...(supportsFastMode ? [{ id: "priority", label: "Fast" }] : []),
+                { id: "ultrafast", label: "Ultra Fast" },
+              ],
             },
           ]
-        : []),
+        : supportsFastMode
+          ? [
+              {
+                id: "fastMode",
+                label: "Fast Mode",
+                type: "boolean" as const,
+              },
+            ]
+          : []),
     ],
   });
 }
@@ -1140,7 +1159,14 @@ function appendCustomCodexModels(
   }
 
   const seen = new Set(models.map((model) => model.slug));
-  const fallbackCapabilities = models.find((model) => model.capabilities)?.capabilities ?? null;
+  const originalFallback = models.find((model) => model.capabilities)?.capabilities;
+  const fallbackCapabilities = originalFallback
+    ? createModelCapabilities({
+        optionDescriptors:
+          originalFallback.optionDescriptors?.filter((option) => option.id !== "contextWindow") ??
+          [],
+      })
+    : null;
   const customEntries: ServerProviderModel[] = [];
   for (const rawModel of customModels) {
     const slug = rawModel.trim();
@@ -1321,7 +1347,22 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     account: accountResponse,
     ...(Option.isSome(accountRateLimits) ? { accountRateLimits: accountRateLimits.value } : {}),
     version,
-    models: appendCustomCodexModels(models, input.customModels ?? []),
+    models: appendCustomCodexModels(
+      input.ossMode
+        ? models.map((model) => ({
+            ...model,
+            capabilities: model.capabilities
+              ? createModelCapabilities({
+                  optionDescriptors:
+                    model.capabilities.optionDescriptors?.filter(
+                      (option) => option.id !== "contextWindow",
+                    ) ?? [],
+                })
+              : null,
+          }))
+        : models,
+      input.customModels ?? [],
+    ),
     skills: parseCodexSkillsListResponse(skillsResponse, input.cwd),
   } satisfies CodexAppServerProviderSnapshot;
 });
@@ -1392,7 +1433,17 @@ export const fallbackCodexModelsFromSettings = (
   cliVersion?: string | null,
 ): ServerProvider["models"] =>
   appendCustomCodexModels(
-    STATIC_CODEX_MODELS.filter(
+    STATIC_CODEX_MODELS.map((model) => {
+      const descriptor = codexContextWindowDescriptor(model.slug);
+      return descriptor
+        ? {
+            ...model,
+            capabilities: createModelCapabilities({
+              optionDescriptors: [...(model.capabilities?.optionDescriptors ?? []), descriptor],
+            }),
+          }
+        : model;
+    }).filter(
       (model) =>
         model.slug !== "gpt-6.1-terra" ||
         (!!cliVersion &&

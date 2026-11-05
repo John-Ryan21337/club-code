@@ -1933,6 +1933,69 @@ describe("selectCodexActiveSnapshotTurn", () => {
 });
 
 describe("openCodexThread", () => {
+  it.each([undefined, "native-thread"])(
+    "passes the selected context budget on open %s",
+    async (resumeThreadId) => {
+      let payload: { config?: Record<string, unknown> } | undefined;
+      const client = {
+        raw: {
+          request: (_method: "thread/start" | "thread/resume", input: unknown) => {
+            payload = input as typeof payload;
+            return Effect.succeed(makeThreadOpenResponse("native-thread"));
+          },
+        },
+      };
+      for (const modelContextWindow of [200_000, 872_000, undefined]) {
+        await Effect.runPromise(
+          openCodexThread({
+            client,
+            threadId: ThreadId.make("context-config"),
+            cwd: "/tmp/project",
+            runtimeMode: "approval-required",
+            requestedModel: "gpt-6-astra",
+            serviceTier: "default",
+            modelContextWindow,
+            resumeThreadId,
+          }),
+        );
+        assert.equal(payload?.config?.model_context_window, modelContextWindow);
+      }
+    },
+  );
+
+  it.each([undefined, "native-thread"])(
+    "sets explicit reasoning configuration on open %s",
+    async (resumeThreadId) => {
+      let payload: { config?: Record<string, unknown> } | undefined;
+      const client = {
+        raw: {
+          request: (_method: "thread/start" | "thread/resume", input: unknown) => {
+            payload = input as typeof payload;
+            return Effect.succeed(makeThreadOpenResponse("native-thread"));
+          },
+        },
+      };
+      for (const effort of ["high", "low"] as const) {
+        await Effect.runPromise(
+          openCodexThread({
+            client,
+            threadId: ThreadId.make("effort-config"),
+            cwd: "/tmp/project",
+            runtimeMode: "approval-required",
+            requestedModel: "gpt-6-astra",
+            serviceTier: "default",
+            effort,
+            resumeThreadId,
+          }),
+        );
+        assert.equal(payload?.config?.model_reasoning_effort, effort);
+        assert.equal(
+          payload?.config?.model_auto_compact_token_limit,
+          CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
+        );
+      }
+    },
+  );
   it("leaves native instructions and config discovery untouched for blank Club guidance", async () => {
     let reads = 0;
     let payload: unknown;

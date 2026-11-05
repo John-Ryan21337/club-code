@@ -61,6 +61,150 @@ const options: ReadonlyArray<ProviderOptionSelection> = [
   { id: "codexAutoDelegate", value: false },
 ];
 
+it("offers Ultra Fast only when advertised and persists a supported speed without losing thread controls", async () => {
+  const speedModels: ReadonlyArray<ServerProviderModel> = [
+    {
+      slug: props.model,
+      name: "Synthetic",
+      isCustom: false,
+      capabilities: {
+        optionDescriptors: [
+          {
+            id: "serviceTier",
+            label: "Speed",
+            type: "select",
+            currentValue: "ultrafast",
+            options: [
+              { id: "default", label: "Standard" },
+              { id: "priority", label: "Fast" },
+              { id: "ultrafast", label: "Ultra Fast" },
+            ],
+          },
+        ],
+      },
+    },
+  ];
+  const screen = await render(
+    <ComposerFastMode {...props} models={speedModels} modelOptions={options} />,
+  );
+  await page.getByRole("button", { name: "Speed: Standard", exact: true }).click();
+  await expect
+    .element(page.getByRole("menuitemradio", { name: "Standard (default)", exact: true }))
+    .toHaveAttribute("aria-checked", "true");
+  await page.getByRole("menuitemradio", { name: "Ultra Fast", exact: true }).click();
+  expect(mocks.save.mock.calls.at(-1)?.[2]).toEqual([
+    ...options,
+    { id: "serviceTier", value: "ultrafast" },
+  ]);
+  await screen.rerender(
+    <ComposerFastMode
+      {...props}
+      models={speedModels}
+      modelOptions={[...options, { id: "fastMode", value: true }]}
+    />,
+  );
+  await expect
+    .element(page.getByRole("button", { name: "Speed: Fast", exact: true }))
+    .toBeVisible();
+  await screen.rerender(
+    <ComposerFastMode
+      {...props}
+      models={speedModels}
+      modelOptions={[...options, { id: "serviceTier", value: "ultrafast" }]}
+    />,
+  );
+  await expect
+    .element(page.getByRole("button", { name: "Speed: Ultra Fast", exact: true }))
+    .toBeVisible();
+});
+
+it("explains unavailable Ultra Fast for Fast-only Codex without offering it to Claude", async () => {
+  const screen = await render(
+    <ComposerFastMode
+      {...props}
+      models={models}
+      modelOptions={[{ id: "serviceTier", value: "ultrafast" }]}
+    />,
+  );
+  await expect.element(page.getByRole("button", { name: "Fast mode: Off" })).toBeVisible();
+  await page.getByRole("button", { name: "Speed options", exact: true }).click();
+  await expect
+    .element(page.getByRole("menuitemradio", { name: /Ultra Fast.*unavailable/ }))
+    .toHaveAttribute("aria-disabled", "true");
+  await screen.rerender(
+    <ComposerFastMode
+      {...props}
+      provider={ProviderDriverKind.make("claudeAgent")}
+      models={models}
+      modelOptions={undefined}
+    />,
+  );
+  await expect
+    .element(page.getByRole("button", { name: "Speed options", exact: true }))
+    .not.toBeInTheDocument();
+});
+
+it("separates High reasoning from context size and hides the legacy CLI default choice", async () => {
+  const changed = vi.fn();
+  const contextModels: ReadonlyArray<ServerProviderModel> = [
+    {
+      slug: props.model,
+      name: "Synthetic",
+      isCustom: false,
+      capabilities: {
+        optionDescriptors: [
+          {
+            id: "contextWindow",
+            label: "Context Window",
+            type: "select",
+            currentValue: "1m",
+            options: [
+              { id: "1m", label: "1M", isDefault: true },
+              { id: "200k", label: "200k" },
+            ],
+          },
+          {
+            id: "reasoningEffort",
+            label: "Reasoning",
+            type: "select",
+            currentValue: "default",
+            options: [
+              { id: "default", label: "CLI default", isDefault: true },
+              { id: "low", label: "Low" },
+              { id: "high", label: "High" },
+            ],
+          },
+        ],
+      },
+    },
+  ];
+  await render(
+    <TraitsPicker
+      provider={props.provider}
+      models={contextModels}
+      model={props.model}
+      prompt=""
+      modelOptions={[{ id: "reasoningEffort", value: "default" }]}
+      onPromptChange={vi.fn()}
+      onModelOptionsChange={changed}
+    />,
+  );
+  await page.getByRole("button", { name: /Context 200k.*High/ }).click();
+  await expect
+    .element(page.getByRole("menuitemradio", { name: "High (default)", exact: true }))
+    .toHaveAttribute("aria-checked", "true");
+  await expect
+    .element(page.getByRole("menuitemradio", { name: /CLI default/ }))
+    .not.toBeInTheDocument();
+  await page.getByRole("menuitemradio", { name: "1M", exact: true }).click();
+  expect(changed.mock.calls.at(-1)?.[0]).toEqual(
+    expect.arrayContaining([
+      { id: "contextWindow", value: "1m" },
+      { id: "reasoningEffort", value: "high" },
+    ]),
+  );
+});
+
 it("exposes Fast only for capable models and saves the exact provider instance without losing worker controls", async () => {
   const screen = await render(
     <ComposerFastMode {...props} models={models} modelOptions={options} />,

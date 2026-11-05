@@ -3080,8 +3080,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           opus5Context?.type === "select"
             ? opus5Context.options.map((option) => option.id)
             : undefined,
-          ["1m"],
+          ["200k", "1m"],
         );
+        assert.equal(opus5Context?.currentValue, "200k");
         assert.equal(
           opus5Descriptors.some(
             (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",

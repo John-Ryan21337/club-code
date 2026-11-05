@@ -28,6 +28,7 @@ import {
 import { parseCliArgs } from "@cafecode/shared/cliArgs";
 import {
   ApprovalRequestId,
+  DEFAULT_MODEL_BY_PROVIDER,
   type CanonicalItemType,
   type CanonicalRequestType,
   type ClaudeSettings,
@@ -703,6 +704,10 @@ export function resolveClaudeModelSessionOptions(modelSelection: ModelSelection 
     readonly fastMode?: boolean;
   };
 } {
+  modelSelection ??= {
+    instanceId: ProviderInstanceId.make("claudeAgent"),
+    model: DEFAULT_MODEL_BY_PROVIDER[PROVIDER] ?? "claude-sonnet-5-5",
+  };
   const caps = getClaudeModelCapabilities(modelSelection?.model);
   const descriptors = getProviderOptionDescriptors({ caps });
   const rawEffort = getModelSelectionStringOptionValue(modelSelection, "effort");
@@ -5053,7 +5058,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(permissionMode === "bypassPermissions"
           ? { allowDangerouslySkipPermissions: true }
           : {}),
-        ...(Object.keys(settings).length > 0 ? { settings } : {}),
+        settings: {
+          ...settings,
+          ...(selectedContextWindowTokens !== undefined
+            ? {
+                env: {
+                  CLAUDE_CODE_DISABLE_1M_CONTEXT:
+                    selectedContextWindowTokens <= 200_000 ? "1" : "0",
+                },
+              }
+            : {}),
+        },
         ...(existingResumeSessionId ? { resume: existingResumeSessionId } : {}),
         // Let upstream Claude Code allocate fresh session IDs. The Agent SDK
         // documents `sessionId` as an optional override whose default is an
@@ -5077,7 +5092,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         // process because the SDK only wires it for its default spawner.
         spawnClaudeCodeProcess,
         stderr: handleClaudeStderr,
-        env: claudeEnvironment,
+        env: {
+          ...claudeEnvironment,
+          ...(selectedContextWindowTokens !== undefined
+            ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: selectedContextWindowTokens <= 200_000 ? "1" : "0" }
+            : {}),
+        },
         ...(claudeAdditionalDirectories.length > 0
           ? { additionalDirectories: [...claudeAdditionalDirectories] }
           : {}),

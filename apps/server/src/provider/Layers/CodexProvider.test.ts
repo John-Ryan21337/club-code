@@ -12,6 +12,45 @@ import {
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 describe("parseCodexModelListResponse", () => {
+  it("offers Ultra Fast only when the model advertises that exact tier", () => {
+    for (const extraTier of ["ultrafast", "unknown-paid-tier"]) {
+      const [model] = parseCodexModelListResponse({
+        data: [
+          {
+            defaultReasoningEffort: "high",
+            description: "Test model",
+            displayName: "Test",
+            hidden: false,
+            id: "test",
+            isDefault: false,
+            model: "test",
+            supportedReasoningEfforts: [{ description: "High", reasoningEffort: "high" }],
+            serviceTiers: [
+              { id: "priority", name: "Fast", description: "Fast" },
+              { id: extraTier, name: "Extra", description: "Extra" },
+            ],
+          },
+        ],
+        nextCursor: null,
+      });
+      const descriptors = model?.capabilities?.optionDescriptors ?? [];
+      if (extraTier === "ultrafast") {
+        expect(descriptors.find((option) => option.id === "serviceTier")).toMatchObject({
+          type: "select",
+          currentValue: "default",
+          options: [
+            { id: "default", label: "Standard", isDefault: true },
+            { id: "priority", label: "Fast" },
+            { id: "ultrafast", label: "Ultra Fast" },
+          ],
+        });
+        expect(descriptors.some((option) => option.id === "fastMode")).toBe(false);
+      } else {
+        expect(descriptors.some((option) => option.id === "serviceTier")).toBe(false);
+        expect(descriptors.some((option) => option.id === "fastMode")).toBe(true);
+      }
+    }
+  });
   it("uses the selected native cloud provider for discovery while preserving LM Studio precedence", () => {
     expect(buildCodexProviderAppServerArgs(false, "gcp")).toEqual([
       "app-server",
@@ -53,6 +92,7 @@ describe("parseCodexModelListResponse", () => {
       capabilities: {
         optionDescriptors: [
           { id: "reasoningEffort", currentValue: "medium" },
+          { id: "contextWindow", currentValue: "200k" },
           { id: "fastMode", type: "boolean" },
         ],
       },

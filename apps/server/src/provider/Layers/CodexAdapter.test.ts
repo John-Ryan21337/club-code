@@ -405,6 +405,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
         providerInstanceId: ProviderInstanceId.make("codex"),
         serviceTier: "priority",
         threadId: asThreadId("thread-1"),
+        effort: "high",
         runtimeMode: "full-access",
         autoCompactTokenLimit: CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
         ultraCaching: false,
@@ -432,6 +433,88 @@ const sessionErrorLayer = it.layer(
 );
 
 sessionErrorLayer("CodexAdapterLive session errors", (it) => {
+  it.effect(
+    "sends explicit speed tiers at startup and on turns without leaking across instances",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* CodexAdapter;
+        const instanceId = ProviderInstanceId.make("codex");
+        const selection = (tier: string, owner = instanceId) =>
+          createModelSelection(owner, "gpt-6-astra", [
+            { id: "serviceTier", value: tier },
+            { id: "fastMode", value: true },
+          ]);
+        const threadId = asThreadId("speed-tiers");
+        yield* adapter.startSession({
+          provider: ProviderDriverKind.make("codex"),
+          threadId,
+          modelSelection: selection("ultrafast"),
+          runtimeMode: "full-access",
+        });
+        assert.equal(sessionRuntimeFactory.factory.mock.calls.at(-1)?.[0].serviceTier, "ultrafast");
+        const runtime = sessionRuntimeFactory.lastRuntime;
+        assert.ok(runtime);
+        for (const [modelSelection, tier] of [
+          [selection("ultrafast"), "ultrafast"],
+          [selection("priority"), "priority"],
+          [selection("default"), "default"],
+          [selection("unsupported"), "default"],
+          [undefined, "default"],
+          [selection("ultrafast", ProviderInstanceId.make("other")), "default"],
+        ] as const) {
+          yield* adapter.sendTurn({
+            threadId,
+            input: "hello",
+            ...(modelSelection ? { modelSelection } : {}),
+          });
+          assert.equal(runtime.sendTurnImpl.mock.calls.at(-1)?.[0].serviceTier, tier);
+        }
+      }),
+  );
+  it.effect(
+    "defaults effort to high and preserves explicit effort on resumed sessions and turns",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* CodexAdapter;
+        for (const selected of [
+          undefined,
+          "default",
+          "cliDefault",
+          "cli-default",
+          "low",
+          "xhigh",
+        ] as const) {
+          const expected = selected === "low" || selected === "xhigh" ? selected : "high";
+          const threadId = asThreadId(`effort-${selected ?? "unset"}`);
+          const modelSelection = createModelSelection(
+            ProviderInstanceId.make("codex"),
+            "gpt-6.1-sol",
+            selected ? [{ id: "reasoningEffort", value: selected }] : [],
+          );
+          yield* adapter.startSession({
+            provider: ProviderDriverKind.make("codex"),
+            threadId,
+            modelSelection,
+            resumeCursor: { threadId: "native-existing-thread" },
+            runtimeMode: "full-access",
+          });
+          assert.equal(sessionRuntimeFactory.factory.mock.calls.at(-1)?.[0].effort, expected);
+          assert.equal(
+            sessionRuntimeFactory.factory.mock.calls.at(-1)?.[0].modelContextWindow,
+            200_000,
+          );
+          assert.equal(
+            sessionRuntimeFactory.factory.mock.calls.at(-1)?.[0].autoCompactTokenLimit,
+            180_000,
+          );
+          const runtime = sessionRuntimeFactory.lastRuntime;
+          assert.ok(runtime);
+          yield* adapter.sendTurn({ threadId, input: "hello", modelSelection });
+          assert.equal(runtime.sendTurnImpl.mock.calls.at(-1)?.[0].effort, expected);
+          assert.equal(runtime.sendTurnImpl.mock.calls.at(-1)?.[0].serviceTier, "default");
+        }
+      }),
+  );
   it.effect("returns a typed refusal when an older runtime lacks attachment support", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
@@ -2619,7 +2702,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
               reasoningOutputTokens: 0,
               totalTokens: 126,
             },
-            modelContextWindow: 258_400,
+            modelContextWindow: 190_000,
           },
         },
       } satisfies ProviderEvent);
@@ -2639,7 +2722,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         totalProcessedTokens: 11_839,
         totalOutputTokens: 6,
         totalCachedInputTokens: 3_456,
-        maxTokens: 258_400,
+        maxTokens: 190_000,
         inputTokens: 120,
         cachedInputTokens: 0,
         cacheWriteInputTokens: 12,
@@ -2653,7 +2736,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         lastOutputTokens: 6,
         lastReasoningOutputTokens: 0,
         compactsAutomatically: true,
-        autoCompactTokenLimit: 200_000,
+        autoCompactTokenLimit: 180_000,
       });
     }),
   );

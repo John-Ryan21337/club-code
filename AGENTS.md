@@ -12,6 +12,8 @@
 
 - Fast mode defaults to explicit Off in Club Code. An unset preference must send Codex's standard service tier and Claude's `fastMode: false`, regardless of native CLI defaults. Show Off in both composer controls. Preserve an explicit saved On choice and keep reasoning effort independent.
 
+- Default reasoning effort to High when the model supports it. Show concrete effort choices and keep context size separate. Default supported hosted context budgets to 200K; expose supported alternatives and preserve explicit saved choices. Keep local model context unchanged unless its provider offers a supported control. Standard speed remains the default. Expose Ultra Fast only through native capabilities, explain unavailable access, and never restore a paid tier from invalid saved options. See `docs/model-controls-20261104.md`.
+
 - When code changes are made, all of `yarn fmt`, `yarn lint`, and `yarn typecheck` must pass before considering tasks completed.
 - Run tests with `yarn test` (runs Vitest through the Turbo task graph with at most two concurrent workspace tasks). Each workspace also starts test workers; keep this default to limit competition for host resources without omitting tests or extending their deadlines.
 - When a change touches Electron packaging, backend bootstrap, provider daemon startup, or generated bundle boundaries, also run `yarn build:desktop`.

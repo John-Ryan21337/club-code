@@ -52,6 +52,7 @@ import {
   readPersistedCwd,
   readPersistedModelSelection,
 } from "../../provider/providerRuntimeBindingPayload.ts";
+import { resolveCodexContextWindow } from "../../provider/CodexContextWindow.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import {
@@ -509,6 +510,7 @@ const make = Effect.gen(function* () {
     );
 
   const threadModelSelections = new Map<string, ModelSelection>();
+  const codexContextSessionKeys = new Map<string, string>();
 
   const transitionManualFollowUpHandoff = Effect.fnUntraced(function* (input: {
     readonly outcome: "accepted" | "released";
@@ -1341,6 +1343,9 @@ const make = Effect.gen(function* () {
         ),
       );
 
+    const desiredCodexContextKey = JSON.stringify(
+      resolveCodexContextWindow(desiredModelSelection) ?? null,
+    );
     const bindSessionToThread = (session: ProviderSession) =>
       Effect.gen(function* () {
         if (session.providerInstanceId === undefined) {
@@ -1368,6 +1373,8 @@ const make = Effect.gen(function* () {
           },
           createdAt,
         });
+        if (preferredProvider === "codex")
+          codexContextSessionKeys.set(threadId, desiredCodexContextKey);
         yield* syncGoalAfterSessionMaterialization(session);
       });
 
@@ -1394,6 +1401,13 @@ const make = Effect.gen(function* () {
         preferredProvider === "claudeAgent" &&
         requestedModelSelection !== undefined &&
         !Equal.equals(previousModelSelection, requestedModelSelection);
+      // Context is startup configuration. Retain active work and apply changes
+      // only when an idle session can resume with the selected budget.
+      const codexContextWindowChanged =
+        preferredProvider === "codex" &&
+        activeSession.status !== "running" &&
+        !activeSession.activeTurnId &&
+        (codexContextSessionKeys.get(threadId) ?? "null") !== desiredCodexContextKey;
       const codexSubagentThreadLimitChanged =
         preferredProvider === "codex" &&
         activeSession.codexSubagentThreadLimit !== desiredCodexSubagentThreadLimit;
@@ -1406,7 +1420,8 @@ const make = Effect.gen(function* () {
         !providerResumeIdentityChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
-        !codexSubagentThreadLimitChanged
+        !codexSubagentThreadLimitChanged &&
+        !codexContextWindowChanged
       ) {
         return activeSession;
       }
@@ -1441,6 +1456,7 @@ const make = Effect.gen(function* () {
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
         codexSubagentThreadLimitChanged,
+        codexContextWindowChanged,
         previousCodexSubagentThreadLimit: activeSession.codexSubagentThreadLimit,
         desiredCodexSubagentThreadLimit,
         hasResumeCursor: resumeCursor !== undefined,

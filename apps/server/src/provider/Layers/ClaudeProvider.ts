@@ -149,6 +149,20 @@ export function resolveClaudeContextWindowOption(
   const contextWindowDescriptor = descriptors.find(
     (descriptor) => descriptor.id === "contextWindow",
   );
+  const saved = modelSelection?.options?.find((option) => option.id === "contextWindow")?.value;
+  if (
+    contextWindowDescriptor?.type === "select" &&
+    contextWindowDescriptor.options.some((option) => option.id === saved) &&
+    (saved === "200k" || saved === "1m")
+  ) {
+    return saved;
+  }
+  if (
+    contextWindowDescriptor?.type === "select" &&
+    contextWindowDescriptor.options.some((option) => option.id === "200k")
+  ) {
+    return "200k";
+  }
   const value = getProviderOptionCurrentValue(contextWindowDescriptor);
   return value === "200k" || value === "1m" ? value : undefined;
 }
@@ -186,7 +200,14 @@ export function resolveClaudeSessionEffort(
 ): string | undefined {
   const promptInjected = resolvePromptInjectedEffort(caps, raw);
   if (!promptInjected) {
-    return resolveClaudeEffort(caps, raw);
+    const descriptor = getProviderOptionDescriptors({ caps }).find(
+      (option) => option.id === "effort",
+    );
+    const supportedSelection =
+      descriptor?.type === "select" && descriptor.options.some((option) => option.id === raw);
+    const supportsHigh =
+      descriptor?.type === "select" && descriptor.options.some((option) => option.id === "high");
+    return resolveClaudeEffort(caps, supportedSelection ? raw : supportsHigh ? "high" : raw);
   }
   const descriptors = getProviderOptionDescriptors({ caps });
   const effortDescriptor = descriptors.find((descriptor) => descriptor.id === "effort");

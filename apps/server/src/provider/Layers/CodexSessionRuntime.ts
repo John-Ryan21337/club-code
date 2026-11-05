@@ -444,10 +444,12 @@ export interface CodexSessionRuntimeOptions {
   readonly codexSubagentThreadLimit?: number | undefined;
   readonly model?: string;
   readonly serviceTier?: CodexServiceTier | undefined;
+  readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort | undefined;
   readonly additionalDirectories?: ReadonlyArray<string> | undefined;
   readonly resumeCursor?: CodexResumeCursor;
   // Per-provider-instance override for `model_auto_compact_token_limit`.
   // Defaults to `CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT` when absent.
+  readonly modelContextWindow?: number | undefined;
   readonly autoCompactTokenLimit?: number | undefined;
   // Enables the stable structured compaction prompt. The caller also resolves
   // the lower effective token ceiling so usage events report the real limit.
@@ -1009,7 +1011,9 @@ function buildThreadStartParams(input: {
   readonly runtimeMode: RuntimeMode;
   readonly model: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
+  readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort | undefined;
   readonly additionalDirectories?: ReadonlyArray<string> | undefined;
+  readonly modelContextWindow?: number | undefined;
   readonly autoCompactTokenLimit?: number | undefined;
   readonly ultraCaching?: boolean | undefined;
   readonly agentBrowserMcp?: AgentBrowserMcpConfig | undefined;
@@ -1032,6 +1036,10 @@ function buildThreadStartParams(input: {
   // 200k instead of the older 100k override; the per-instance
   // `autoCompactTokenLimit` provider setting lets a user override that default.
   const threadConfig: Record<string, unknown> = {
+    ...(input.effort ? { model_reasoning_effort: input.effort } : {}),
+    ...(input.modelContextWindow !== undefined
+      ? { model_context_window: input.modelContextWindow }
+      : {}),
     model_auto_compact_token_limit:
       input.autoCompactTokenLimit ?? CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
     model_auto_compact_token_limit_scope: CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT_SCOPE,
@@ -1820,8 +1828,10 @@ export const openCodexThread = (input: {
   readonly cwd: string;
   readonly requestedModel: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
+  readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort | undefined;
   readonly resumeThreadId: string | undefined;
   readonly additionalDirectories?: ReadonlyArray<string> | undefined;
+  readonly modelContextWindow?: number | undefined;
   readonly autoCompactTokenLimit?: number | undefined;
   readonly ultraCaching?: boolean | undefined;
   readonly agentBrowserMcp?: AgentBrowserMcpConfig | undefined;
@@ -1853,7 +1863,9 @@ export const openCodexThread = (input: {
       runtimeMode: input.runtimeMode,
       model: input.requestedModel,
       serviceTier: input.serviceTier,
+      effort: input.effort,
       additionalDirectories: input.additionalDirectories,
+      modelContextWindow: input.modelContextWindow,
       autoCompactTokenLimit: input.autoCompactTokenLimit,
       ultraCaching: input.ultraCaching,
       agentBrowserMcp: input.agentBrowserMcp,
@@ -5070,8 +5082,10 @@ export const makeCodexSessionRuntime = (
         cwd: options.cwd,
         requestedModel,
         serviceTier: options.serviceTier,
+        effort: options.effort,
         additionalDirectories: options.additionalDirectories,
         resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
+        modelContextWindow: options.modelContextWindow,
         autoCompactTokenLimit: options.autoCompactTokenLimit,
         ultraCaching: options.ultraCaching,
         agentBrowserMcp: options.agentBrowserMcp,

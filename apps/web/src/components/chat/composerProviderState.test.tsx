@@ -53,7 +53,7 @@ function modelWith(
 }
 
 function selections(
-  ...entries: Array<[string, string | boolean]>
+  ...entries: Array<readonly [string, string | boolean]>
 ): ReadonlyArray<ProviderOptionSelection> {
   return entries.map(([id, value]) => ({ id, value }));
 }
@@ -65,6 +65,106 @@ const ULTRATHINK_FRAME_CLASSES = {
 } as const;
 
 describe("getComposerProviderState", () => {
+  it.each([
+    ["unset", [], "default"],
+    ["legacy Fast On", [["fastMode", true]], "priority"],
+    ["saved Ultra Fast", [["serviceTier", "ultrafast"]], "ultrafast"],
+    [
+      "explicit standard wins",
+      [
+        ["serviceTier", "default"],
+        ["fastMode", true],
+      ],
+      "default",
+    ],
+    [
+      "unsupported tier",
+      [
+        ["serviceTier", "unknown"],
+        ["fastMode", true],
+      ],
+      "default",
+    ],
+  ] as const)("dispatches %s using only supported native speed tiers", (_name, saved, expected) => {
+    const state = getComposerProviderState({
+      provider: PROVIDER,
+      model: MODEL,
+      prompt: "",
+      modelOptions: selections(...saved),
+      models: modelWith([
+        {
+          ...selectDescriptor("serviceTier", [
+            { id: "default", label: "Standard" },
+            { id: "priority", label: "Fast" },
+            { id: "ultrafast", label: "Ultra Fast", isDefault: true },
+          ]),
+          currentValue: "ultrafast",
+        },
+        booleanDescriptor("fastMode"),
+      ]),
+    });
+    expect(state.modelOptionsForDispatch).toEqual(selections(["serviceTier", expected]));
+  });
+
+  it("falls back to standard when a saved Ultra Fast choice moves to a Fast-only model", () => {
+    const state = getComposerProviderState({
+      provider: PROVIDER,
+      model: MODEL,
+      prompt: "",
+      modelOptions: selections(["serviceTier", "ultrafast"], ["fastMode", true]),
+      models: modelWith([booleanDescriptor("fastMode")]),
+    });
+    expect(state.modelOptionsForDispatch).toEqual(selections(["fastMode", false]));
+  });
+
+  it("replaces legacy CLI effort defaults with High and dispatches a smaller context independently", () => {
+    const models = modelWith([
+      selectDescriptor("contextWindow", [
+        { id: "1m", label: "1M", isDefault: true },
+        { id: "200k", label: "200k" },
+      ]),
+      selectDescriptor("effort", [
+        { id: "default", label: "CLI default", isDefault: true },
+        { id: "high", label: "High" },
+        { id: "low", label: "Low" },
+      ]),
+    ]);
+    const input = { provider: PROVIDER, model: MODEL, models, prompt: "" };
+    expect(
+      getComposerProviderState({ ...input, modelOptions: selections(["effort", "default"]) }),
+    ).toMatchObject({
+      promptEffort: "high",
+      modelOptionsForDispatch: selections(["contextWindow", "200k"], ["effort", "high"]),
+    });
+    expect(
+      getComposerProviderState({
+        ...input,
+        modelOptions: selections(["contextWindow", "1m"], ["effort", "low"]),
+      }),
+    ).toMatchObject({
+      promptEffort: "low",
+      modelOptionsForDispatch: selections(["contextWindow", "1m"], ["effort", "low"]),
+    });
+    expect(models[0]?.capabilities?.optionDescriptors?.[0]).toMatchObject({ currentValue: "1m" });
+  });
+
+  it("does not invent smaller context levels for a model that only supports 1M", () => {
+    expect(
+      getComposerProviderState({
+        provider: PROVIDER,
+        model: MODEL,
+        prompt: "",
+        modelOptions: undefined,
+        models: modelWith([
+          selectDescriptor("contextWindow", [{ id: "1m", label: "1M", isDefault: true }]),
+        ]),
+      }),
+    ).toMatchObject({
+      promptEffort: null,
+      modelOptionsForDispatch: selections(["contextWindow", "1m"]),
+    });
+  });
+
   it.each([
     ["unset", undefined, false],
     ["saved On", true, true],

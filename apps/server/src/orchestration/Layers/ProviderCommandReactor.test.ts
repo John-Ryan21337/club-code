@@ -2526,6 +2526,45 @@ describe("ProviderCommandReactor", () => {
     expect(harness.stopSession.mock.calls.length).toBe(0);
   });
 
+  it("resumes idle Codex sessions when context changes and clears it for unknown models", async () => {
+    const harness = await createHarness();
+    const selections = [
+      { model: "gpt-6-astra", options: [{ id: "contextWindow", value: "200k" }] },
+      { model: "gpt-6-astra", options: [{ id: "contextWindow", value: "872k" }] },
+      { model: "custom-local", options: [] },
+    ];
+    for (const [index, selected] of selections.entries()) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("context-" + index),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("context-user-" + index),
+            role: "user",
+            text: "Review the task.",
+            attachments: [],
+          },
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), ...selected },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === index + 1);
+      await harness.markThreadReady();
+    }
+    expect(harness.startSession).toHaveBeenCalledTimes(3);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      resumeCursor: { opaque: "resume-1" },
+      modelSelection: { options: [{ id: "contextWindow", value: "872k" }] },
+    });
+    expect(harness.startSession.mock.calls[2]?.[1]).toMatchObject({
+      resumeCursor: { opaque: "resume-1" },
+      modelSelection: { model: "custom-local" },
+    });
+  });
+
   it("reconnects an idle legacy Codex session whose worker capacity was never recorded", async () => {
     const harness = await createHarness();
     for (const step of [1, 2]) {
