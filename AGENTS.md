@@ -14,6 +14,8 @@
 
 - Default reasoning effort to High when the model supports it. Show concrete effort choices and keep context size separate. Default supported hosted context budgets to 200K; expose supported alternatives and preserve explicit saved choices. Keep local model context unchanged unless its provider offers a supported control. Standard speed remains the default. Expose Ultra Fast only through native capabilities, explain unavailable access, and never restore a paid tier from invalid saved options. See `docs/model-controls-20261104.md`.
 
+- Follow-up input preserves unfinished work unless the operator explicitly redirects, replaces, pauses, or cancels that work. Apply shared continuity guidance only to provider-bound input after validation, including native steers, queued follow-ups, and recovered next turns. Keep stored user messages unchanged. Delegate independent additions only when the current task and delegation settings allow it; all steers share the existing worker capacity. Do not create a worker or fork a session for every steer. Preserve native presets, exact-turn routing, explicit Stop, approval, sandbox, and tool restrictions. See `docs/steer-task-continuity.md`.
+
 - When code changes are made, all of `yarn fmt`, `yarn lint`, and `yarn typecheck` must pass before considering tasks completed.
 - Run tests with `yarn test` (runs Vitest through the Turbo task graph with at most two concurrent workspace tasks). Each workspace also starts test workers; keep this default to limit competition for host resources without omitting tests or extending their deadlines.
 - When a change touches Electron packaging, backend bootstrap, provider daemon startup, or generated bundle boundaries, also run `yarn build:desktop`.
