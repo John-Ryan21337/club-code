@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { desktopDir, resolveElectronPath } from "./electron-launcher.mjs";
 import { linuxSafeStorageElectronArgs } from "./linux-safe-storage.mjs";
+import { prepareReleaseRuntime } from "./release-runtime.mjs";
 
 const isolateChildProcessGroup = process.platform !== "win32";
 const forcedShutdownTimeoutMs = 5_000;
@@ -117,7 +118,7 @@ export function runStartElectron({
   environment = process.env,
   cwd = process.cwd(),
 } = {}) {
-  const childEnv = buildDesktopChildEnv(environment);
+  const childEnv = buildDesktopChildEnv(prepareReleaseRuntime(environment));
   const plan = resolveLaunchPlan({ args, environment: childEnv, cwd });
   const child = spawnLaunchPlan(plan, childEnv);
 

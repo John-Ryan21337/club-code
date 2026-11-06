@@ -1998,6 +1998,105 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
   });
 
   if (chatViewBrowserPart === "composer") {
+    it("sends selected-agent research instructions and resets the real composer", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "research-agent" as MessageId,
+          targetText: "Existing discussion",
+        }),
+        resolveRpc: (body) =>
+          body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand
+            ? { sequence: fixture.snapshot.snapshotSequence + 1 }
+            : undefined,
+      });
+      try {
+        useComposerDraftStore.getState().setPrompt(THREAD_REF, "Compare public battery research");
+        await waitForLayout();
+        await page.getByRole("button", { name: "Deep research", exact: true }).click();
+        await page.getByRole("button", { name: "Use selected agent", exact: true }).click();
+        (await waitForSendButton()).click();
+        await vi.waitFor(() => {
+          const command = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.turn.start",
+          );
+          expect(JSON.stringify(command)).toContain("Compare public battery research");
+          expect(JSON.stringify(command)).toContain("wait for my answers");
+        });
+        await expect
+          .element(page.getByRole("button", { name: "Deep research", exact: true }))
+          .toHaveAttribute("aria-pressed", "false");
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("submits API research into scope review and resets the real composer without starting an agent", async () => {
+      const actions: Array<{ action: string }> = [];
+      worker.use(
+        http.post("*/api/research", async ({ request }) => {
+          const body = (await request.json()) as {
+            action: string;
+            id: string;
+            scope: string;
+            prompt: string;
+          };
+          actions.push(body);
+          return HttpResponse.json({
+            configured: true,
+            jobs:
+              body.action === "prepare"
+                ? [
+                    {
+                      id: body.id,
+                      scope: body.scope,
+                      prompt: body.prompt,
+                      createdAt: new Date().toISOString(),
+                      status: "draft",
+                    },
+                  ]
+                : [],
+          });
+        }),
+      );
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "research-topic" as MessageId,
+          targetText: "Existing discussion",
+        }),
+      });
+      try {
+        useComposerDraftStore.getState().setPrompt(THREAD_REF, "Compare public battery research");
+        await waitForLayout();
+        await page.getByRole("button", { name: "Deep research", exact: true }).click();
+        await page.getByRole("button", { name: "Use OpenAI API", exact: true }).click();
+        (await waitForSendButton()).click();
+        await expect
+          .element(page.getByRole("dialog", { name: "OpenAI API research" }))
+          .toBeVisible();
+        await vi.waitFor(() => expect(composerDraftFor(THREAD_KEY)?.prompt ?? "").toBe(""));
+        expect(actions.some((action) => action.action === "prepare")).toBe(true);
+        expect(actions.some((action) => action.action === "start")).toBe(false);
+        expect(
+          wsRequests.some(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.turn.start",
+          ),
+        ).toBe(false);
+        await page.getByRole("button", { name: "Close", exact: true }).click();
+        await expect
+          .element(page.getByRole("button", { name: "Deep research", exact: true }))
+          .toHaveAttribute("aria-pressed", "false");
+      } finally {
+        await mounted.cleanup();
+        worker.resetHandlers();
+      }
+    });
+
     it("renders locked single-environment mobile run context as a static workspace label", async () => {
       const mounted = await mountChatView({
         viewport: COMPACT_FOOTER_VIEWPORT,

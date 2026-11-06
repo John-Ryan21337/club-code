@@ -131,14 +131,21 @@ const CODEX_DRIVER_KIND = ProviderDriverKind.make("codex");
 const CLAUDE_DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
 const OPENCODE_DRIVER_KIND = ProviderDriverKind.make("opencode");
 
-// Codex 0.154.0 lists Astra as its bundled default. Explicit project, thread,
-// and draft selections remain unchanged during provider hydration.
+// Codex 0.165.0 still lists Astra as its bundled default. This is only the
+// missing-selection fallback; explicit project, thread, and draft selections
+// remain unchanged during provider hydration. The live model/list catalog and
+// backend entitlement decide whether an account can actually run it.
 export const DEFAULT_MODEL = "gpt-6-astra";
-export const DEFAULT_GIT_TEXT_GENERATION_MODEL = "gpt-5.4-mini";
+// GPT-5.4 Mini retired from Codex ChatGPT sign-in on 2026-08-31. The existing
+// GPT-5.6 Luna catalogue remains available during the GPT-6 rollout, so helpers
+// can use a supported small model without requiring a newly entitled account.
+// https://learn.chatgpt.com/docs/models
+// This applies only to absent selections; explicitly saved models are retained.
+export const DEFAULT_GIT_TEXT_GENERATION_MODEL = "gpt-5.6-luna";
 
 export const DEFAULT_MODEL_BY_PROVIDER: Partial<Record<ProviderDriverKind, string>> = {
   [CODEX_DRIVER_KIND]: DEFAULT_MODEL,
-  [CLAUDE_DRIVER_KIND]: "claude-sonnet-5",
+  [CLAUDE_DRIVER_KIND]: "claude-sonnet-5-5",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5.4",
 };
 
@@ -147,7 +154,7 @@ export const DEFAULT_GIT_TEXT_GENERATION_MODEL_BY_PROVIDER: Partial<
   Record<ProviderDriverKind, string>
 > = {
   [CODEX_DRIVER_KIND]: DEFAULT_GIT_TEXT_GENERATION_MODEL,
-  [CLAUDE_DRIVER_KIND]: "claude-haiku-4-5",
+  [CLAUDE_DRIVER_KIND]: "claude-haiku-5-5",
   [OPENCODE_DRIVER_KIND]: "openai/gpt-5.4-mini",
 };
 
@@ -168,19 +175,28 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Partial<
     "gpt-5.3-spark": "gpt-5.3-codex-spark",
   },
   [CLAUDE_DRIVER_KIND]: {
-    default: "claude-opus-5",
-    opus: "claude-opus-5",
+    // Family aliases track Claude Code 2.1.303: `default` and the bare
+    // family names resolve to the 5.5 generation (Fable to 5.1). Explicit
+    // versioned spellings keep resolving to the model they name.
+    default: "claude-opus-5-5",
+    opus: "claude-opus-5-5",
+    "opus-5.5": "claude-opus-5-5",
+    "claude-opus-5.5": "claude-opus-5-5",
+    "claude-opus-5-5[1m]": "claude-opus-5-5",
+    "opus[1m]": "claude-opus-5-5",
     opus5: "claude-opus-5",
     "opus-5": "claude-opus-5",
     opus_5: "claude-opus-5",
     "claude-opus-5[1m]": "claude-opus-5",
-    "opus[1m]": "claude-opus-5",
-    fable: "claude-fable-5",
+    fable: "claude-fable-5-1",
+    "fable-5.1": "claude-fable-5-1",
+    "claude-fable-5.1": "claude-fable-5-1",
+    "claude-fable-5-1[1m]": "claude-fable-5-1",
+    "fable[1m]": "claude-fable-5-1",
     "fable-5": "claude-fable-5",
     fable5: "claude-fable-5",
     fable_5: "claude-fable-5",
     "claude-fable-5[1m]": "claude-fable-5",
-    "fable[1m]": "claude-fable-5",
     "opus-4.8": "claude-opus-4-8",
     "claude-opus-4.8": "claude-opus-4-8",
     "opus-4.7": "claude-opus-4-7",
@@ -188,15 +204,20 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Partial<
     "opus-4.6": "claude-opus-4-6",
     "claude-opus-4.6": "claude-opus-4-6",
     "claude-opus-4-6-20251117": "claude-opus-4-6",
-    sonnet: "claude-sonnet-5",
+    sonnet: "claude-sonnet-5-5",
+    "sonnet-5.5": "claude-sonnet-5-5",
+    "claude-sonnet-5.5": "claude-sonnet-5-5",
+    "claude-sonnet-5-5[1m]": "claude-sonnet-5-5",
+    "sonnet[1m]": "claude-sonnet-5-5",
     "sonnet-5": "claude-sonnet-5",
     sonnet5: "claude-sonnet-5",
     "claude-sonnet-5[1m]": "claude-sonnet-5",
-    "sonnet[1m]": "claude-sonnet-5",
     "sonnet-4.6": "claude-sonnet-4-6",
     "claude-sonnet-4.6": "claude-sonnet-4-6",
     "claude-sonnet-4-6-20251117": "claude-sonnet-4-6",
-    haiku: "claude-haiku-4-5",
+    haiku: "claude-haiku-5-5",
+    "haiku-5.5": "claude-haiku-5-5",
+    "claude-haiku-5.5": "claude-haiku-5-5",
     "haiku-4.5": "claude-haiku-4-5",
     "claude-haiku-4.5": "claude-haiku-4-5",
     "claude-haiku-4-5-20251001": "claude-haiku-4-5",

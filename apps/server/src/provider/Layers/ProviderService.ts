@@ -85,6 +85,7 @@ import {
 import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { ProviderEventLoggers } from "./ProviderEventLoggers.ts";
 import { closeAgentBrowserBridge, getAgentBrowserBridge } from "../AgentBrowserBridge.ts";
+import { withTaskContinuityGuidance } from "../TaskContinuity.ts";
 const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 // Codex historically rejected missing native threads with "no rollout found".
 // As of rust-v0.149.1, thread-store can instead reject the same stale cursor
@@ -1138,7 +1139,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           const turn = yield* routed.adapter.steerTurn({
             threadId: input.threadId,
             expectedTurnId: activeSession.activeTurnId,
-            ...(input.input !== undefined ? { input: input.input } : {}),
+            input: withTaskContinuityGuidance(input.input),
             ...(input.attachments.length > 0 ? { attachments: input.attachments } : {}),
           });
           yield* upsertRunningTurnBinding({
@@ -1152,7 +1153,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           return turn;
         }
       }
-      const turn = yield* routed.adapter.sendTurn(input);
+      const turn = yield* routed.adapter.sendTurn({
+        ...input,
+        input: withTaskContinuityGuidance(input.input),
+      });
       yield* upsertRunningTurnBinding({
         threadId: input.threadId,
         provider: routed.adapter.provider,
@@ -1220,7 +1224,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       yield* Effect.annotateCurrentSpan({
         "provider.kind": routed.adapter.provider,
       });
-      const turn = yield* routed.adapter.steerTurn(input);
+      const turn = yield* routed.adapter.steerTurn({
+        ...input,
+        input: withTaskContinuityGuidance(input.input),
+      });
       yield* upsertRunningTurnBinding({
         threadId: input.threadId,
         provider: routed.adapter.provider,

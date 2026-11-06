@@ -433,6 +433,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.showSidebarAttribution !== DEFAULT_UNIFIED_SETTINGS.showSidebarAttribution
         ? ["Sidebar attribution"]
         : []),
+      ...(settings.promptSuggestionsEnabled ? ["Suggested next prompt"] : []),
       ...(settings.showComposerThreadAutomationControls !==
       DEFAULT_UNIFIED_SETTINGS.showComposerThreadAutomationControls
         ? ["Prompt automation controls"]
@@ -588,6 +589,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.showSidebarMascot,
       settings.showSidebarAttribution,
       settings.showComposerThreadAutomationControls,
+      settings.promptSuggestionsEnabled,
       settings.sidebarBrandImage,
       settings.sidebarStarSpeed,
       settings.workflowObservatoryEnabled,
@@ -652,6 +654,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       showSidebarAttribution: DEFAULT_UNIFIED_SETTINGS.showSidebarAttribution,
       showComposerThreadAutomationControls:
         DEFAULT_UNIFIED_SETTINGS.showComposerThreadAutomationControls,
+      promptSuggestionsEnabled: DEFAULT_UNIFIED_SETTINGS.promptSuggestionsEnabled,
       brandWordmarkPrefix: DEFAULT_UNIFIED_SETTINGS.brandWordmarkPrefix,
       sidebarBrandImage: DEFAULT_UNIFIED_SETTINGS.sidebarBrandImage,
       sidebarBrandImageDataUrl: "",
@@ -1216,6 +1219,28 @@ export function AppearanceSettingsPanel() {
                 updateSettings({ showComposerThreadAutomationControls: Boolean(checked) })
               }
               aria-label="Show prompt automation controls"
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Suggested next prompt"
+          description="Suggest a follow-up after Claude replies. Uses extra Claude quota. Codex suggestions will remain unavailable until native support is ready."
+          resetAction={
+            settings.promptSuggestionsEnabled ? (
+              <SettingResetButton
+                label="suggested next prompt"
+                onClick={() => updateSettings({ promptSuggestionsEnabled: false })}
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.promptSuggestionsEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ promptSuggestionsEnabled: Boolean(checked) })
+              }
+              aria-label="Suggested next prompt"
             />
           }
         />

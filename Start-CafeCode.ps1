@@ -206,7 +206,20 @@ function Invoke-StartCafeCode {
   )
 
   $repo = $script:StartCafeCodeRepoRoot
-  $logDir = Join-Path $env:USERPROFILE ".cafe-code\launcher-logs"
+  $nodePath = Resolve-FirstApplicationPath -Names @("node.exe", "node")
+  if ([string]::IsNullOrWhiteSpace($nodePath)) {
+    throw "Node.js 24.13.1 or newer in the Node 24 release line was not found on PATH."
+  }
+  $runtimeHelper = Join-Path $repo "apps\desktop\scripts\release-runtime.mjs"
+  $runtimeJson = $null | & $nodePath $runtimeHelper
+  if ($LASTEXITCODE -ne 0) {
+    throw "Club Code could not prepare storage inside the release folder."
+  }
+  $runtimeSettings = ($runtimeJson -join [Environment]::NewLine) | ConvertFrom-Json
+  foreach ($property in $runtimeSettings.PSObject.Properties) {
+    [Environment]::SetEnvironmentVariable($property.Name, [string]$property.Value, "Process")
+  }
+  $logDir = Join-Path $env:CAFE_CODE_HOME "launcher-logs"
   $launcherLog = Join-Path $logDir "launcher.log"
   $stdoutLog = Join-Path $logDir "desktop-start.stdout.log"
   $stderrLog = Join-Path $logDir "desktop-start.stderr.log"

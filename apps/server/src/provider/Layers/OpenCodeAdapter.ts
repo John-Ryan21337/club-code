@@ -49,6 +49,7 @@ import {
   type OpenCodeServerConnection,
 } from "../opencodeRuntime.ts";
 import * as Option from "effect/Option";
+import { inferDefaultVariant } from "./OpenCodeProvider.ts";
 
 const PROVIDER = ProviderDriverKind.make("opencode");
 
@@ -1201,7 +1202,25 @@ export function makeOpenCodeAdapter(
       }
 
       const agent = getModelSelectionStringOptionValue(modelSelection, "agent");
-      const variant = getModelSelectionStringOptionValue(modelSelection, "variant");
+      const savedVariant = getModelSelectionStringOptionValue(modelSelection, "variant");
+      const variant =
+        savedVariant && !["default", "cli-default", "cliDefault"].includes(savedVariant)
+          ? savedVariant
+          : yield* openCodeRuntime.loadOpenCodeInventory(context.client).pipe(
+              Effect.map((inventory) => {
+                const provider = inventory.providerList.all.find(
+                  (entry) => entry.id === parsedModel.providerID,
+                );
+                const model = provider?.models[parsedModel.modelID];
+                return inferDefaultVariant(
+                  parsedModel.providerID,
+                  Object.keys(model?.variants ?? {}),
+                );
+              }),
+              Effect.timeoutOption(3_000),
+              Effect.map(Option.getOrUndefined),
+              Effect.orElseSucceed(() => undefined),
+            );
 
       context.activeTurnId = turnId;
       context.activeAgent = agent ?? (input.interactionMode === "plan" ? "plan" : undefined);

@@ -55,6 +55,7 @@ describe("settings profile library", () => {
       ambientImageGlowOpacity: 0.42,
       mobileOptimizedPresentation: true,
       showComposerThreadAutomationControls: true,
+      promptSuggestionsEnabled: true,
       timestampFormat: "24-hour",
       notificationsEnabled: true,
       completionAlertSoundEnabled: true,
@@ -109,19 +110,19 @@ describe("settings profile library", () => {
 
     expect(payload.theme).toBe("dark");
     expect(payload.clientSettings.ambientVideoLayoutMode).toBe("custom");
-    expect(payload.clientSettings).not.toHaveProperty("ambientVideoEnabled");
+    expect(payload.clientSettings).toHaveProperty("ambientVideoEnabled");
     expect(payload.clientSettings.ambientVideoSource).toEqual({
       kind: "video",
       id: "dQw4w9WgXcQ",
     });
-    expect(payload.clientSettings).not.toHaveProperty("ambientImageEnabled");
+    expect(payload.clientSettings).toHaveProperty("ambientImageEnabled");
     expect(payload.clientSettings.ambientImageAsset).toEqual(
       CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
     );
     expect(payload.clientSettings.ambientImageCycleAssets).toEqual([
       CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
     ]);
-    expect(payload.clientSettings).not.toHaveProperty("ambientImageCycleEnabled");
+    expect(payload.clientSettings).toHaveProperty("ambientImageCycleEnabled");
     expect(payload.clientSettings.ambientImageGlowOpacity).toBe(0.42);
     expect(payload.clientSettings.hexagonsBackgroundPresetJson).toBe(
       '{"kind":"the-hexagons-background"}',
@@ -130,33 +131,36 @@ describe("settings profile library", () => {
     expect(payload.clientSettings.ambientBackgroundSidebarOpacity).toBe(0.63);
     expect(payload.clientSettings.mobileOptimizedPresentation).toBe(true);
     expect(payload.clientSettings.showComposerThreadAutomationControls).toBe(true);
+    expect(payload.clientSettings.promptSuggestionsEnabled).toBe(true);
     expect(payload.clientSettings.timestampFormat).toBe("24-hour");
-    expect(Object.keys(payload.clientSettings)).toEqual([...SETTINGS_PROFILE_CLIENT_KEYS]);
-    expect(payload.clientSettings).not.toHaveProperty("fallingEffectsEnabled");
-    expect(payload.clientSettings).not.toHaveProperty("atmosphereConsoleEnabled");
-    expect(payload.clientSettings).not.toHaveProperty("fallingEffectsOverCinemaEnabled");
-    expect(payload.clientSettings).not.toHaveProperty("ambianceEnabled");
-    expect(payload.clientSettings).not.toHaveProperty("ambianceReactMode");
-    expect(payload.clientSettings).not.toHaveProperty("hexagonsBackgroundEnabled");
-    expect(payload.clientSettings).not.toHaveProperty("fallingEffectLiveWorkVocabulary");
-    expect(payload.clientSettings).not.toHaveProperty("fallingEffectUsageReactive");
-    expect(payload.clientSettings).not.toHaveProperty("fallingEffectActivityLinks");
-    expect(payload.clientSettings).not.toHaveProperty("fallingEffectActivityLinkNetworkEnabled");
-    expect(payload.clientSettings).not.toHaveProperty("fallingEffectActivityLinkDatabaseEnabled");
-    expect(payload.clientSettings).not.toHaveProperty("fallingEffectActivityLinkBuildEnabled");
-    expect(payload.clientSettings).not.toHaveProperty("fallingEffectActivityLinkAgentEnabled");
+    expect(Object.keys(payload.clientSettings)).toEqual(
+      SETTINGS_PROFILE_CLIENT_KEYS.filter((key) => key !== "sidebarBrandImage"),
+    );
+    expect(payload.clientSettings).toHaveProperty("fallingEffectsEnabled");
+    expect(payload.clientSettings).toHaveProperty("atmosphereConsoleEnabled");
+    expect(payload.clientSettings).toHaveProperty("fallingEffectsOverCinemaEnabled");
+    expect(payload.clientSettings).toHaveProperty("ambianceEnabled");
+    expect(payload.clientSettings).toHaveProperty("ambianceReactMode");
+    expect(payload.clientSettings).toHaveProperty("hexagonsBackgroundEnabled");
+    expect(payload.clientSettings).toHaveProperty("fallingEffectLiveWorkVocabulary");
+    expect(payload.clientSettings).toHaveProperty("fallingEffectUsageReactive");
+    expect(payload.clientSettings).toHaveProperty("fallingEffectActivityLinks");
+    expect(payload.clientSettings).toHaveProperty("fallingEffectActivityLinkNetworkEnabled");
+    expect(payload.clientSettings).toHaveProperty("fallingEffectActivityLinkDatabaseEnabled");
+    expect(payload.clientSettings).toHaveProperty("fallingEffectActivityLinkBuildEnabled");
+    expect(payload.clientSettings).toHaveProperty("fallingEffectActivityLinkAgentEnabled");
     expect(payload.clientSettings).not.toHaveProperty("notificationsEnabled");
-    expect(payload.clientSettings).not.toHaveProperty("completionAlertSoundEnabled");
-    expect(payload.clientSettings).not.toHaveProperty("completionAlertSpeechEnabled");
-    expect(payload.clientSettings).not.toHaveProperty("confirmThreadArchive");
-    expect(payload.clientSettings).not.toHaveProperty("confirmThreadDelete");
-    expect(payload.clientSettings).not.toHaveProperty("worldClockWeatherEnabled");
-    expect(payload.clientSettings).not.toHaveProperty("providerUsageWidgetEnabled");
-    expect(payload.clientSettings).not.toHaveProperty("providerUsagePollMinutes");
-    expect(payload.clientSettings).not.toHaveProperty("defaultEditor");
-    expect(payload.clientSettings).not.toHaveProperty("powerSaveBlockerMode");
+    expect(payload.clientSettings).toHaveProperty("completionAlertSoundEnabled");
+    expect(payload.clientSettings).toHaveProperty("completionAlertSpeechEnabled");
+    expect(payload.clientSettings).toHaveProperty("confirmThreadArchive");
+    expect(payload.clientSettings).toHaveProperty("confirmThreadDelete");
+    expect(payload.clientSettings).toHaveProperty("worldClockWeatherEnabled");
+    expect(payload.clientSettings).toHaveProperty("providerUsageWidgetEnabled");
+    expect(payload.clientSettings).toHaveProperty("providerUsagePollMinutes");
+    expect(payload.clientSettings).toHaveProperty("defaultEditor");
+    expect(payload.clientSettings).toHaveProperty("powerSaveBlockerMode");
     expect(payload.clientSettings).not.toHaveProperty("sidebarBrandImage");
-    expect(payload.clientSettings).not.toHaveProperty("sidebarBrandImageDataUrl");
+    expect(payload.clientSettings).toHaveProperty("sidebarBrandImageDataUrl");
     expect(payload.clientSettings).not.toHaveProperty("dismissedProviderUpdateNotificationKeys");
     expect(payload.clientSettings).not.toHaveProperty("autoNudgeMode");
     expect(payload.clientSettings).not.toHaveProperty("autoNudgeBackgroundContinuation");
@@ -164,64 +168,64 @@ describe("settings profile library", () => {
     expect(payload.clientSettings).not.toHaveProperty("idleThreadGuardEnabled");
     expect(payload.clientSettings).not.toHaveProperty("idleThreadGuardHours");
     expect(payload.clientSettings).not.toHaveProperty("cameraCaptureGranted");
-    expect(payload.clientSettings).not.toHaveProperty("modelPacingEnabled");
-    expect(payload.clientSettings).not.toHaveProperty("providerModelPreferences");
-    expect(payload.clientSettings).not.toHaveProperty("sidebarProjectGroupingOverrides");
+    expect(payload.clientSettings).toHaveProperty("modelPacingEnabled");
+    expect(payload.clientSettings).toHaveProperty("providerModelPreferences");
+    expect(payload.clientSettings).toHaveProperty("sidebarProjectGroupingOverrides");
     expect(payload.clientSettings).not.toHaveProperty("providerInstances");
     expect(payload.clientSettings).not.toHaveProperty("defaultProviderInstanceId");
     expect(payload.clientSettings).not.toHaveProperty("observability");
     expect(payload.clientSettings).not.toHaveProperty("addProjectBaseDirectory");
   });
 
-  it("derives the capture allowlist only from fields classified as presentation-safe", () => {
+  it("classifies every client preference and excludes execution grants", () => {
     const expectedKeys = Object.entries(SETTINGS_PROFILE_CLIENT_FIELD_POLICY)
       .filter(([, policy]) => policy === "include")
       .map(([key]) => key);
 
     expect(SETTINGS_PROFILE_CLIENT_KEYS).toEqual(expectedKeys);
     expect(SETTINGS_PROFILE_CLIENT_FIELD_POLICY).toMatchObject({
-      uiLanguage: "renderer-identity",
+      uiLanguage: "include",
       notificationsEnabled: "consent",
-      completionAlertSoundEnabled: "event-output-activation",
-      completionAlertSpeechEnabled: "event-output-activation",
-      confirmThreadArchive: "destructive-action-safety",
-      confirmThreadDelete: "destructive-action-safety",
+      completionAlertSoundEnabled: "include",
+      completionAlertSpeechEnabled: "include",
+      confirmThreadArchive: "include",
+      confirmThreadDelete: "include",
       projectTelemetryHideUnavailableGraphs: "include",
-      worldClockWeatherEnabled: "consent",
-      fallingEffectsEnabled: "ambient-activation",
-      atmosphereConsoleEnabled: "ambient-activation",
-      fallingEffectsOverCinemaEnabled: "ambient-activation",
-      fallingEffectLiveWorkVocabulary: "live-operational-input",
-      fallingEffectUsageReactive: "live-operational-input",
-      fallingEffectActivityLinks: "live-operational-input",
-      fallingEffectActivityLinkNetworkEnabled: "live-operational-input",
-      fallingEffectActivityLinkDatabaseEnabled: "live-operational-input",
-      fallingEffectActivityLinkBuildEnabled: "live-operational-input",
-      fallingEffectActivityLinkAgentEnabled: "live-operational-input",
-      ambianceEnabled: "ambient-activation",
-      ambianceReactMode: "live-operational-input",
-      ambientVideoEnabled: "external-media-activation",
+      worldClockWeatherEnabled: "include",
+      fallingEffectsEnabled: "include",
+      atmosphereConsoleEnabled: "include",
+      fallingEffectsOverCinemaEnabled: "include",
+      fallingEffectLiveWorkVocabulary: "include",
+      fallingEffectUsageReactive: "include",
+      fallingEffectActivityLinks: "include",
+      fallingEffectActivityLinkNetworkEnabled: "include",
+      fallingEffectActivityLinkDatabaseEnabled: "include",
+      fallingEffectActivityLinkBuildEnabled: "include",
+      fallingEffectActivityLinkAgentEnabled: "include",
+      ambianceEnabled: "include",
+      ambianceReactMode: "include",
+      ambientVideoEnabled: "include",
       ambientVideoSource: "include",
-      ambientImageEnabled: "external-media-activation",
+      ambientImageEnabled: "include",
       ambientImageAsset: "include",
       ambientImageCycleAssets: "include",
-      ambientImageCycleEnabled: "external-media-activation",
-      hexagonsBackgroundEnabled: "ambient-activation",
+      ambientImageCycleEnabled: "include",
+      hexagonsBackgroundEnabled: "include",
       hexagonsBackgroundPresetJson: "include",
       ambientBackgroundManuscriptOpacity: "include",
       ambientBackgroundSidebarOpacity: "include",
-      sidebarBrandImage: "local-asset-reference",
-      sidebarBrandImageDataUrl: "local-asset-reference",
-      providerUsageWidgetEnabled: "provider-operation",
-      providerUsagePollMinutes: "provider-operation",
+      sidebarBrandImage: "include",
+      sidebarBrandImageDataUrl: "include",
+      providerUsageWidgetEnabled: "include",
+      providerUsagePollMinutes: "include",
       autoNudgeMode: "exact-thread-authority",
       autoNudgeBackgroundContinuation: "exact-thread-authority",
       autoNudgeMaxRounds: "exact-thread-authority",
-      favorites: "provider-model-state",
-      providerModelPreferences: "provider-model-state",
-      defaultEditor: "native-machine-control",
-      powerSaveBlockerMode: "native-machine-control",
-      sidebarProjectGroupingOverrides: "project-specific",
+      favorites: "include",
+      providerModelPreferences: "include",
+      defaultEditor: "include",
+      powerSaveBlockerMode: "include",
+      sidebarProjectGroupingOverrides: "include",
     });
 
     const excludedDefaults = Object.fromEntries(
@@ -402,7 +406,7 @@ describe("settings profile library", () => {
     );
   });
 
-  it("rewrites a malformed supported-version document without overwriting a future version", () => {
+  it("preserves malformed and future documents without destructive startup rewrites", () => {
     const supportedStorage = createStorage({
       [SETTINGS_PROFILE_LIBRARY_STORAGE_KEY]: JSON.stringify({
         version: SETTINGS_PROFILE_LIBRARY_VERSION,
@@ -418,14 +422,15 @@ describe("settings profile library", () => {
     });
 
     expect(createSettingsProfileLibraryStore(supportedStorage).getSnapshot().profiles).toEqual([]);
-    expect(JSON.parse(supportedStorage.read(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY) ?? "{}")).toEqual(
-      {
-        version: SETTINGS_PROFILE_LIBRARY_VERSION,
-        activeProfileId: null,
-        profiles: [],
-      },
-    );
-    expect(createSettingsProfileLibraryStore(futureStorage).getSnapshot().profiles).toEqual([]);
+    expect(
+      JSON.parse(supportedStorage.read(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY) ?? "{}").profiles,
+    ).toEqual({ serverPassword: "do-not-retain" });
+    expect(() =>
+      createSettingsProfileLibraryStore(futureStorage).upsert("New", {
+        theme: "dark",
+        clientSettings: {},
+      }),
+    ).toThrow("compatible app version");
     expect(futureStorage.read(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY)).toBe(futureDocument);
   });
 
@@ -481,34 +486,34 @@ describe("settings profile library", () => {
 
     const profile = createSettingsProfileLibraryStore(storage).getSnapshot().profiles[0];
 
-    expect(profile?.clientSettings).toEqual({
+    expect(profile?.clientSettings).toMatchObject({
       fallingEffectOpacity: 0.42,
       timestampFormat: "24-hour",
       ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
       ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
       ambientImageCycleAssets: [CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET],
     });
-    expect(profile?.clientSettings).not.toHaveProperty("fallingEffectsEnabled");
-    expect(profile?.clientSettings).not.toHaveProperty("atmosphereConsoleEnabled");
-    expect(profile?.clientSettings).not.toHaveProperty("fallingEffectsOverCinemaEnabled");
-    expect(profile?.clientSettings).not.toHaveProperty("ambianceEnabled");
-    expect(profile?.clientSettings).not.toHaveProperty("completionAlertSoundEnabled");
-    expect(profile?.clientSettings).not.toHaveProperty("completionAlertSpeechEnabled");
+    expect(profile?.clientSettings).toHaveProperty("fallingEffectsEnabled");
+    expect(profile?.clientSettings).toHaveProperty("atmosphereConsoleEnabled");
+    expect(profile?.clientSettings).toHaveProperty("fallingEffectsOverCinemaEnabled");
+    expect(profile?.clientSettings).toHaveProperty("ambianceEnabled");
+    expect(profile?.clientSettings).toHaveProperty("completionAlertSoundEnabled");
+    expect(profile?.clientSettings).toHaveProperty("completionAlertSpeechEnabled");
     expect(profile?.clientSettings).not.toHaveProperty("notificationsEnabled");
-    expect(profile?.clientSettings).not.toHaveProperty("worldClockWeatherEnabled");
-    expect(profile?.clientSettings).not.toHaveProperty("ambientVideoEnabled");
-    expect(profile?.clientSettings).not.toHaveProperty("ambientImageEnabled");
-    expect(profile?.clientSettings).not.toHaveProperty("ambientImageCycleEnabled");
-    expect(profile?.clientSettings).not.toHaveProperty("providerUsageWidgetEnabled");
-    expect(profile?.clientSettings).not.toHaveProperty("providerUsagePollMinutes");
-    expect(profile?.clientSettings).not.toHaveProperty("defaultEditor");
-    expect(profile?.clientSettings).not.toHaveProperty("powerSaveBlockerMode");
+    expect(profile?.clientSettings).toHaveProperty("worldClockWeatherEnabled");
+    expect(profile?.clientSettings).toHaveProperty("ambientVideoEnabled");
+    expect(profile?.clientSettings).toHaveProperty("ambientImageEnabled");
+    expect(profile?.clientSettings).toHaveProperty("ambientImageCycleEnabled");
+    expect(profile?.clientSettings).toHaveProperty("providerUsageWidgetEnabled");
+    expect(profile?.clientSettings).toHaveProperty("providerUsagePollMinutes");
+    expect(profile?.clientSettings).toHaveProperty("defaultEditor");
+    expect(profile?.clientSettings).toHaveProperty("powerSaveBlockerMode");
     expect(profile?.clientSettings).not.toHaveProperty("autoNudgeMode");
     expect(profile?.clientSettings).not.toHaveProperty("autoNudgeBackgroundContinuation");
     expect(profile?.clientSettings).not.toHaveProperty("idleThreadGuardEnabled");
     expect(profile?.clientSettings).not.toHaveProperty("cameraCaptureGranted");
     expect(profile?.clientSettings).not.toHaveProperty("modelPacingReservePercent");
-    expect(profile?.clientSettings).not.toHaveProperty("providerModelPreferences");
+    expect(profile?.clientSettings).toHaveProperty("providerModelPreferences");
     expect(profile?.clientSettings).not.toHaveProperty("serverPassword");
     expect(profile?.clientSettings).not.toHaveProperty("futureCompatiblePreference");
   });
@@ -548,15 +553,15 @@ describe("settings profile library", () => {
     const restored = createSettingsProfileLibraryStore(storage);
     const persisted = JSON.parse(storage.read(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY) ?? "{}");
 
-    expect(restored.resolve("profile:mobile")?.clientSettings).toEqual({
+    expect(restored.resolve("profile:mobile")?.clientSettings).toMatchObject({
       timestampFormat: "24-hour",
+      fallingEffectsEnabled: true,
+      completionAlertSpeechEnabled: true,
       ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
     });
-    expect(persisted.version).toBe(SETTINGS_PROFILE_LIBRARY_VERSION);
-    expect(persisted.profiles[0].clientSettings).toEqual({
-      timestampFormat: "24-hour",
-      ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
-    });
+    expect(restored.resolve("profile:mobile")?.clientSettings).not.toHaveProperty("autoNudgeMode");
+    expect(persisted.version).toBe(1);
+    expect(storage.setItem).not.toHaveBeenCalled();
   });
 
   it("migrates the immediately previous document version through the current scrub boundary", () => {
@@ -585,16 +590,16 @@ describe("settings profile library", () => {
     const restored = createSettingsProfileLibraryStore(storage);
     const persisted = JSON.parse(storage.read(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY) ?? "{}");
 
-    expect(restored.resolve("profile:desktop")?.clientSettings).toEqual({
+    expect(restored.resolve("profile:desktop")?.clientSettings).toMatchObject({
       chatCopyFormat: "markdown",
+      confirmThreadDelete: false,
+      fallingEffectLiveWorkVocabulary: true,
     });
-    expect(persisted).toMatchObject({
-      version: SETTINGS_PROFILE_LIBRARY_VERSION,
-      profiles: [{ clientSettings: { chatCopyFormat: "markdown" } }],
-    });
+    expect(persisted.version).toBe(SETTINGS_PROFILE_LIBRARY_VERSION - 1);
+    expect(storage.setItem).not.toHaveBeenCalled();
   });
 
-  it("retains safe media configuration while scrubbing activation from a current document", () => {
+  it("retains feature switches but rejects malformed assets and secrets in the usable snapshot", () => {
     const storage = createStorage({
       [SETTINGS_PROFILE_LIBRARY_STORAGE_KEY]: JSON.stringify({
         version: SETTINGS_PROFILE_LIBRARY_VERSION,
@@ -622,14 +627,16 @@ describe("settings profile library", () => {
 
     expect(restored.resolve("profile:desktop")?.clientSettings).toEqual({
       chatCopyFormat: "plainText",
+      ambientImageEnabled: true,
     });
-    expect(persisted.profiles[0].clientSettings).toEqual({
-      chatCopyFormat: "plainText",
-    });
-    expect(persisted.profiles[0].clientSettings).not.toHaveProperty("ambientImageEnabled");
-    expect(persisted.profiles[0].clientSettings).not.toHaveProperty("ambientVideoSource");
-    expect(persisted.profiles[0].clientSettings).not.toHaveProperty("ambientImageAsset");
-    expect(persisted.profiles[0].clientSettings).not.toHaveProperty("serverPassword");
+    expect(storage.setItem).not.toHaveBeenCalled();
+    expect(persisted.profiles[0].clientSettings.serverPassword).toBe("do-not-retain");
+    restored.activate("profile:desktop");
+    const written = JSON.parse(storage.read(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY)!);
+    expect(written.profiles[0].clientSettings).not.toHaveProperty("serverPassword");
+    expect(storage.read(`${SETTINGS_PROFILE_LIBRARY_STORAGE_KEY}:previous`)).toContain(
+      "do-not-retain",
+    );
   });
 
   it("exposes immutable profile boundaries so callers cannot inject authority fields", () => {

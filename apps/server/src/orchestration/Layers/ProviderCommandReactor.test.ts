@@ -1752,53 +1752,138 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.runtimeMode).toBe("approval-required");
   });
 
-  it("prepends the configured system prompt to the first provider turn only", async () => {
-    const harness = await createHarness();
-    const now = "2026-01-01T00:00:00.000Z";
-    const attachments = [
-      {
-        type: "image" as const,
-        id: "attachment-1",
-        name: "screenshot.png",
-        mimeType: "image/png",
-        sizeBytes: 128,
-      },
-    ] as unknown as ChatAttachment[];
-    fs.mkdirSync(path.dirname(harness.systemPromptPath), { recursive: true });
-    fs.writeFileSync(harness.systemPromptPath, "  Follow the repository rules.  \n", "utf8");
+  it.each(["codex", "claudeAgent", "opencode"])(
+    "forwards custom guidance through the correct channel for %s",
+    async (provider) => {
+      const harness = await createHarness({
+        threadModelSelection: {
+          instanceId: ProviderInstanceId.make(provider),
+          model: "test-model",
+        },
+      });
+      const now = "2026-01-01T00:00:00.000Z";
+      const attachments = [
+        {
+          type: "image" as const,
+          id: "attachment-1",
+          name: "screenshot.png",
+          mimeType: "image/png",
+          sizeBytes: 128,
+        },
+      ] as unknown as ChatAttachment[];
+      fs.mkdirSync(path.dirname(harness.systemPromptPath), { recursive: true });
+      fs.writeFileSync(harness.systemPromptPath, "  Follow the repository rules.  \n", "utf8");
 
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-system-prompt"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-system-prompt"),
+            role: "user",
+            text: "implement the feature",
+            attachments,
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: now,
+        }),
+      );
+
+      await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+      expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+        threadId: ThreadId.make("thread-1"),
+        input:
+          provider === "opencode"
+            ? "System prompt:\nFollow the repository rules.\n\nUser request:\nimplement the feature"
+            : "implement the feature",
+        attachments,
+      });
+
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      expect(
+        thread?.messages.find((message) => message.id === "user-message-system-prompt"),
+      ).toEqual(
+        expect.objectContaining({
+          role: "user",
+          text: "implement the feature",
+        }),
+      );
+    },
+  );
+
+  it("preserves recovery context alongside custom guidance for a first user turn on a fallback provider", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.make("thread-1");
+    const now = "2026-01-01T00:00:00.000Z";
+    fs.mkdirSync(path.dirname(harness.systemPromptPath), { recursive: true });
+    fs.writeFileSync(harness.systemPromptPath, "Follow the repository rules.", "utf8");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.assistant.delta",
+        commandId: CommandId.make("cmd-recovery-context-delta"),
+        threadId,
+        messageId: asMessageId("assistant-recovery-context"),
+        turnId: asTurnId("prior-turn"),
+        delta: "The previous session inspected the workspace.",
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.assistant.complete",
+        commandId: CommandId.make("cmd-recovery-context-complete"),
+        threadId,
+        messageId: asMessageId("assistant-recovery-context"),
+        turnId: asTurnId("prior-turn"),
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-recovery-context-session"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-system-prompt"),
-        threadId: ThreadId.make("thread-1"),
+        commandId: CommandId.make("cmd-recovery-context-start"),
+        threadId,
         message: {
-          messageId: asMessageId("user-message-system-prompt"),
+          messageId: asMessageId("user-recovery-context"),
           role: "user",
-          text: "implement the feature",
-          attachments,
+          text: "continue the work",
+          attachments: [],
         },
+        modelSelection: { instanceId: ProviderInstanceId.make("opencode"), model: "test-model" },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
       }),
     );
-
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
-      threadId: ThreadId.make("thread-1"),
-      input: "System prompt:\nFollow the repository rules.\n\nUser request:\nimplement the feature",
-      attachments,
-    });
-
-    const readModel = await harness.readModel();
-    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-    expect(thread?.messages.find((message) => message.id === "user-message-system-prompt")).toEqual(
-      expect.objectContaining({
-        role: "user",
-        text: "implement the feature",
-      }),
-    );
+    const sent = harness.sendTurn.mock.calls[0]?.[0];
+    const sentInput =
+      typeof sent === "object" && sent !== null && "input" in sent ? sent.input : undefined;
+    expect(sentInput).toContain("System prompt:\nFollow the repository rules.\n\nUser request:\n");
+    expect(sentInput).toContain("You are taking over an existing Club Code chat");
+    expect(sentInput).toContain("Assistant:\nThe previous session inspected the workspace.");
+    expect(sentInput).toContain("Current user request:\ncontinue the work");
   });
 
   it("does not prepend a blank system prompt or apply the prompt to later provider turns", async () => {
@@ -2439,6 +2524,78 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.sendTurn.mock.calls.length === 2);
     expect(harness.startSession.mock.calls.length).toBe(1);
     expect(harness.stopSession.mock.calls.length).toBe(0);
+  });
+
+  it("resumes idle Codex sessions when context changes and clears it for unknown models", async () => {
+    const harness = await createHarness();
+    const selections = [
+      { model: "gpt-6-astra", options: [{ id: "contextWindow", value: "200k" }] },
+      { model: "gpt-6-astra", options: [{ id: "contextWindow", value: "872k" }] },
+      { model: "custom-local", options: [] },
+    ];
+    for (const [index, selected] of selections.entries()) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("context-" + index),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("context-user-" + index),
+            role: "user",
+            text: "Review the task.",
+            attachments: [],
+          },
+          modelSelection: { instanceId: ProviderInstanceId.make("codex"), ...selected },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === index + 1);
+      await harness.markThreadReady();
+    }
+    expect(harness.startSession).toHaveBeenCalledTimes(3);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      resumeCursor: { opaque: "resume-1" },
+      modelSelection: { options: [{ id: "contextWindow", value: "872k" }] },
+    });
+    expect(harness.startSession.mock.calls[2]?.[1]).toMatchObject({
+      resumeCursor: { opaque: "resume-1" },
+      modelSelection: { model: "custom-local" },
+    });
+  });
+
+  it("reconnects an idle legacy Codex session whose worker capacity was never recorded", async () => {
+    const harness = await createHarness();
+    for (const step of [1, 2]) {
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make(`legacy-worker-${step}`),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId(`legacy-worker-user-${step}`),
+            role: "user",
+            text: "Review the task.",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }),
+      );
+      await waitFor(() => harness.sendTurn.mock.calls.length === step);
+      if (step === 1) {
+        await harness.markThreadReady();
+        const { codexSubagentThreadLimit: _oldLimit, ...legacy } = harness.runtimeSessions[0]!;
+        harness.runtimeSessions[0] = legacy;
+      }
+    }
+    expect(harness.startSession).toHaveBeenCalledTimes(2);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      codexSubagentThreadLimit: 16,
+      resumeCursor: { opaque: "resume-1" },
+    });
   });
 
   it("restarts an existing Codex thread on a compatible requested instance", async () => {

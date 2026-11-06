@@ -4,9 +4,84 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 
-import { autoUpdater } from "electron-updater";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import {
+  AppImageUpdater,
+  DebUpdater,
+  MacUpdater,
+  NsisUpdater,
+  PacmanUpdater,
+  RpmUpdater,
+} from "electron-updater";
+import { ElectronAppAdapter } from "electron-updater/out/ElectronAppAdapter.js";
 
-type AutoUpdater = typeof autoUpdater;
+type AutoUpdater =
+  | NsisUpdater
+  | MacUpdater
+  | AppImageUpdater
+  | DebUpdater
+  | RpmUpdater
+  | PacmanUpdater;
+
+class ReleaseAppAdapter extends ElectronAppAdapter {
+  override get baseCachePath(): string {
+    const root = process.env.CAFE_CODE_RELEASE_ROOT;
+    if (!root || !path.isAbsolute(root))
+      throw new Error("Club Code release storage is not initialized.");
+    return path.join(root, ".club-runtime", "cache", "updates");
+  }
+}
+
+// Keep the normal constructor: passing an adapter disables Electron's HTTP executor.
+class ReleaseNsisUpdater extends NsisUpdater {
+  protected override readonly app = new ReleaseAppAdapter();
+}
+class ReleaseMacUpdater extends MacUpdater {
+  protected override readonly app = new ReleaseAppAdapter();
+}
+class ReleaseAppImageUpdater extends AppImageUpdater {
+  protected override readonly app = new ReleaseAppAdapter();
+}
+class ReleaseDebUpdater extends DebUpdater {
+  protected override readonly app = new ReleaseAppAdapter();
+}
+class ReleaseRpmUpdater extends RpmUpdater {
+  protected override readonly app = new ReleaseAppAdapter();
+}
+class ReleasePacmanUpdater extends PacmanUpdater {
+  protected override readonly app = new ReleaseAppAdapter();
+}
+
+export function createReleaseUpdater(platform = process.platform, packageType = ""): AutoUpdater {
+  if (platform === "win32") return new ReleaseNsisUpdater();
+  if (platform === "darwin") return new ReleaseMacUpdater();
+  switch (packageType.trim()) {
+    case "deb":
+      return new ReleaseDebUpdater();
+    case "rpm":
+      return new ReleaseRpmUpdater();
+    case "pacman":
+      return new ReleasePacmanUpdater();
+    default:
+      return new ReleaseAppImageUpdater();
+  }
+}
+
+let releaseUpdater: AutoUpdater | undefined;
+function getUpdater(): AutoUpdater {
+  if (releaseUpdater) return releaseUpdater;
+  let packageType = "";
+  if (process.platform !== "win32" && process.platform !== "darwin" && process.resourcesPath) {
+    try {
+      packageType = fs.readFileSync(path.join(process.resourcesPath, "package-type"), "utf8");
+    } catch {
+      /* Use AppImage when the package marker is absent. */
+    }
+  }
+  releaseUpdater = createReleaseUpdater(process.platform, packageType);
+  return releaseUpdater;
+}
 
 export type ElectronUpdaterFeedUrl = Parameters<AutoUpdater["setFeedURL"]>[0];
 
@@ -73,55 +148,55 @@ export class ElectronUpdater extends Context.Service<ElectronUpdater, ElectronUp
 export const layer = Layer.succeed(ElectronUpdater, {
   setFeedURL: (options) =>
     Effect.suspend(() => {
-      autoUpdater.setFeedURL(options);
+      getUpdater().setFeedURL(options);
       return Effect.void;
     }),
   setAutoDownload: (value) =>
     Effect.suspend(() => {
-      autoUpdater.autoDownload = value;
+      getUpdater().autoDownload = value;
       return Effect.void;
     }),
   setAutoInstallOnAppQuit: (value) =>
     Effect.suspend(() => {
-      autoUpdater.autoInstallOnAppQuit = value;
+      getUpdater().autoInstallOnAppQuit = value;
       return Effect.void;
     }),
   setChannel: (channel) =>
     Effect.suspend(() => {
-      autoUpdater.channel = channel;
+      getUpdater().channel = channel;
       return Effect.void;
     }),
   setAllowPrerelease: (value) =>
     Effect.suspend(() => {
-      autoUpdater.allowPrerelease = value;
+      getUpdater().allowPrerelease = value;
       return Effect.void;
     }),
-  allowDowngrade: Effect.sync(() => autoUpdater.allowDowngrade),
+  allowDowngrade: Effect.sync(() => getUpdater().allowDowngrade),
   setAllowDowngrade: (value) =>
     Effect.suspend(() => {
-      autoUpdater.allowDowngrade = value;
+      getUpdater().allowDowngrade = value;
       return Effect.void;
     }),
   setDisableDifferentialDownload: (value) =>
     Effect.suspend(() => {
-      autoUpdater.disableDifferentialDownload = value;
+      getUpdater().disableDifferentialDownload = value;
       return Effect.void;
     }),
   checkForUpdates: Effect.tryPromise({
-    try: () => autoUpdater.checkForUpdates(),
+    try: () => getUpdater().checkForUpdates(),
     catch: (cause) => new ElectronUpdaterCheckForUpdatesError({ cause }),
   }).pipe(Effect.asVoid),
   downloadUpdate: Effect.tryPromise({
-    try: () => autoUpdater.downloadUpdate(),
+    try: () => getUpdater().downloadUpdate(),
     catch: (cause) => new ElectronUpdaterDownloadUpdateError({ cause }),
   }).pipe(Effect.asVoid),
   quitAndInstall: ({ isSilent, isForceRunAfter }) =>
     Effect.try({
-      try: () => autoUpdater.quitAndInstall(isSilent, isForceRunAfter),
+      try: () => getUpdater().quitAndInstall(isSilent, isForceRunAfter),
       catch: (cause) => new ElectronUpdaterQuitAndInstallError({ cause }),
     }),
   on: (eventName, listener) => {
-    const eventTarget = autoUpdater as unknown as {
+    const eventTarget = getUpdater() as unknown as {
       on: (eventName: string, listener: (...args: Array<unknown>) => void) => void;
       removeListener: (eventName: string, listener: (...args: Array<unknown>) => void) => void;
     };

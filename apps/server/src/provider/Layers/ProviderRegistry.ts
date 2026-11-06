@@ -215,6 +215,9 @@ export const mergeProviderSnapshots = (
 export const mergeProviderAccountRateLimitWindow = (
   provider: ServerProvider,
   input: {
+    readonly limitId?: string;
+    readonly limitName?: string;
+    readonly reachedType?: string | null;
     readonly slot: "primary" | "secondary";
     readonly window: ServerProviderAccountRateLimitWindow;
     readonly checkedAt: string;
@@ -222,7 +225,13 @@ export const mergeProviderAccountRateLimitWindow = (
 ): ServerProvider => {
   const previousRateLimits = provider.accountRateLimits;
   const previousByLimitId = previousRateLimits?.rateLimitsByLimitId;
-  const baseSnapshot = previousByLimitId?.claude ?? previousRateLimits?.rateLimits ?? {};
+  const limitId = input.limitId ?? "claude";
+  const baseSnapshot = input.limitId
+    ? (previousByLimitId?.[limitId] ?? {
+        limitId,
+        ...(input.limitName ? { limitName: input.limitName } : {}),
+      })
+    : (previousByLimitId?.claude ?? previousRateLimits?.rateLimits ?? {});
   const eventWindow: ServerProviderAccountRateLimitWindow = {
     ...input.window,
     checkedAt: input.checkedAt,
@@ -234,13 +243,31 @@ export const mergeProviderAccountRateLimitWindow = (
   return {
     ...provider,
     accountRateLimits: {
-      rateLimits: nextSnapshot,
+      rateLimits: input.limitId ? (previousRateLimits?.rateLimits ?? {}) : nextSnapshot,
+      ...(previousRateLimits?.claudeAccount
+        ? {
+            claudeAccount:
+              input.slot === "primary" &&
+              !input.limitId &&
+              previousRateLimits.claudeAccount.plan === "ultra"
+                ? {
+                    ...previousRateLimits.claudeAccount,
+                    verification: "pending" as const,
+                    fiveHourLimit: "applies" as const,
+                    checkedAt: input.checkedAt,
+                  }
+                : previousRateLimits.claudeAccount,
+          }
+        : {}),
       rateLimitsByLimitId: {
         ...previousByLimitId,
         // Claude's polled snapshot uses this canonical key. Update it as
         // well as the legacy top-level snapshot so renderers cannot prefer
         // stale keyed data over the fresh event.
-        claude: nextSnapshot,
+        [limitId]: {
+          ...nextSnapshot,
+          ...(input.reachedType !== undefined ? { rateLimitReachedType: input.reachedType } : {}),
+        },
       },
       ...(previousRateLimits?.rateLimitResetCredits !== undefined
         ? { rateLimitResetCredits: previousRateLimits.rateLimitResetCredits }
@@ -516,6 +543,9 @@ export const ProviderRegistryLive = Layer.effect(
     const updateProviderAccountRateLimits = Effect.fn("updateProviderAccountRateLimits")(
       function* (input: {
         readonly instanceId: ProviderInstanceId;
+        readonly limitId?: string;
+        readonly limitName?: string;
+        readonly reachedType?: string | null;
         readonly slot: "primary" | "secondary";
         readonly window: ServerProviderAccountRateLimitWindow;
         readonly checkedAt: string;

@@ -1,4 +1,5 @@
 import { ClientSettingsSchema, type ClientSettings } from "@cafecode/contracts";
+import { recoverClientSettings } from "@cafecode/shared/clientSettings";
 import { fromLenientJson } from "@cafecode/shared/schemaJson";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -63,7 +64,19 @@ const readClientSettings = (
         onSome: (raw) =>
           decodeClientSettingsJson(raw).pipe(
             Effect.map((settings) => Option.some(settings)),
-            Effect.catch(() => Effect.succeed(Option.none<ClientSettings>())),
+            Effect.catch(() =>
+              Effect.sync(() => {
+                try {
+                  const parsed = JSON.parse(raw);
+                  const document = parsed.settings ?? parsed;
+                  if (typeof document !== "object" || document === null || Array.isArray(document))
+                    return Option.none<ClientSettings>();
+                  return Option.some(recoverClientSettings(document).settings);
+                } catch {
+                  return Option.none<ClientSettings>();
+                }
+              }),
+            ),
           ),
       }),
     ),

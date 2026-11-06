@@ -763,6 +763,67 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
         }),
       );
 
+      it.effect("labels the Codex 0.163 Pro Max plan as Pro Max", () =>
+        Effect.gen(function* () {
+          const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+            Effect.succeed(
+              makeCodexProbeSnapshot({
+                account: {
+                  account: {
+                    type: "chatgpt",
+                    email: "promax@example.com",
+                    planType: "promax",
+                  },
+                  requiresOpenaiAuth: false,
+                },
+              }),
+            ),
+          );
+
+          assert.strictEqual(status.auth.status, "authenticated");
+          assert.strictEqual(status.auth.label, "ChatGPT Pro Max Subscription");
+        }),
+      );
+
+      for (const [planType, label] of [
+        ["sci", "Academic Researchers"],
+        ["sci_plus", "Academic Researchers Plus"],
+      ] as const) {
+        it.effect(`labels the Codex ${planType} research plan`, () =>
+          Effect.gen(function* () {
+            const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+              Effect.succeed(
+                makeCodexProbeSnapshot({
+                  account: {
+                    account: { type: "chatgpt", email: "researcher@example.com", planType },
+                    requiresOpenaiAuth: false,
+                  },
+                }),
+              ),
+            );
+            assert.strictEqual(status.auth.label, label);
+            assert.strictEqual(status.auth.status, "authenticated");
+          }),
+        );
+      }
+
+      it.effect("recognizes the native Google Cloud Vertex AI account", () =>
+        Effect.gen(function* () {
+          const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+            Effect.succeed(
+              makeCodexProbeSnapshot({
+                account: {
+                  account: { type: "gcp" },
+                  requiresOpenaiAuth: false,
+                },
+              }),
+            ),
+          );
+          assert.strictEqual(status.auth.label, "Google Cloud Vertex AI");
+          assert.strictEqual(status.auth.status, "authenticated");
+        }),
+      );
+
       it.effect("labels the Codex 0.147 Enterprise automation plan as Enterprise", () =>
         Effect.gen(function* () {
           const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
@@ -2422,6 +2483,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
             status.models.map((model) => model.slug),
             [
               "gpt-6-astra",
+              "gpt-6.1-sol",
+              "gpt-6-sol",
+              "gpt-6-luna",
               "gpt-5.6-sol",
               "gpt-5.6-terra",
               "gpt-5.6-luna",
@@ -2843,7 +2907,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
             version: "2.1.110",
             slugs: [] as Array<string>,
             upgrade:
-              "Claude Code v2.1.110 is too old for Claude Opus 5. Upgrade to v2.1.219 or newer to access it.",
+              "Claude Code v2.1.110 is too old for Claude Opus 5.5. Upgrade to v2.1.280 or newer to access it.",
           },
           { version: "2.1.111", slugs: ["claude-opus-4-7"] },
           { version: "2.1.154", slugs: ["claude-opus-4-7", "claude-opus-4-8"] },
@@ -2856,7 +2920,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
             version: "2.1.218",
             slugs: ["claude-opus-4-7", "claude-opus-4-8", "claude-fable-5", "claude-sonnet-5"],
             upgrade:
-              "Claude Code v2.1.218 is too old for Claude Opus 5. Upgrade to v2.1.219 or newer to access it.",
+              "Claude Code v2.1.218 is too old for Claude Opus 5.5. Upgrade to v2.1.280 or newer to access it.",
           },
           {
             version: "2.1.219",
@@ -2868,8 +2932,62 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
               "claude-sonnet-5",
             ],
           },
+          {
+            version: "2.1.257",
+            slugs: [
+              "claude-fable-5-1",
+              "claude-opus-5",
+              "claude-opus-4-7",
+              "claude-opus-4-8",
+              "claude-fable-5",
+              "claude-sonnet-5",
+            ],
+          },
+          {
+            version: "2.1.280",
+            slugs: [
+              "claude-opus-5-5",
+              "claude-fable-5-1",
+              "claude-opus-5",
+              "claude-opus-4-7",
+              "claude-opus-4-8",
+              "claude-fable-5",
+              "claude-sonnet-5",
+            ],
+          },
+          {
+            version: "2.1.284",
+            slugs: [
+              "claude-opus-5-5",
+              "claude-fable-5-1",
+              "claude-sonnet-5-5",
+              "claude-opus-5",
+              "claude-opus-4-7",
+              "claude-opus-4-8",
+              "claude-fable-5",
+              "claude-sonnet-5",
+            ],
+          },
+          {
+            version: "2.1.303",
+            slugs: [
+              "claude-opus-5-5",
+              "claude-fable-5-1",
+              "claude-sonnet-5-5",
+              "claude-haiku-5-5",
+              "claude-opus-5",
+              "claude-opus-4-7",
+              "claude-opus-4-8",
+              "claude-fable-5",
+              "claude-sonnet-5",
+            ],
+          },
         ];
         const gatedSlugs = [
+          "claude-opus-5-5",
+          "claude-fable-5-1",
+          "claude-sonnet-5-5",
+          "claude-haiku-5-5",
           "claude-opus-5",
           "claude-opus-4-7",
           "claude-opus-4-8",
@@ -2962,8 +3080,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           opus5Context?.type === "select"
             ? opus5Context.options.map((option) => option.id)
             : undefined,
-          ["1m"],
+          ["200k", "1m"],
         );
+        assert.equal(opus5Context?.currentValue, "200k");
         assert.equal(
           opus5Descriptors.some(
             (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",

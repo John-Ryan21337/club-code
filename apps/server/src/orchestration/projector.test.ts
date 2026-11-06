@@ -132,9 +132,35 @@ describe("orchestration projector", () => {
         }),
       ),
     );
-    const running = await Effect.runPromise(
+    const starting = await Effect.runPromise(
       projectEvent(
         created,
+        makeEvent({
+          sequence: 2,
+          type: "thread.session-set",
+          aggregateKind: "thread",
+          aggregateId: "thread-live-continuation",
+          occurredAt: "2026-07-14T00:00:01.500Z",
+          commandId: "cmd-starting-before-ack",
+          payload: {
+            threadId: "thread-live-continuation",
+            session: {
+              threadId: "thread-live-continuation",
+              status: "starting",
+              providerName: "codex",
+              providerInstanceId: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: "2026-07-14T00:00:01.500Z",
+            },
+          },
+        }),
+      ),
+    );
+    const running = await Effect.runPromise(
+      projectEvent(
+        starting,
         makeEvent({
           sequence: 2,
           type: "thread.session-set",
@@ -188,6 +214,33 @@ describe("orchestration projector", () => {
       state: "running",
       completedAt: null,
     });
+
+    for (const status of ["ready", "error", "interrupted", "stopped"] as const) {
+      const replayed = await Effect.runPromise(
+        projectEvent(
+          withMissingDiff,
+          makeEvent({
+            sequence: 4,
+            type: "thread.session-set",
+            aggregateKind: "thread",
+            aggregateId: "thread-live-continuation",
+            occurredAt: "2026-07-14T00:00:01.250Z",
+            commandId: `cmd-old-${status}`,
+            payload: {
+              threadId: "thread-live-continuation",
+              session: {
+                ...withMissingDiff.threads[0]!.session!,
+                status,
+                activeTurnId: null,
+                updatedAt: "2026-07-14T00:00:01.250Z",
+              },
+            },
+          }),
+        ),
+      );
+      expect(replayed.threads[0]?.session).toEqual(withMissingDiff.threads[0]?.session);
+      expect(replayed.threads[0]?.latestTurn).toEqual(withMissingDiff.threads[0]?.latestTurn);
+    }
 
     const completed = await Effect.runPromise(
       projectEvent(

@@ -6040,6 +6040,83 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("preserves created bootstrap resources when queued turn start is interrupted", () =>
+    Effect.gen(function* () {
+      const dispatchedCommands: Array<OrchestrationCommand> = [];
+      const createWorktree = vi.fn(() =>
+        Effect.succeed({
+          worktree: { refName: "bootstrap-interrupted", path: "/tmp/bootstrap-interrupted" },
+        }),
+      );
+      const removeWorktree = vi.fn(() => Effect.void);
+      yield* buildAppUnderTest({
+        layers: {
+          gitVcsDriver: { createWorktree, removeWorktree },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.gen(function* () {
+                // The engine owns a queued command even if its caller stops
+                // waiting for the receipt. Reproduce that interruption here.
+                dispatchedCommands.push(command);
+                if (command.type === "thread.turn.start") yield* Effect.interrupt;
+                return { sequence: dispatchedCommands.length };
+              }),
+            readEvents: () => Stream.empty,
+          },
+        },
+      });
+
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-bootstrap-interrupted"),
+            threadId: ThreadId.make("thread-bootstrap-interrupted"),
+            message: {
+              messageId: MessageId.make("msg-bootstrap-interrupted"),
+              role: "user",
+              text: "hello",
+              attachments: [],
+            },
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            bootstrap: {
+              createThread: {
+                projectId: defaultProjectId,
+                title: "Bootstrap Thread",
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: "main",
+                worktreePath: null,
+                createdAt,
+              },
+              prepareWorktree: {
+                projectCwd: "/tmp/project",
+                baseBranch: "main",
+                branch: "bootstrap-interrupted",
+              },
+              runSetupScript: false,
+            },
+            createdAt,
+          }),
+        ).pipe(Effect.result),
+      );
+
+      assertTrue(result._tag === "Failure");
+      assertTrue(result.failure._tag === "OrchestrationDispatchCommandError");
+      assert.equal(createWorktree.mock.calls.length, 1);
+      assert.equal(removeWorktree.mock.calls.length, 0);
+      assert.deepEqual(
+        dispatchedCommands.map((command) => command.type),
+        ["thread.create", "thread.meta.update", "thread.turn.start"],
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("cleans up created bootstrap threads when worktree creation defects", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];

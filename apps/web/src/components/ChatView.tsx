@@ -55,6 +55,7 @@ import { readEnvironmentApi } from "../environmentApi";
 import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
 import { buildEphemeralBrowserDispatchPrompt } from "../embeddedBrowserChatHandoff";
+import { buildDeepResearchPrompt } from "../deepResearch";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import {
   collapseExpandedComposerCursor,
@@ -1595,6 +1596,7 @@ interface ComposerSendSnapshot {
   promptText: string;
   draftPromptText: string;
   ephemeralBrowserContext: string;
+  deepResearch: boolean;
   images: ComposerImageAttachment[];
   provider: ProviderDriverKind;
   model: string | null;
@@ -5257,10 +5259,23 @@ export default function ChatView(props: ChatViewProps) {
       promptRef.current,
       sendCtx.ephemeralBrowserContext,
     );
+    const researchPrompt = buildDeepResearchPrompt(
+      browserDispatch.dispatchPrompt,
+      sendCtx.deepResearch,
+      sendCtx.images.length > 0,
+    );
+    if (researchPrompt === null) {
+      setThreadError(
+        activeThreadId,
+        "The message is too long for deep research. Shorten it and try again.",
+      );
+      return null;
+    }
     return {
-      promptText: browserDispatch.dispatchPrompt,
+      promptText: researchPrompt,
       draftPromptText: browserDispatch.persistedDraftPrompt,
       ephemeralBrowserContext: browserDispatch.ephemeralBrowserContext,
+      deepResearch: sendCtx.deepResearch,
       images: [...sendCtx.images],
       provider: sendCtx.selectedProvider,
       model: sendCtx.selectedModel,
@@ -5292,6 +5307,7 @@ export default function ChatView(props: ChatViewProps) {
     clearComposerDraftContent(composerDraftTarget);
     composerRef.current?.resetCursorState();
     composerRef.current?.clearEphemeralBrowserContext();
+    composerRef.current?.setDeepResearch(false);
     for (const previewUrl of previewUrlsToRevoke) {
       revokeBlobPreviewUrl(previewUrl);
     }
@@ -5315,6 +5331,7 @@ export default function ChatView(props: ChatViewProps) {
       detectTrigger: true,
     });
     composerRef.current?.restoreEphemeralBrowserContext(snapshot.ephemeralBrowserContext);
+    composerRef.current?.setDeepResearch(snapshot.deepResearch);
     scheduleComposerFocus();
   };
 
@@ -6001,6 +6018,34 @@ export default function ChatView(props: ChatViewProps) {
     recordFollowUpQueueDebugAttempt,
   ]);
 
+  const sendNativeResearch = async (): Promise<boolean> => {
+    const composer = composerRef.current;
+    const context = composer?.getSendContext();
+    if (!composer || !context?.nativeResearch) return false;
+    if (context.images.length || context.ephemeralBrowserContext) {
+      setThreadError(
+        activeThreadId,
+        "API research accepts a text brief. Remove attachments and browser context, or choose research with the selected agent.",
+      );
+      return true;
+    }
+    const prompt = context.prompt;
+    if (!prompt.trim()) return true;
+    try {
+      await composer.prepareNativeResearch(prompt);
+      if (composerRef.current?.getSendContext().researchScopeKey === context.researchScopeKey) {
+        composerRef.current.setDeepResearch(false);
+        if (promptRef.current === prompt) clearActiveComposerContent({ refocus: false });
+      }
+    } catch (error) {
+      setThreadError(
+        activeThreadId,
+        error instanceof Error ? error.message : "Could not prepare API research.",
+      );
+    }
+    return true;
+  };
+
   const onSend = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
     // A real operator send invalidates any outstanding Auto Nudge
@@ -6012,6 +6057,7 @@ export default function ChatView(props: ChatViewProps) {
       onAdvanceActivePendingUserInput();
       return;
     }
+    if (await sendNativeResearch()) return;
     const snapshot = readComposerSnapshotForDispatch();
     if (!snapshot) return;
     const {
@@ -6140,6 +6186,7 @@ export default function ChatView(props: ChatViewProps) {
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
       composerRef.current?.clearEphemeralBrowserContext();
+      composerRef.current?.setDeepResearch(false);
       scheduleComposerFocus();
       await onSubmitPlanFollowUp({
         text: followUp.text,
@@ -6155,6 +6202,7 @@ export default function ChatView(props: ChatViewProps) {
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
       composerRef.current?.clearEphemeralBrowserContext();
+      composerRef.current?.setDeepResearch(false);
       scheduleComposerFocus();
       return;
     }
@@ -6240,6 +6288,7 @@ export default function ChatView(props: ChatViewProps) {
     clearComposerDraftContent(composerDraftTarget);
     composerRef.current?.resetCursorState();
     composerRef.current?.clearEphemeralBrowserContext();
+    composerRef.current?.setDeepResearch(false);
     scheduleComposerFocus();
 
     let turnStartSucceeded = false;
@@ -6381,6 +6430,7 @@ export default function ChatView(props: ChatViewProps) {
           detectTrigger: true,
         });
         composerRef.current?.restoreEphemeralBrowserContext(snapshot.ephemeralBrowserContext);
+        composerRef.current?.setDeepResearch(snapshot.deepResearch);
         scheduleComposerFocus();
       }
       setThreadError(threadIdForSend, describeSendFailureMessage(err, "Failed to send message."));
@@ -6941,6 +6991,7 @@ export default function ChatView(props: ChatViewProps) {
       onAdvanceActivePendingUserInput();
       return;
     }
+    if (await sendNativeResearch()) return;
     const snapshot = readComposerSnapshotForDispatch();
     if (!snapshot) return;
     const { hasSendableContent } = deriveComposerSendState({

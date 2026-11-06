@@ -36,7 +36,11 @@ export function CodexExperimentalControl({
   const [phase, setPhase] = useState<"off" | "starting" | "live">("off");
   const [muted, setMuted] = useState(false);
   const [error, setError] = useState(false);
-  const [status, setStatus] = useState<CodexExperimentalResult | null>(null);
+  const scopeKey = JSON.stringify([environmentId, threadId, providerInstanceId]);
+  const [statusState, setStatus] = useState<
+    (CodexExperimentalResult & { scopeKey: string }) | null
+  >(null);
+  const status = statusState?.scopeKey === scopeKey ? statusState : null;
   const [transcript, setTranscript] = useState("");
   const resource = useRef<VoiceResource | null>(null);
   const generation = useRef(0);
@@ -64,6 +68,8 @@ export function CodexExperimentalControl({
   const stopRef = useRef(stop);
   stopRef.current = stop;
   useEffect(() => {
+    setStatus(null);
+    setError(false);
     let connection = readEnvironmentConnection(environmentId);
     const unsubscribe = subscribeEnvironmentConnections(() => {
       const next = readEnvironmentConnection(environmentId);
@@ -245,7 +251,7 @@ export function CodexExperimentalControl({
       }
     }
   };
-  const readStatus = async (kind: "memoryStatus" | "verificationStatus") => {
+  const readStatus = async (kind: "memoryStatus" | "memoryRead" | "verificationStatus") => {
     if (!enabled || statusBusy.current) return;
     statusBusy.current = true;
     const version = generation.current;
@@ -260,7 +266,7 @@ export function CodexExperimentalControl({
         version === generation.current &&
         connection === readEnvironmentConnection(environmentId)
       ) {
-        setStatus(result);
+        setStatus({ ...result, scopeKey });
         setError(false);
       }
     } catch {
@@ -342,6 +348,16 @@ export function CodexExperimentalControl({
           variant="outline"
           className="h-auto min-h-8 max-w-full whitespace-normal break-words"
           disabled={!enabled}
+          onClick={() => void readStatus("memoryRead")}
+        >
+          {t("Read thread memory", "スレッドのメモリを確認")}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-auto min-h-8 max-w-full whitespace-normal break-words"
+          disabled={!enabled}
           onClick={() => void readStatus("memoryStatus")}
         >
           {t("Read memory status", "メモリの状態を確認")}
@@ -387,6 +403,30 @@ export function CodexExperimentalControl({
             ? t("Memory is ready.", "メモリは準備完了です。")
             : t("Memory is not ready.", "メモリは準備中です。")}
         </p>
+      )}
+      {status?.kind === "memoryRead" && (
+        <div className="mt-2 text-xs">
+          {status.summary === null ? (
+            <p>
+              {t(
+                "No memory summary is available for this thread.",
+                "このスレッドのメモリ要約はありません。",
+              )}
+            </p>
+          ) : (
+            <textarea
+              readOnly
+              aria-label={t("Thread memory summary", "スレッドのメモリ要約")}
+              value={status.summary}
+              className="min-h-32 w-full rounded border border-border bg-background p-2"
+            />
+          )}
+          {status.truncated && (
+            <p>
+              {t("Memory summary was shortened for display.", "表示用にメモリ要約を短くしました。")}
+            </p>
+          )}
+        </div>
       )}
       {status?.kind === "verificationStatus" && (
         <p className="mt-2 text-xs">

@@ -13,6 +13,10 @@ import * as Schema from "effect/Schema";
 
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import {
+  getSettingsProfileLibrary,
+  setSettingsProfileLibrary,
+} from "../ipc/methods/settingsProfiles.ts";
 import * as DesktopClientSettings from "./DesktopClientSettings.ts";
 
 const clientSettings: ClientSettings = {
@@ -219,6 +223,66 @@ describe("DesktopClientSettings", () => {
         yield* fileSystem.writeFileString(environment.clientSettingsPath, "{not-json");
 
         assert.isTrue(Option.isNone(yield* settings.get));
+      }),
+    ),
+  );
+  it.effect("keeps a disk profile library and recovers the previous valid copy", () =>
+    withClientSettings(
+      Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fs = yield* FileSystem.FileSystem;
+        const first = JSON.stringify({
+          version: 5,
+          activeProfileId: "profile:desktop",
+          profiles: [
+            { name: "Desktop", theme: "dark", clientSettings: { fallingEffectsEnabled: true } },
+          ],
+        });
+        const second = JSON.stringify({
+          version: 5,
+          activeProfileId: "profile:desktop",
+          profiles: [
+            { name: "Desktop", theme: "light", clientSettings: { fallingEffectsEnabled: false } },
+          ],
+        });
+        assert.isNull(yield* getSettingsProfileLibrary.handler(undefined, {}));
+        yield* setSettingsProfileLibrary.handler(first, {});
+        assert.equal(yield* getSettingsProfileLibrary.handler(undefined, {}), first);
+        yield* setSettingsProfileLibrary.handler(second, {});
+        assert.equal(yield* getSettingsProfileLibrary.handler(undefined, {}), second);
+        const file = `${environment.stateDir}/settings-profiles.json`;
+        assert.equal(yield* fs.readFileString(`${file}.previous`), first);
+        yield* fs.writeFileString(file, "{broken");
+        assert.equal(yield* getSettingsProfileLibrary.handler(undefined, {}), first);
+        assert.equal(yield* fs.readFileString(file), "{broken");
+        const invalid = yield* Effect.exit(
+          setSettingsProfileLibrary.handler('{"version":99,"profiles":[]}', {}),
+        );
+        assert.equal(invalid._tag, "Failure");
+      }),
+    ),
+  );
+  it.effect("preserves valid renderer preferences beside an invalid field", () =>
+    withClientSettings(
+      Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fs = yield* FileSystem.FileSystem;
+        const settings = yield* DesktopClientSettings.DesktopClientSettings;
+        yield* fs.makeDirectory(environment.stateDir, { recursive: true });
+        yield* fs.writeFileString(
+          environment.clientSettingsPath,
+          '{"timestampFormat":"24-hour","fallingEffectSpeed":"bad","uiLanguage":"ja"}',
+        );
+        const recovered = yield* settings.get;
+        assert.isTrue(Option.isSome(recovered));
+        if (Option.isSome(recovered)) {
+          assert.equal(recovered.value.timestampFormat, "24-hour");
+          assert.equal(recovered.value.uiLanguage, "ja");
+          assert.equal(
+            recovered.value.fallingEffectSpeed,
+            DEFAULT_CLIENT_SETTINGS.fallingEffectSpeed,
+          );
+        }
       }),
     ),
   );

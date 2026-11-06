@@ -52,6 +52,7 @@ import {
   readPersistedCwd,
   readPersistedModelSelection,
 } from "../../provider/providerRuntimeBindingPayload.ts";
+import { resolveCodexContextWindow } from "../../provider/CodexContextWindow.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import {
@@ -248,6 +249,7 @@ function buildBoundedProviderBootstrapTranscript(input: {
 }
 
 function composeProviderContinuationBootstrapInput(input: {
+  readonly systemPrompt?: string | undefined;
   readonly messages: ReadonlyArray<OrchestrationMessage>;
   readonly currentMessageId: MessageId | undefined;
   readonly currentUserInput: string | undefined;
@@ -262,7 +264,13 @@ function composeProviderContinuationBootstrapInput(input: {
   const suffix = `\n\nCurrent user request:\n${currentUserInput}`;
   const transcriptBudget = Math.min(
     PROVIDER_CONTINUATION_BOOTSTRAP_TRANSCRIPT_MAX_CHARS,
-    PROVIDER_SEND_TURN_MAX_INPUT_CHARS - prefix.length - suffix.length,
+    PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
+      prefix.length -
+      suffix.length -
+      (input.systemPrompt
+        ? (composeSystemPromptProviderInput({ systemPrompt: input.systemPrompt, userMessage: "x" })
+            ?.length ?? 1) - 1
+        : 0),
   );
   const transcript = buildBoundedProviderBootstrapTranscript({
     messages: input.messages,
@@ -502,6 +510,7 @@ const make = Effect.gen(function* () {
     );
 
   const threadModelSelections = new Map<string, ModelSelection>();
+  const codexContextSessionKeys = new Map<string, string>();
 
   const transitionManualFollowUpHandoff = Effect.fnUntraced(function* (input: {
     readonly outcome: "accepted" | "released";
@@ -1334,6 +1343,9 @@ const make = Effect.gen(function* () {
         ),
       );
 
+    const desiredCodexContextKey = JSON.stringify(
+      resolveCodexContextWindow(desiredModelSelection) ?? null,
+    );
     const bindSessionToThread = (session: ProviderSession) =>
       Effect.gen(function* () {
         if (session.providerInstanceId === undefined) {
@@ -1361,6 +1373,8 @@ const make = Effect.gen(function* () {
           },
           createdAt,
         });
+        if (preferredProvider === "codex")
+          codexContextSessionKeys.set(threadId, desiredCodexContextKey);
         yield* syncGoalAfterSessionMaterialization(session);
       });
 
@@ -1387,9 +1401,15 @@ const make = Effect.gen(function* () {
         preferredProvider === "claudeAgent" &&
         requestedModelSelection !== undefined &&
         !Equal.equals(previousModelSelection, requestedModelSelection);
+      // Context is startup configuration. Retain active work and apply changes
+      // only when an idle session can resume with the selected budget.
+      const codexContextWindowChanged =
+        preferredProvider === "codex" &&
+        activeSession.status !== "running" &&
+        !activeSession.activeTurnId &&
+        (codexContextSessionKeys.get(threadId) ?? "null") !== desiredCodexContextKey;
       const codexSubagentThreadLimitChanged =
         preferredProvider === "codex" &&
-        activeSession.codexSubagentThreadLimit !== undefined &&
         activeSession.codexSubagentThreadLimit !== desiredCodexSubagentThreadLimit;
 
       if (
@@ -1400,7 +1420,8 @@ const make = Effect.gen(function* () {
         !providerResumeIdentityChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
-        !codexSubagentThreadLimitChanged
+        !codexSubagentThreadLimitChanged &&
+        !codexContextWindowChanged
       ) {
         return activeSession;
       }
@@ -1435,6 +1456,7 @@ const make = Effect.gen(function* () {
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
         codexSubagentThreadLimitChanged,
+        codexContextWindowChanged,
         previousCodexSubagentThreadLimit: activeSession.codexSubagentThreadLimit,
         desiredCodexSubagentThreadLimit,
         hasResumeCursor: resumeCursor !== undefined,
@@ -1713,23 +1735,30 @@ const make = Effect.gen(function* () {
       input.messageId !== undefined &&
       thread.messages.filter((entry) => entry.role === "user" && entry.id !== input.messageId)
         .length === 0;
-    const systemPrompt = isFirstUserMessageTurn
-      ? yield* readSystemPromptFileForInjection(serverConfig.systemPromptPath)
-      : undefined;
+    // Codex and Claude receive guidance through native session instructions.
+    // Other providers retain the existing first-turn compatibility path.
+    const systemPrompt =
+      isFirstUserMessageTurn &&
+      ensuredSession.provider !== "codex" &&
+      ensuredSession.provider !== "claudeAgent"
+        ? yield* readSystemPromptFileForInjection(serverConfig.systemPromptPath)
+        : undefined;
+    const contextualInput = shouldBootstrapProviderContext
+      ? yield* resolveThread(input.threadId).pipe(
+          Effect.map((latestThread) =>
+            composeProviderContinuationBootstrapInput({
+              systemPrompt,
+              messages: (latestThread ?? thread).messages,
+              currentMessageId: input.messageId,
+              currentUserInput: normalizedInput,
+            }),
+          ),
+        )
+      : normalizedInput;
     const providerInput =
       systemPrompt !== undefined
-        ? composeSystemPromptProviderInput({ systemPrompt, userMessage: normalizedInput })
-        : shouldBootstrapProviderContext
-          ? yield* resolveThread(input.threadId).pipe(
-              Effect.map((latestThread) =>
-                composeProviderContinuationBootstrapInput({
-                  messages: (latestThread ?? thread).messages,
-                  currentMessageId: input.messageId,
-                  currentUserInput: normalizedInput,
-                }),
-              ),
-            )
-          : normalizedInput;
+        ? composeSystemPromptProviderInput({ systemPrompt, userMessage: contextualInput })
+        : contextualInput;
     const normalizedAttachments = input.attachments ?? [];
     const sessionModelSwitch = projectedSessionCanRoute
       ? ("unsupported" as const)

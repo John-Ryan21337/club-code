@@ -36,8 +36,8 @@ describe("parseClaudeAccountUsage", () => {
           ],
           extra_usage: {
             is_enabled: true,
-            monthly_limit: 100,
-            used_credits: 27.5,
+            monthly_limit: 10_000,
+            used_credits: 2_750,
             utilization: 27.5,
             currency: "USD",
           },

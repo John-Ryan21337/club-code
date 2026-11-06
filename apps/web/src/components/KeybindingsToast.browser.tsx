@@ -121,6 +121,7 @@ function createBaseServerConfig(): ServerConfig {
           binaryPath: "",
           runtimeSource: "system",
           ossMode: false,
+          modelProvider: "openai",
           ossBaseUrl: DEFAULT_LM_STUDIO_BASE_URL,
           homePath: "",
           shadowHomePath: "",

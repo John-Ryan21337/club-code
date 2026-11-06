@@ -31,6 +31,7 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@cafecode/shared/DrainableWorker";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { readCodexSafetyBlock } from "../../provider/CodexSafetyBlock.ts";
 import { ProjectionStateRepository } from "../../persistence/Services/ProjectionState.ts";
 import { ProjectionStateRepositoryLive } from "../../persistence/Layers/ProjectionState.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
@@ -52,6 +53,7 @@ import {
   assistantCompletionTextFromRuntimeEvent,
   completedAssistantTextDelta,
   hasRenderableAssistantText,
+  isAuthoritativeCodexAssistantCompletion,
 } from "../providerAssistantCompletionText.ts";
 import { AssistantStreamTextCommitment } from "../providerAssistantStreamCommitment.ts";
 import { classifyMatrixActivityObservation } from "../matrixActivityObservation.ts";
@@ -449,6 +451,29 @@ function runtimeEventToActivities(
       : {};
   })();
   switch (event.type) {
+    case "turn.completed": {
+      const safetyBlock = event.provider === "codex" && readCodexSafetyBlock(event.raw?.payload);
+      if (!safetyBlock) return [];
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "error",
+          kind: "runtime.error",
+          summary: "Provider safety block",
+          payload: {
+            message: "Codex ended this task after a provider safety review.",
+            detail: [
+              "Review the preceding actions. Repeating the prompt does not clear this block.",
+              ...(safetyBlock.explanation ? [`Provider finding:\n${safetyBlock.explanation}`] : []),
+            ].join("\n\n"),
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "request.opened": {
       if (event.payload.requestType === "tool_user_input") {
         return [];
@@ -505,15 +530,26 @@ function runtimeEventToActivities(
     }
 
     case "runtime.error": {
+      const safetyBlock = event.provider === "codex" && readCodexSafetyBlock(event.payload.detail);
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
           tone: "error",
           kind: "runtime.error",
-          summary: "Runtime error",
+          summary: safetyBlock ? "Provider safety block" : "Runtime error",
           payload: {
             message: truncateDetail(event.payload.message),
+            ...(safetyBlock
+              ? {
+                  detail: [
+                    "Codex ended this task after a provider safety review. Review the preceding actions. Repeating the prompt does not clear this block.",
+                    ...(safetyBlock.explanation
+                      ? [`Provider finding:\n${safetyBlock.explanation}`]
+                      : []),
+                  ].join("\n\n"),
+                }
+              : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -523,7 +559,9 @@ function runtimeEventToActivities(
 
     case "runtime.warning": {
       const detail = event.payload.detail;
+      const safetyBlock = event.provider === "codex" && readCodexSafetyBlock(detail);
       const isRetrying =
+        !safetyBlock &&
         detail !== null &&
         typeof detail === "object" &&
         !Array.isArray(detail) &&
@@ -535,10 +573,22 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "runtime.warning",
-          summary: isRetrying ? "Provider transport retrying" : "Runtime warning",
+          summary: safetyBlock
+            ? "Subagent safety block"
+            : isRetrying
+              ? "Provider transport retrying"
+              : "Runtime warning",
           payload: {
             message: truncateDetail(event.payload.message),
-            ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),
+            ...(safetyBlock
+              ? {
+                  detail:
+                    safetyBlock.explanation ??
+                    "Codex ended the subagent task after a provider safety review.",
+                }
+              : event.payload.detail !== undefined
+                ? { detail: event.payload.detail }
+                : {}),
             ...(isRetrying ? { retrying: true } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
@@ -1474,12 +1524,40 @@ const make = Effect.gen(function* () {
         input.messageId,
       );
       const streamObserved = Option.isSome(streamCommitment);
-      const canonicalFinalText = streamObserved
-        ? hasRenderableAssistantText(input.fallbackText) &&
-          streamCommitment.value.matchesPrefixOf(input.fallbackText!)
-          ? input.fallbackText
-          : undefined
-        : input.fallbackText;
+      // Preserve upstream exact-text checks for ambiguous or split items.
+      // An intact, matching native Codex completion can also repair lost deltas.
+      const authoritativeCodexItem = isAuthoritativeCodexAssistantCompletion(
+        input.event,
+        input.messageId,
+      );
+      const canonicalFinalText =
+        streamObserved && !authoritativeCodexItem
+          ? hasRenderableAssistantText(input.fallbackText) &&
+            streamCommitment.value.matchesPrefixOf(input.fallbackText!)
+            ? input.fallbackText
+            : undefined
+          : input.fallbackText;
+      if (
+        streamObserved &&
+        hasRenderableAssistantText(input.fallbackText) &&
+        canonicalFinalText === undefined
+      ) {
+        // A lossy provider mapping (even trimming a final newline) can make an
+        // otherwise authoritative completion fail this exact-text boundary.
+        // Keep the strict commitment check and make the refusal observable
+        // without retaining provider text, digests or conversation identities.
+        // This is completion-only, not per-token work; consuming the commitment
+        // below and canonical-event deduplication bound repeated observations.
+        yield* Effect.logWarning("provider.assistantCompletion/textMismatch", {
+          provider: input.event.provider,
+          reason:
+            input.fallbackText!.length < streamCommitment.value.codeUnitLength
+              ? "completion-shorter-than-stream"
+              : "completion-prefix-mismatch",
+          streamedCodeUnits: streamCommitment.value.codeUnitLength,
+          completionCodeUnits: input.fallbackText!.length,
+        });
+      }
       const text = completedAssistantTextDelta({
         bufferedText,
         fallbackText: input.fallbackText,

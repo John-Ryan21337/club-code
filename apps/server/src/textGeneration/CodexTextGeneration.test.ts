@@ -284,6 +284,7 @@ function withFakeCodexSpawner<A, E, R>(
     requireReasoningEffort?: string;
     forbidReasoningEffort?: boolean;
     ossMode?: boolean;
+    modelProvider?: "openai" | "gcp";
     requireOssMode?: boolean;
     expectedOssBaseUrl?: string;
     stdinMustContain?: string;
@@ -295,6 +296,7 @@ function withFakeCodexSpawner<A, E, R>(
     const config = decodeCodexSettings({
       binaryPath: "fake-codex",
       ...(input.ossMode === undefined ? {} : { ossMode: input.ossMode }),
+      ...(input.modelProvider === undefined ? {} : { modelProvider: input.modelProvider }),
     });
     const spawner = ChildProcessSpawner.make((unknownCommand) =>
       Effect.gen(function* () {
@@ -315,6 +317,9 @@ function withFakeCodexSpawner<A, E, R>(
         );
 
         expect(command.command).toBe("fake-codex");
+        if (input.modelProvider === "gcp" && !input.ossMode) {
+          expect(command.args.slice(0, 3)).toEqual(["-c", 'model_provider="gcp"', "exec"]);
+        }
         if (input.requireOssMode) {
           expect(command.args.slice(0, 4)).toEqual([
             "--oss",
@@ -436,6 +441,23 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
         textGeneration.generateCommitMessage({
           cwd: process.cwd(),
           branch: "feature/local-model",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+        }),
+    ),
+  );
+
+  it.effect("uses the selected Vertex AI provider for Codex text generation", () =>
+    withFakeCodexSpawner(
+      {
+        output: JSON.stringify({ subject: "Generate with Vertex AI", body: "" }),
+        modelProvider: "gcp",
+      },
+      (textGeneration) =>
+        textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/vertex-ai",
           stagedSummary: "M README.md",
           stagedPatch: "diff --git a/README.md b/README.md",
           modelSelection: DEFAULT_TEST_MODEL_SELECTION,

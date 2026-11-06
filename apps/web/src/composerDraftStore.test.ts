@@ -1092,6 +1092,29 @@ describe("composerDraftStore modelSelection", () => {
     );
   });
 
+  it("keeps Codex worker controls on the exact thread when saving Fast defaults", () => {
+    const store = useComposerDraftStore.getState();
+    store.setModelSelection(threadRef, modelSelection(CODEX_DRIVER, "gpt-5.4"));
+    store.setProviderModelOptions(
+      threadRef,
+      CODEX_DRIVER,
+      toSelections({
+        fastMode: true,
+        codexSubagentThreadLimit: "64",
+        codexAutoDelegate: false,
+      }),
+      { persistSticky: true },
+    );
+    expect(
+      draftFor(threadId, TEST_ENVIRONMENT_ID)?.modelSelectionByProvider[CODEX_INSTANCE]?.options,
+    ).toEqual(
+      toSelections({ fastMode: true, codexSubagentThreadLimit: "64", codexAutoDelegate: false }),
+    );
+    expect(
+      useComposerDraftStore.getState().stickyModelSelectionByProvider[CODEX_INSTANCE]?.options,
+    ).toEqual(toSelections({ fastMode: true }));
+  });
+
   it("updates only the draft when sticky persistence is disabled", () => {
     const store = useComposerDraftStore.getState();
 

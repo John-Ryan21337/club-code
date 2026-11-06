@@ -461,21 +461,25 @@ describe("OrchestrationSubscriptionHub", () => {
           );
           yield* Fiber.join(initialPull);
 
+          const sessionEvent = (sequence: number): OrchestrationEvent => ({
+            ...makeEvent({ sequence, aggregateKind: "thread", aggregateId: "thread-1" }),
+            type: "thread.session-set",
+            payload: {
+              threadId: ThreadId.make("thread-1"),
+              session: {
+                threadId: ThreadId.make("thread-1"),
+                status: "running",
+                providerName: "claudeAgent",
+                runtimeMode: "full-access",
+                activeTurnId: null,
+                lastError: null,
+                updatedAt: "2026-07-16T00:00:00.000Z",
+              },
+            },
+          });
           for (const event of [
-            makeMessageEvent({
-              sequence: 2,
-              threadId: "thread-1",
-              messageId: "stream",
-              text: "a",
-              streaming: true,
-            }),
-            makeMessageEvent({
-              sequence: 3,
-              threadId: "thread-1",
-              messageId: "stream",
-              text: "latest-before-barrier",
-              streaming: true,
-            }),
+            sessionEvent(2),
+            sessionEvent(3),
             makeMessageEvent({
               sequence: 4,
               threadId: "thread-1",
@@ -483,20 +487,8 @@ describe("OrchestrationSubscriptionHub", () => {
               text: "protected",
               streaming: false,
             }),
-            makeMessageEvent({
-              sequence: 5,
-              threadId: "thread-1",
-              messageId: "stream",
-              text: "after",
-              streaming: true,
-            }),
-            makeMessageEvent({
-              sequence: 6,
-              threadId: "thread-1",
-              messageId: "stream",
-              text: "latest-after-barrier",
-              streaming: true,
-            }),
+            sessionEvent(5),
+            sessionEvent(6),
           ]) {
             yield* PubSub.publish(live, event);
           }
@@ -516,7 +508,7 @@ describe("OrchestrationSubscriptionHub", () => {
     );
   });
 
-  it("disconnects one slow subscriber without preventing ring replay for a healthy one", async () => {
+  it("preserves every text fragment while the subscriber waits between pulls", async () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -533,55 +525,130 @@ describe("OrchestrationSubscriptionHub", () => {
             pollInterval: Duration.hours(1),
           });
           yield* yieldHub;
-          const slowPull = yield* Stream.toPull(
+          const pull = yield* Stream.toPull(
             hub.eventsFrom({
               fromSequenceExclusive: 0,
-              route: { kind: "thread", threadId: ThreadId.make("thread-slow") },
+              route: { kind: "thread", threadId: ThreadId.make("thread-1") },
             }),
           );
-          const initialPull = yield* Effect.forkChild(slowPull);
+          const firstPull = yield* Effect.forkChild(pull);
           yield* Effect.yieldNow;
           yield* PubSub.publish(
             live,
             makeMessageEvent({
               sequence: 1,
-              threadId: "thread-slow",
-              messageId: "message-1",
-              text: "one",
-              streaming: false,
+              threadId: "thread-1",
+              messageId: "stream",
+              text: "The produ",
+              streaming: true,
             }),
           );
-          yield* Fiber.join(initialPull);
+          const first = yield* Fiber.join(firstPull);
 
-          for (let sequence = 2; sequence <= 520; sequence += 1) {
+          // These are append fragments, not successive copies of the message.
+          // A slow RPC client must receive all of them, including whitespace.
+          const fragments = ["ction checks", " ", "the phantom", " detection", ", rule."];
+          for (const [index, text] of fragments.entries()) {
             yield* PubSub.publish(
               live,
               makeMessageEvent({
-                sequence,
-                threadId: "thread-slow",
-                messageId: `message-${sequence}`,
-                text: `message ${sequence}`,
-                streaming: false,
+                sequence: index + 2,
+                threadId: "thread-1",
+                messageId: "stream",
+                text,
+                streaming: true,
               }),
             );
           }
           yield* yieldHub;
 
-          const diagnostics = yield* hub.diagnosticsSnapshot;
-          expect(diagnostics.slowSubscriberCloseCount).toBe(1);
-          expect(diagnostics.activeThreadSubscriptions).toBe(0);
-
-          const healthyReplay = yield* hub
-            .eventsFrom({
-              fromSequenceExclusive: 510,
-              route: { kind: "thread", threadId: ThreadId.make("thread-slow") },
-            })
-            .pipe(Stream.take(10), Stream.runCollect);
-          expect(Array.from(healthyReplay, (event) => event.sequence)).toEqual([
-            511, 512, 513, 514, 515, 516, 517, 518, 519, 520,
-          ]);
+          // Check the loss without waiting forever for discarded queue entries.
+          expect((yield* hub.diagnosticsSnapshot).coalescedEventCount).toBe(0);
+          const delivered = [...first];
+          for (const _fragment of fragments) {
+            delivered.push(...(yield* pull));
+          }
+          expect(delivered.map((event) => event.sequence)).toEqual([1, 2, 3, 4, 5, 6]);
+          expect(
+            delivered
+              .filter((event) => event.type === "thread.message-sent")
+              .map((event) => event.payload.text)
+              .join(""),
+          ).toBe("The production checks the phantom detection, rule.");
         }),
       ),
     );
   });
+
+  it.each([false, true])(
+    "resyncs an overloaded subscriber without losing replay (streaming=%s)",
+    async (streaming) => {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const live = yield* PubSub.unbounded<OrchestrationEvent>();
+            const engine: OrchestrationEngineShape = {
+              readEvents: () => Stream.empty,
+              dispatch: () => Effect.die("unused"),
+              diagnosticsSnapshot: Effect.die("unused"),
+              streamDomainEvents: Stream.fromPubSub(live),
+            };
+            const hub = yield* makeOrchestrationSubscriptionHub({
+              orchestrationEngine: engine,
+              initialCursor: 0,
+              pollInterval: Duration.hours(1),
+            });
+            yield* yieldHub;
+            const slowPull = yield* Stream.toPull(
+              hub.eventsFrom({
+                fromSequenceExclusive: 0,
+                route: { kind: "thread", threadId: ThreadId.make("thread-slow") },
+              }),
+            );
+            const initialPull = yield* Effect.forkChild(slowPull);
+            yield* Effect.yieldNow;
+            yield* PubSub.publish(
+              live,
+              makeMessageEvent({
+                sequence: 1,
+                threadId: "thread-slow",
+                messageId: "message-1",
+                text: "one",
+                streaming,
+              }),
+            );
+            yield* Fiber.join(initialPull);
+
+            for (let sequence = 2; sequence <= 520; sequence += 1) {
+              yield* PubSub.publish(
+                live,
+                makeMessageEvent({
+                  sequence,
+                  threadId: "thread-slow",
+                  messageId: streaming ? "message-1" : `message-${sequence}`,
+                  text: `message ${sequence}`,
+                  streaming,
+                }),
+              );
+            }
+            yield* yieldHub;
+
+            const diagnostics = yield* hub.diagnosticsSnapshot;
+            expect(diagnostics.slowSubscriberCloseCount).toBe(1);
+            expect(diagnostics.activeThreadSubscriptions).toBe(0);
+
+            const healthyReplay = yield* hub
+              .eventsFrom({
+                fromSequenceExclusive: 510,
+                route: { kind: "thread", threadId: ThreadId.make("thread-slow") },
+              })
+              .pipe(Stream.take(10), Stream.runCollect);
+            expect(Array.from(healthyReplay, (event) => event.sequence)).toEqual([
+              511, 512, 513, 514, 515, 516, 517, 518, 519, 520,
+            ]);
+          }),
+        ),
+      );
+    },
+  );
 });

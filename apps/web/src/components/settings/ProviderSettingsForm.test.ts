@@ -20,6 +20,7 @@ describe("ProviderSettingsForm helpers", () => {
       "runtimeSource",
       "binaryPath",
       "ossMode",
+      "modelProvider",
       "ossBaseUrl",
       "homePath",
       "shadowHomePath",

@@ -969,6 +969,7 @@ export const ClientSettingsSchema = Schema.Struct({
   showComposerThreadAutomationControls: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SHOW_COMPOSER_THREAD_AUTOMATION_CONTROLS)),
   ),
+  promptSuggestionsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   brandWordmarkPrefix: TrimmedString.check(
     Schema.isMaxLength(MAX_BRAND_WORDMARK_PREFIX_LENGTH),
   ).pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_BRAND_WORDMARK_PREFIX))),
@@ -1545,6 +1546,9 @@ export type LmStudioBaseUrl = typeof LmStudioBaseUrl.Type;
 export const CodexAutoCompactTokenLimit = Schema.Int.check(Schema.isGreaterThan(0));
 export type CodexAutoCompactTokenLimit = typeof CodexAutoCompactTokenLimit.Type;
 
+export const CodexModelProvider = Schema.Literals(["openai", "gcp"]);
+export type CodexModelProvider = typeof CodexModelProvider.Type;
+
 export const CodexSettings = makeProviderSettingsSchema(
   {
     enabled: Schema.Boolean.pipe(
@@ -1576,6 +1580,22 @@ export const CodexSettings = makeProviderSettingsSchema(
         description:
           "Launch Codex with its LM Studio provider instead of the OpenAI cloud provider.",
         providerSettingsForm: { control: "switch" },
+      }),
+    ),
+    modelProvider: CodexModelProvider.pipe(
+      Schema.withDecodingDefault(Effect.succeed("openai" as const)),
+      Schema.annotateKey({
+        title: "Cloud provider",
+        description:
+          "Google Cloud requires native Codex Vertex AI authentication and project configuration. LM Studio mode takes precedence.",
+        providerSettingsForm: {
+          control: "select",
+          options: [
+            { value: "openai", label: "OpenAI / ChatGPT" },
+            { value: "gcp", label: "Google Cloud Vertex AI" },
+          ],
+          clearWhenEmpty: "omit",
+        },
       }),
     ),
     ossBaseUrl: LmStudioBaseUrl.pipe(
@@ -1647,6 +1667,7 @@ export const CodexSettings = makeProviderSettingsSchema(
       "runtimeSource",
       "binaryPath",
       "ossMode",
+      "modelProvider",
       "ossBaseUrl",
       "homePath",
       "shadowHomePath",
@@ -1867,6 +1888,7 @@ const CodexSettingsPatch = Schema.Struct({
   binaryPath: Schema.optionalKey(TrimmedString),
   runtimeSource: Schema.optionalKey(ProviderCliRuntimeSource),
   ossMode: Schema.optionalKey(Schema.Boolean),
+  modelProvider: Schema.optionalKey(CodexModelProvider),
   ossBaseUrl: Schema.optionalKey(LmStudioBaseUrl),
   homePath: Schema.optionalKey(TrimmedString),
   shadowHomePath: Schema.optionalKey(TrimmedString),
@@ -2018,6 +2040,7 @@ export const ClientSettingsPatch = Schema.Struct({
   showSidebarMascot: Schema.optionalKey(Schema.Boolean),
   showSidebarAttribution: Schema.optionalKey(Schema.Boolean),
   showComposerThreadAutomationControls: Schema.optionalKey(Schema.Boolean),
+  promptSuggestionsEnabled: Schema.optionalKey(Schema.Boolean),
   brandWordmarkPrefix: Schema.optionalKey(
     TrimmedString.check(Schema.isMaxLength(MAX_BRAND_WORDMARK_PREFIX_LENGTH)),
   ),

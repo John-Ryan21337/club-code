@@ -5,6 +5,7 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 const VoiceSessionKey = NonEmptyString.check(Schema.isMaxLength(128));
 export const CodexExperimentalAction = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("memoryStatus") }),
+  Schema.Struct({ kind: Schema.Literal("memoryRead") }),
   Schema.Struct({ kind: Schema.Literal("verificationStatus") }),
   Schema.Struct({
     kind: Schema.Literal("voiceStart"),
@@ -21,6 +22,11 @@ export const CodexExperimentalInput = Schema.Struct({
 });
 export type CodexExperimentalInput = typeof CodexExperimentalInput.Type;
 export const CodexExperimentalResult = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("memoryRead"),
+    summary: Schema.NullOr(Schema.String.check(Schema.isMaxLength(65_536))),
+    truncated: Schema.Boolean,
+  }),
   Schema.Struct({
     kind: Schema.Literal("memoryStatus"),
     consolidatedThreads: Schema.Int,

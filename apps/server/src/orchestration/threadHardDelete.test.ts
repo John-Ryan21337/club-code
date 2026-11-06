@@ -1,4 +1,9 @@
-import { CheckpointRef, ProjectId, ThreadId } from "@cafecode/contracts";
+import {
+  CheckpointRef,
+  ProjectId,
+  ThreadId,
+  type VcsRemoveWorktreeInput,
+} from "@cafecode/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -7,6 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { symlinkSync } from "node:fs";
 
 import {
   CheckpointStore,
@@ -15,11 +21,13 @@ import {
 import { ServerConfig } from "../config.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import { RepositoryIdentityResolver } from "../project/Services/RepositoryIdentityResolver.ts";
+import { GitVcsDriver, type GitVcsDriverShape } from "../vcs/GitVcsDriver.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./Layers/ProjectionSnapshotQuery.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { hardDeleteThreadLocalData } from "./threadHardDelete.ts";
 
 const checkpointDeleteCalls: Array<DeleteCheckpointRefsInput> = [];
+const worktreeRemoveCalls: Array<VcsRemoveWorktreeInput> = [];
 
 const checkpointStoreLayer = Layer.succeed(CheckpointStore, {
   isGitRepository: () => Effect.succeed(true),
@@ -37,9 +45,17 @@ const repositoryIdentityResolverLayer = Layer.succeed(RepositoryIdentityResolver
   resolve: () => Effect.succeed(null),
 });
 
+const gitVcsDriverLayer = Layer.succeed(GitVcsDriver, {
+  removeWorktree: (input: VcsRemoveWorktreeInput) =>
+    Effect.sync(() => {
+      worktreeRemoveCalls.push(input);
+    }),
+} as unknown as GitVcsDriverShape);
+
 const testLayer = OrchestrationProjectionSnapshotQueryLive.pipe(
   Layer.provideMerge(repositoryIdentityResolverLayer),
   Layer.provideMerge(checkpointStoreLayer),
+  Layer.provideMerge(gitVcsDriverLayer),
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "cafe-hard-delete-" })),
   Layer.provideMerge(SqlitePersistenceMemory),
   Layer.provideMerge(NodeServices.layer),
@@ -56,6 +72,7 @@ it.layer(Layer.fresh(testLayer))("hardDeleteThreadLocalData", (it) => {
   it.effect("removes local thread data and preserves unrelated rows", () =>
     Effect.gen(function* () {
       checkpointDeleteCalls.length = 0;
+      worktreeRemoveCalls.length = 0;
 
       const sql = yield* SqlClient.SqlClient;
       const snapshotQuery = yield* ProjectionSnapshotQuery;
@@ -76,8 +93,14 @@ it.layer(Layer.fresh(testLayer))("hardDeleteThreadLocalData", (it) => {
         config.attachmentsDir,
         `${survivorAttachmentId}.png`,
       );
+      const targetWorktreePath = path.join(
+        config.worktreesDir,
+        "project-hard-delete",
+        "target-worktree",
+      );
 
       yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true });
+      yield* fileSystem.makeDirectory(targetWorktreePath, { recursive: true });
       yield* fileSystem.writeFileString(attachmentPath, "delete me");
       yield* fileSystem.writeFileString(survivorAttachmentPath, "keep me");
 
@@ -132,7 +155,7 @@ it.layer(Layer.fresh(testLayer))("hardDeleteThreadLocalData", (it) => {
             'full-access',
             'default',
             NULL,
-            '/tmp/project-hard-delete/worktree',
+            ${targetWorktreePath},
             'turn-hard-delete',
             ${now},
             1,
@@ -564,10 +587,75 @@ it.layer(Layer.fresh(testLayer))("hardDeleteThreadLocalData", (it) => {
 
       assert.deepEqual(checkpointDeleteCalls, [
         {
-          cwd: "/tmp/project-hard-delete/worktree",
+          cwd: targetWorktreePath,
           checkpointRefs: [CheckpointRef.make("checkpoint-hard-delete")],
+        },
+      ]);
+      assert.deepEqual(worktreeRemoveCalls, [
+        {
+          cwd: "/tmp/project-hard-delete",
+          path: targetWorktreePath,
+          force: false,
         },
       ]);
     }),
   );
 });
+
+for (const referenceKind of [
+  "directory alias",
+  "unresolved reference",
+  "separate directory",
+] as const) {
+  it.layer(Layer.fresh(testLayer))(`worktree cleanup: ${referenceKind}`, (it) => {
+    it.effect("removes a managed worktree only after proving remaining references differ", () =>
+      Effect.gen(function* () {
+        worktreeRemoveCalls.length = 0;
+        const sql = yield* SqlClient.SqlClient;
+        const config = yield* ServerConfig;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const target = path.join(config.worktreesDir, "target");
+        const reference = path.join(config.worktreesDir, "reference");
+        yield* fileSystem.makeDirectory(target, { recursive: true });
+        if (referenceKind === "directory alias") {
+          // Junctions exercise Windows aliases without requiring symlink privileges.
+          yield* Effect.sync(() =>
+            symlinkSync(target, reference, process.platform === "win32" ? "junction" : "dir"),
+          );
+        } else if (referenceKind === "separate directory") {
+          yield* fileSystem.makeDirectory(reference, { recursive: true });
+        }
+        yield* sql`
+          INSERT INTO projection_projects
+            (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+          VALUES ('cleanup-project', 'Cleanup', ${config.baseDir}, '[]', '2026-11-05', '2026-11-05')
+        `;
+        for (const [threadId, worktree] of [
+          ["cleanup-target", target],
+          ["cleanup-survivor", reference],
+        ]) {
+          yield* sql`
+            INSERT INTO projection_threads
+              (thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
+               worktree_path, created_at, updated_at)
+            VALUES (${threadId}, 'cleanup-project', 'Cleanup',
+              '{"instanceId":"codex","model":"gpt-5-codex"}', 'full-access', 'default',
+              ${worktree}, '2026-11-05', '2026-11-05')
+          `;
+        }
+
+        yield* hardDeleteThreadLocalData({ threadId: ThreadId.make("cleanup-target") });
+
+        assert.deepEqual(
+          worktreeRemoveCalls,
+          referenceKind === "separate directory"
+            ? [{ cwd: config.baseDir, path: target, force: false }]
+            : [],
+        );
+        const survivors = yield* sql`SELECT thread_id FROM projection_threads`;
+        assert.deepEqual(survivors, [{ thread_id: "cleanup-survivor" }]);
+      }),
+    );
+  });
+}

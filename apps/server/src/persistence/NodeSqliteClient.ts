@@ -4,7 +4,7 @@
  *
  * @module SqliteClient
  */
-import { DatabaseSync, type StatementSync } from "node:sqlite";
+import { backup as backupDatabase, DatabaseSync, type StatementSync } from "node:sqlite";
 
 import * as Cache from "effect/Cache";
 import * as Config from "effect/Config";
@@ -35,6 +35,14 @@ export type TypeId = "~local/sqlite-node/SqliteClient";
 export const SqliteClient = Context.Service<Client.SqlClient>(
   "cafecode/persistence/NodeSqliteClient",
 );
+
+export interface SqliteBackupService {
+  readonly backupTo: (path: string) => Effect.Effect<number, SqlError>;
+}
+
+export class SqliteBackup extends Context.Service<SqliteBackup, SqliteBackupService>()(
+  "cafecode/persistence/NodeSqliteBackup",
+) {}
 
 export interface SqliteClientConfig {
   readonly filename: string;
@@ -88,7 +96,11 @@ function normalizeBusyTimeoutMs(value: number | undefined): number {
 const makeWithDatabase = Effect.fn("makeWithDatabase")(function* (
   options: SqliteClientConfig,
   openDatabase: () => DatabaseSync,
-): Effect.fn.Return<Client.SqlClient, never, Scope.Scope | Reactivity.Reactivity> {
+): Effect.fn.Return<
+  { readonly client: Client.SqlClient; readonly backup: SqliteBackupService },
+  never,
+  Scope.Scope | Reactivity.Reactivity
+> {
   yield* checkNodeSqliteCompat();
 
   const compiler = Statement.makeCompilerSqlite(options.transformQueryNames);
@@ -191,7 +203,7 @@ const makeWithDatabase = Effect.fn("makeWithDatabase")(function* (
           }),
       );
 
-    return identity<Connection>({
+    const connection = identity<Connection>({
       execute(sql, params, rowTransform) {
         return rowTransform ? Effect.map(run(sql, params), rowTransform) : run(sql, params);
       },
@@ -217,10 +229,12 @@ const makeWithDatabase = Effect.fn("makeWithDatabase")(function* (
         return Stream.fromIterableEffect(rows);
       },
     });
+    return { connection, db };
   });
 
   const semaphore = yield* Semaphore.make(1);
-  const connection = yield* makeConnection;
+  const backupSemaphore = yield* Semaphore.make(1);
+  const { connection, db } = yield* makeConnection;
 
   const acquirer = semaphore.withPermits(1)(Effect.succeed(connection));
   const transactionAcquirer = Effect.uninterruptibleMask((restore) => {
@@ -232,7 +246,7 @@ const makeWithDatabase = Effect.fn("makeWithDatabase")(function* (
     );
   });
 
-  return yield* Client.make({
+  const client = yield* Client.make({
     acquirer,
     compiler,
     transactionAcquirer,
@@ -242,11 +256,36 @@ const makeWithDatabase = Effect.fn("makeWithDatabase")(function* (
     ],
     transformRows,
   });
+
+  const backup: SqliteBackupService = {
+    backupTo: (path) =>
+      backupSemaphore.withPermits(1)(
+        Effect.tryPromise({
+          // Use the same DatabaseSync connection as normal writes. Node's
+          // sqlite backup API can incorporate writes from that connection
+          // without restarting the full copy.
+          try: () => backupDatabase(db, path, { rate: 4_096 }),
+          catch: (cause) =>
+            new SqlError({
+              reason: classifySqliteError(cause, {
+                message: "Failed to back up the database",
+                operation: "backup",
+              }),
+            }),
+        }),
+      ),
+  };
+
+  return { client, backup };
 });
 
 const make = (
   options: SqliteClientConfig,
-): Effect.Effect<Client.SqlClient, never, Scope.Scope | Reactivity.Reactivity> =>
+): Effect.Effect<
+  { readonly client: Client.SqlClient; readonly backup: SqliteBackupService },
+  never,
+  Scope.Scope | Reactivity.Reactivity
+> =>
   makeWithDatabase(
     options,
     () =>
@@ -258,7 +297,11 @@ const make = (
 
 const makeMemory = (
   config: SqliteMemoryClientConfig = {},
-): Effect.Effect<Client.SqlClient, never, Scope.Scope | Reactivity.Reactivity> =>
+): Effect.Effect<
+  { readonly client: Client.SqlClient; readonly backup: SqliteBackupService },
+  never,
+  Scope.Scope | Reactivity.Reactivity
+> =>
   makeWithDatabase(
     {
       ...config,
@@ -275,28 +318,39 @@ const makeMemory = (
 
 export const layerConfig = (
   config: Config.Wrap<SqliteClientConfig>,
-): Layer.Layer<Client.SqlClient, Config.ConfigError> =>
+): Layer.Layer<Client.SqlClient | SqliteBackup, Config.ConfigError> =>
   Layer.effectContext(
     Config.unwrap(config)
       .asEffect()
       .pipe(
         Effect.flatMap(make),
-        Effect.map((client) =>
-          Context.make(SqliteClient, client).pipe(Context.add(Client.SqlClient, client)),
+        Effect.map(({ client, backup }) =>
+          Context.make(SqliteClient, client).pipe(
+            Context.add(Client.SqlClient, client),
+            Context.add(SqliteBackup, backup),
+          ),
         ),
       ),
   ).pipe(Layer.provide(Reactivity.layer));
 
-export const layer = (config: SqliteClientConfig): Layer.Layer<Client.SqlClient> =>
+export const layer = (config: SqliteClientConfig): Layer.Layer<Client.SqlClient | SqliteBackup> =>
   Layer.effectContext(
-    Effect.map(make(config), (client) =>
-      Context.make(SqliteClient, client).pipe(Context.add(Client.SqlClient, client)),
+    Effect.map(make(config), ({ client, backup }) =>
+      Context.make(SqliteClient, client).pipe(
+        Context.add(Client.SqlClient, client),
+        Context.add(SqliteBackup, backup),
+      ),
     ),
   ).pipe(Layer.provide(Reactivity.layer));
 
-export const layerMemory = (config: SqliteMemoryClientConfig = {}): Layer.Layer<Client.SqlClient> =>
+export const layerMemory = (
+  config: SqliteMemoryClientConfig = {},
+): Layer.Layer<Client.SqlClient | SqliteBackup> =>
   Layer.effectContext(
-    Effect.map(makeMemory(config), (client) =>
-      Context.make(SqliteClient, client).pipe(Context.add(Client.SqlClient, client)),
+    Effect.map(makeMemory(config), ({ client, backup }) =>
+      Context.make(SqliteClient, client).pipe(
+        Context.add(Client.SqlClient, client),
+        Context.add(SqliteBackup, backup),
+      ),
     ),
   ).pipe(Layer.provide(Reactivity.layer));

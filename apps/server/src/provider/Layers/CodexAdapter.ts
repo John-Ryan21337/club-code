@@ -12,6 +12,8 @@ import * as Crypto from "node:crypto";
 import * as NodeFs from "node:fs";
 
 import {
+  CODEX_AUTO_DELEGATE_OPTION_ID,
+  DEFAULT_MODEL_BY_PROVIDER,
   AsyncUserInputQuestions,
   type CanonicalItemType,
   type CanonicalRequestType,
@@ -55,6 +57,7 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 import {
   getModelSelectionBooleanOptionValue,
   getModelSelectionStringOptionValue,
+  resolveCodexSubagentThreadLimit,
 } from "@cafecode/shared/model";
 import { resolveCodexAutoCompactTokenLimit } from "@cafecode/shared/codexCompaction";
 
@@ -70,9 +73,14 @@ import { type CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { getAgentBrowserBridge } from "../AgentBrowserBridge.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { readSystemPromptFileForInjection } from "../../systemPromptFile.ts";
+import { resolveCodexContextWindow } from "../CodexContextWindow.ts";
+import { withCodexDelegationRequest } from "../CodexDelegation.ts";
+import { codexSafetyBlockMessage, readCodexSafetyBlock } from "../CodexSafetyBlock.ts";
 import {
   CodexResumeCursorSchema,
   CodexSessionRuntimeThreadIdMissingError,
+  isCodexPrivateAccountNotification,
   makeCodexSessionRuntime,
   type CodexSessionRuntimeError,
   type CodexSessionRuntimeOptions,
@@ -113,14 +121,37 @@ function codexServiceTierOverride(
   instanceId: ProviderInstanceId,
 ): Pick<CodexSessionRuntimeOptions, "serviceTier"> {
   if (modelSelection?.instanceId !== instanceId) {
-    return {};
+    return { serviceTier: "default" };
+  }
+  const tier = getModelSelectionStringOptionValue(modelSelection, "serviceTier");
+  if (tier === "default" || tier === "priority" || tier === "ultrafast") {
+    return { serviceTier: tier };
+  }
+  if (modelSelection?.options?.some((option) => option.id === "serviceTier")) {
+    return { serviceTier: "default" };
   }
   const fastMode = getModelSelectionBooleanOptionValue(modelSelection, "fastMode");
   // Codex 0.154.0 uses `priority` for Fast and `default` for an explicit
-  // standard route. Omission preserves the session's existing default. A
+  // standard route. An unset preference explicitly selects standard speed. A
   // backend-advertised `ultrafast` tier is a distinct paid route and is never
   // selected by this boolean.
-  return fastMode === undefined ? {} : { serviceTier: fastMode ? "priority" : "default" };
+  return { serviceTier: fastMode === true ? "priority" : "default" };
+}
+
+function codexEffortOverride(
+  modelSelection: ProviderSendTurnInput["modelSelection"],
+  instanceId: ProviderInstanceId,
+  ossMode: boolean,
+): CodexSessionRuntimeOptions["effort"] {
+  const selection = modelSelection?.instanceId === instanceId ? modelSelection : undefined;
+  const explicit = getModelSelectionStringOptionValue(selection, "reasoningEffort");
+  if (explicit && !/^(?:cli[\s_-]*)?default$/i.test(explicit)) {
+    return explicit as CodexSessionRuntimeOptions["effort"];
+  }
+  // Native/local custom models may not support reasoning effort.
+  return !ossMode && (!selection || /^gpt-[56](?:[.-]|$)/.test(selection.model))
+    ? "high"
+    : undefined;
 }
 
 class CodexTransportPolicyFileError extends Data.TaggedError("CodexTransportPolicyFileError")<{
@@ -165,6 +196,9 @@ function mapCodexRuntimeError(
   method: string,
   error: CodexSessionRuntimeError,
 ): ProviderAdapterError {
+  // Keep the finite mutation-outcome tag intact through ProviderService and
+  // the daemon envelope so checkpoint compensation can fail closed.
+  if (error._tag === "ProviderAdapterRewindOutcomeUnknownError") return error;
   if (
     isCodexAppServerProcessExitedError(error) ||
     isCodexAppServerTransportError(error) ||
@@ -1749,7 +1783,9 @@ function mapToRuntimeEvents(
         type: "turn.completed",
         payload: {
           state: toTurnStatus(payload.turn.status),
-          ...(errorMessage ? { errorMessage } : {}),
+          ...(errorMessage
+            ? { errorMessage: codexSafetyBlockMessage(errorMessage, payload.turn.error) }
+            : {}),
         },
       },
     ];
@@ -2303,16 +2339,31 @@ function mapToRuntimeEvents(
   if (event.method === "error" || event.method === "codex.subagent/error") {
     const payload = readPayload(EffectCodexSchema.V2ErrorNotification, event.payload);
     const message = payload?.error.message ?? event.message ?? "Provider runtime error";
-    const willRetry = payload?.willRetry === true;
+    const safetyBlock = readCodexSafetyBlock(event.payload);
+    const willRetry = payload?.willRetry === true && !safetyBlock;
     const isSubagentError = event.method === "codex.subagent/error";
     return [
       {
         type: willRetry || isSubagentError ? "runtime.warning" : "runtime.error",
         ...runtimeEventBase(event, canonicalThreadId),
         payload: {
-          message,
+          message: codexSafetyBlockMessage(message, event.payload),
           ...(!willRetry && !isSubagentError ? { class: "provider_error" as const } : {}),
-          ...(event.payload !== undefined ? { detail: event.payload } : {}),
+          ...(event.payload !== undefined
+            ? {
+                detail: safetyBlock
+                  ? {
+                      error: {
+                        codexErrorInfo: "misalignmentPolicyViolation",
+                        ...(safetyBlock.explanation
+                          ? { misalignment: { detailedExplanation: safetyBlock.explanation } }
+                          : {}),
+                      },
+                      willRetry: false,
+                    }
+                  : event.payload,
+              }
+            : {}),
         },
       },
     ];
@@ -2544,17 +2595,20 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const transportPolicyPersistenceEnabled =
     isCodexTransportPolicyPersistenceEnabled(adapterEnvironment);
   const responsesWebsocketsAllowed = isCodexResponsesWebsocketsAllowed(adapterEnvironment);
-  const initialTransportPolicy: CodexTransportPolicyEntry | undefined = responsesWebsocketsAllowed
-    ? transportPolicyPersistenceEnabled
-      ? yield* loadCodexTransportPolicy(transportPolicyPath, transportPolicyKey)
-      : undefined
-    : {
-        responsesWebsockets: "disabled",
-        reason: CODEX_HTTPS_ONLY_POLICY_REASON,
-        observedAt: DateTime.formatIso(yield* DateTime.now),
-        source: "cafe.operator-policy",
-      };
-  if (!responsesWebsocketsAllowed) {
+  const initialTransportPolicy: CodexTransportPolicyEntry | undefined =
+    codexConfig.modelProvider === "gcp"
+      ? undefined
+      : responsesWebsocketsAllowed
+        ? transportPolicyPersistenceEnabled
+          ? yield* loadCodexTransportPolicy(transportPolicyPath, transportPolicyKey)
+          : undefined
+        : {
+            responsesWebsockets: "disabled",
+            reason: CODEX_HTTPS_ONLY_POLICY_REASON,
+            observedAt: DateTime.formatIso(yield* DateTime.now),
+            source: "cafe.operator-policy",
+          };
+  if (!responsesWebsocketsAllowed && codexConfig.modelProvider !== "gcp") {
     yield* Effect.logInfo("codex.transportPolicy.httpsOnly", {
       instanceId: boundInstanceId,
       reason: CODEX_HTTPS_ONLY_POLICY_REASON,
@@ -2812,7 +2866,38 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             providerInstanceId: boundInstanceId,
           }),
         );
+        const customInstructions = yield* readSystemPromptFileForInjection(
+          serverConfig.systemPromptPath,
+        ).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.mapError(
+            () =>
+              new ProviderAdapterProcessError({
+                provider: PROVIDER,
+                threadId: input.threadId,
+                detail: "Unable to read custom instructions.",
+              }),
+          ),
+        );
+        const contextModelSelection =
+          input.modelSelection?.instanceId === boundInstanceId
+            ? input.modelSelection
+            : input.modelSelection === undefined && !codexConfig.ossMode
+              ? {
+                  instanceId: boundInstanceId,
+                  model: DEFAULT_MODEL_BY_PROVIDER[PROVIDER] ?? "gpt-6-astra",
+                }
+              : undefined;
+        const modelContextWindow = resolveCodexContextWindow(
+          contextModelSelection,
+          codexConfig.ossMode,
+        );
+        const sessionAutoCompactTokenLimit =
+          modelContextWindow === undefined
+            ? effectiveAutoCompactTokenLimit
+            : Math.min(effectiveAutoCompactTokenLimit, Math.floor(modelContextWindow * 0.9));
         const runtimeInput: CodexSessionRuntimeOptions = {
+          ...(customInstructions !== undefined ? { customInstructions } : {}),
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
           cwd: input.cwd ?? process.cwd(),
@@ -2834,14 +2919,15 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(input.codexSubagentThreadLimit !== undefined
             ? { codexSubagentThreadLimit: input.codexSubagentThreadLimit }
             : {}),
-          autoCompactTokenLimit: effectiveAutoCompactTokenLimit,
+          ...(modelContextWindow !== undefined ? { modelContextWindow } : {}),
+          autoCompactTokenLimit: sessionAutoCompactTokenLimit,
           ultraCaching: codexConfig.ultraCaching,
           ossMode: codexConfig.ossMode,
+          modelProvider: codexConfig.modelProvider,
           agentBrowserMcp,
-          ...(input.modelSelection?.instanceId === boundInstanceId
-            ? { model: input.modelSelection.model }
-            : {}),
+          ...(contextModelSelection !== undefined ? { model: contextModelSelection.model } : {}),
           ...codexServiceTierOverride(input.modelSelection, boundInstanceId),
+          effort: codexEffortOverride(input.modelSelection, boundInstanceId, codexConfig.ossMode),
           ...(currentTransportPolicy !== undefined
             ? { transportPolicy: currentTransportPolicy }
             : {}),
@@ -2868,6 +2954,14 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
         const eventFiber = yield* Stream.runForEach(runtime.events, (event) =>
           Effect.gen(function* () {
+            // Defense in depth for injected runtimes and historical daemon
+            // replay. The current runtime drops gateway login notifications
+            // before emitting a provider event; their authorization URLs and
+            // provider-authored errors must not reach the native log or
+            // canonical mapping here either.
+            if (event.kind === "notification" && isCodexPrivateAccountNotification(event.method)) {
+              return;
+            }
             yield* writeNativeEvent(event).pipe(
               Effect.catchCause((cause) =>
                 Effect.logWarning("codex.runtime.bridge.native-log-write-failed", {
@@ -2880,7 +2974,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             );
 
             const runtimeEvents = yield* Effect.sync(() =>
-              mapToRuntimeEvents(event, event.threadId, effectiveAutoCompactTokenLimit),
+              mapToRuntimeEvents(event, event.threadId, sessionAutoCompactTokenLimit),
             ).pipe(
               Effect.catchCause((cause) =>
                 Effect.logWarning("codex.runtime.bridge.map-failed", {
@@ -3064,21 +3158,29 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     );
 
     const session = yield* requireSession(input.threadId);
-    const reasoningEffort =
+    const reasoningEffort = codexEffortOverride(
+      input.modelSelection,
+      boundInstanceId,
+      codexConfig.ossMode,
+    );
+    const turnInput =
       input.modelSelection?.instanceId === boundInstanceId
-        ? getModelSelectionStringOptionValue(input.modelSelection, "reasoningEffort")
-        : undefined;
+        ? withCodexDelegationRequest(
+            input.input,
+            getModelSelectionBooleanOptionValue(
+              input.modelSelection,
+              CODEX_AUTO_DELEGATE_OPTION_ID,
+            ) !== false,
+            resolveCodexSubagentThreadLimit(input.modelSelection),
+          )
+        : input.input;
     return yield* session.runtime
       .sendTurn({
-        ...(input.input !== undefined ? { input: input.input } : {}),
+        ...(turnInput !== undefined ? { input: turnInput } : {}),
         ...(input.modelSelection?.instanceId === boundInstanceId
           ? { model: input.modelSelection.model }
           : {}),
-        ...(reasoningEffort
-          ? {
-              effort: reasoningEffort as EffectCodexSchema.V2TurnStartParams__ReasoningEffort,
-            }
-          : {}),
+        ...(reasoningEffort ? { effort: reasoningEffort } : {}),
         ...codexServiceTierOverride(input.modelSelection, boundInstanceId),
         ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
         ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
@@ -3260,12 +3362,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     );
 
   const rollbackThread: CodexAdapterShape["rollbackThread"] = (threadId, numTurns) => {
-    if (!Number.isInteger(numTurns) || numTurns < 1) {
+    if (!Number.isSafeInteger(numTurns) || numTurns < 1) {
       return Effect.fail(
         new ProviderAdapterValidationError({
           provider: PROVIDER,
           operation: "rollbackThread",
-          issue: "numTurns must be an integer >= 1.",
+          issue: "numTurns must be a safe integer >= 1.",
         }),
       );
     }
@@ -3275,7 +3377,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       Effect.mapError((cause) =>
         cause._tag === "ProviderAdapterSessionNotFoundError"
           ? cause
-          : mapCodexRuntimeError(threadId, "thread/rollback", cause),
+          : mapCodexRuntimeError(threadId, "thread/revert", cause),
       ),
       Effect.map((snapshot) => ({
         threadId,

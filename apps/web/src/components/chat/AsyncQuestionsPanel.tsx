@@ -1,16 +1,22 @@
 import { AsyncUserInputQuestions, type OrchestrationThreadActivity } from "@cafecode/contracts";
 import * as Schema from "effect/Schema";
+import { Trash2Icon } from "lucide-react";
 import { useState } from "react";
+import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { useUiLocalization } from "../../uiLocalization";
 import { Button } from "../ui/button";
 
 const isQuestions = Schema.is(AsyncUserInputQuestions);
+const dismissedKeysSchema = Schema.Array(Schema.String);
+const emptyDismissedKeys: readonly string[] = [];
 
 export function AsyncQuestionsPanel({
+  scopeKey,
   activities,
   disabled,
   onAddAnswer,
 }: {
+  readonly scopeKey: string;
   readonly activities: readonly OrchestrationThreadActivity[] | undefined;
   readonly disabled: boolean;
   readonly onAddAnswer: (text: string) => boolean;
@@ -19,6 +25,11 @@ export function AsyncQuestionsPanel({
   // State belongs to this thread's mounted panel, never to a provider request.
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [added, setAdded] = useState<ReadonlySet<string>>(() => new Set());
+  const [dismissed, setDismissed] = useLocalStorage(
+    `cafe-code:async-questions-dismissed:${scopeKey}`,
+    emptyDismissedKeys,
+    dismissedKeysSchema,
+  );
   const groups = (activities ?? []).filter(
     (activity) => activity.kind === "user-input.async-requested",
   );
@@ -46,7 +57,8 @@ export function AsyncQuestionsPanel({
       }));
     })
     .filter((question) => {
-      if (added.has(question.key) || seen.has(question.key)) return false;
+      if (added.has(question.key) || dismissed.includes(question.key) || seen.has(question.key))
+        return false;
       seen.add(question.key);
       return true;
     });
@@ -66,7 +78,31 @@ export function AsyncQuestionsPanel({
       <div className="grid max-h-[min(24rem,40vh)] gap-3 overflow-y-auto">
         {questions.map((question) => (
           <fieldset key={question.key} className="min-w-0 space-y-2" disabled={disabled}>
-            <legend className="whitespace-pre-wrap break-words text-sm">{question.title}</legend>
+            <legend className="w-full text-sm">
+              <span className="flex items-start justify-between gap-2">
+                <span className="min-w-0 whitespace-pre-wrap break-words">{question.title}</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label={t("Delete question", "質問を削除") + ": " + question.title}
+                  title={t("Delete question", "質問を削除")}
+                  onClick={() => {
+                    setAdded((current) => new Set([...current, question.key]));
+                    setDismissed((current) =>
+                      [...new Set([...current, question.key])].slice(-1_024),
+                    );
+                    setAnswers((current) => {
+                      const next = { ...current };
+                      delete next[question.key];
+                      return next;
+                    });
+                  }}
+                >
+                  <Trash2Icon aria-hidden="true" />
+                </Button>
+              </span>
+            </legend>
             <div className="flex flex-wrap gap-2">
               {[...new Set(question.options ?? [])].map((option) => (
                 <Button

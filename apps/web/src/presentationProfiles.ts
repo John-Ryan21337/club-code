@@ -6,10 +6,13 @@ import {
   useSettings,
   useUpdateSettings,
 } from "./hooks/useSettings";
+import { useApplySettingsProfile } from "./hooks/useApplySettingsProfile";
 import { useTheme } from "./hooks/useTheme";
 import { createMobileOptimizedPresentationPatch } from "./mobilePresentation";
 import {
   settingsProfileLibraryStore,
+  flushSettingsProfileLibrary,
+  useSettingsProfilesReady,
   type SettingsProfile,
   useSettingsProfileLibrary,
 } from "./settingsProfiles";
@@ -120,7 +123,10 @@ export function presentationProfilePatchMatches(
 
 export function usePresentationProfiles() {
   const library = useSettingsProfileLibrary();
-  const hydrated = useClientSettingsHydrated();
+  const clientHydrated = useClientSettingsHydrated();
+  const profilesReady = useSettingsProfilesReady();
+  const hydrated = clientHydrated && profilesReady;
+  const applyProfile = useApplySettingsProfile();
   const mobileOptimized = useSettings((settings) => settings.mobileOptimizedPresentation);
   const { updateClientSettingsConfirmed } = useUpdateSettings();
   const { theme, setTheme } = useTheme();
@@ -169,7 +175,7 @@ export function usePresentationProfiles() {
           // one confirmed write. Publishing the layout in a separate first
           // write remounted this hook and discarded its lock before the visual
           // payload had committed, allowing the opposite profile to win.
-          await updateClientSettingsConfirmed(patch);
+          await applyProfile(profile, patch);
           if (!presentationProfilePatchMatches(getClientSettings(), patch)) {
             // A second renderer can finish an older profile write just after
             // this renderer's first response. Reassert the explicit click
@@ -181,7 +187,9 @@ export function usePresentationProfiles() {
               );
             }
           }
-          if (!settingsProfileLibraryStore.activate(profile.id)) {
+          if (
+            !(await flushSettingsProfileLibrary(settingsProfileLibraryStore.activate(profile.id)))
+          ) {
             toastManager.add({
               type: "warning",
               title: `${profile.name} loaded for this session`,
@@ -201,7 +209,15 @@ export function usePresentationProfiles() {
         }
       });
     },
-    [desktopProfile, hydrated, mobileProfile, setTheme, theme, updateClientSettingsConfirmed],
+    [
+      desktopProfile,
+      hydrated,
+      mobileProfile,
+      setTheme,
+      theme,
+      updateClientSettingsConfirmed,
+      applyProfile,
+    ],
   );
 
   return {

@@ -30,4 +30,7 @@ squashfs-root/
 .selene/
 dist-electron/
 .electron-runtime/
+.club-runtime/
+.task-tmp/
+/backups/
 .startup-profiles/

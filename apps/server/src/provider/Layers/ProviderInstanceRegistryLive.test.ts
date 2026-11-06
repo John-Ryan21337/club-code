@@ -56,6 +56,7 @@ const makeCodexConfig = (overrides: Partial<CodexSettings>): CodexSettings => ({
   binaryPath: "codex",
   runtimeSource: "system",
   ossMode: false,
+  modelProvider: "openai",
   ossBaseUrl: DEFAULT_LM_STUDIO_BASE_URL,
   homePath: "",
   shadowHomePath: "",

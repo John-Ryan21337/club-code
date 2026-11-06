@@ -1,4 +1,5 @@
 import { withCodexAttachmentOwner } from "./provider/CodexThreadAttachments.ts";
+import { suggestNextPrompt } from "./textGeneration/PromptSuggestions.ts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -426,6 +427,7 @@ const makeWsRpcLayer = (
           const bootstrap = command.bootstrap;
           const { bootstrap: _bootstrap, ...finalTurnStartCommand } = command;
           let createdThread = false;
+          let createdWorktree: { readonly cwd: string; readonly path: string } | null = null;
           let targetProjectId = bootstrap?.createThread?.projectId;
           let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
           let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
@@ -440,6 +442,29 @@ const makeWsRpcLayer = (
                   })
                   .pipe(Effect.ignoreCause({ log: true }))
               : Effect.void;
+
+          const cleanupCreatedResources = () =>
+            Effect.gen(function* () {
+              if (createdWorktree) {
+                const worktree = createdWorktree;
+                yield* gitWorkflow
+                  .removeWorktree({
+                    cwd: worktree.cwd,
+                    path: worktree.path,
+                    force: false,
+                  })
+                  .pipe(
+                    Effect.catch((cause) =>
+                      Effect.logWarning("failed to remove unused bootstrap worktree", {
+                        threadId: command.threadId,
+                        worktreePath: worktree.path,
+                        cause,
+                      }),
+                    ),
+                  );
+              }
+              yield* cleanupCreatedThread();
+            });
 
           const recordSetupScriptLaunchFailure = (input: {
             readonly error: unknown;
@@ -523,6 +548,10 @@ const makeWsRpcLayer = (
                 path: null,
               });
               targetWorktreePath = worktree.worktree.path;
+              createdWorktree = {
+                cwd: bootstrap.prepareWorktree.projectCwd,
+                path: worktree.worktree.path,
+              };
               yield* orchestrationEngine.dispatch({
                 type: "thread.meta.update",
                 commandId: serverCommandId("bootstrap-thread-meta-update"),
@@ -542,9 +571,12 @@ const makeWsRpcLayer = (
             Effect.catchCause((cause) => {
               const dispatchError = toBootstrapDispatchCommandCauseError(cause);
               if (Cause.hasInterruptsOnly(cause)) {
+                // The queued command can still be accepted after its caller is interrupted.
                 return Effect.fail(dispatchError);
               }
-              return cleanupCreatedThread().pipe(Effect.flatMap(() => Effect.fail(dispatchError)));
+              return cleanupCreatedResources().pipe(
+                Effect.flatMap(() => Effect.fail(dispatchError)),
+              );
             }),
           );
         });
@@ -763,6 +795,17 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "atmosphere" },
           ),
+        [WS_METHODS.serverSuggestNextPrompt]: (input) =>
+          suggestNextPrompt({
+            ...input,
+            cwd: config.cwd,
+            textGeneration,
+            enabled: clientSettings.getSettings.pipe(
+              Effect.map((settings) => settings.promptSuggestionsEnabled),
+            ),
+            readShell: () => projectionSnapshotQuery.getThreadShellById(input.threadId),
+            readThread: () => projectionSnapshotQuery.getThreadDetailById(input.threadId),
+          }),
         [WS_METHODS.agentBrowserGrant]: (input) =>
           observeRpcEffect(
             WS_METHODS.agentBrowserGrant,
