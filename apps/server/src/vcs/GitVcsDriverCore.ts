@@ -615,6 +615,30 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
   const { worktreesDir } = yield* ServerConfig;
   const statusUpstreamFetchSemaphore = yield* Semaphore.make(1);
 
+  const isPathInside = (root: string, candidate: string): boolean => {
+    const relative = path.relative(root, candidate);
+    return (
+      relative.length > 0 &&
+      !path.isAbsolute(relative) &&
+      relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`)
+    );
+  };
+  const isPathInsideOrEqual = (root: string, candidate: string): boolean =>
+    path.resolve(root) === path.resolve(candidate) || isPathInside(root, candidate);
+
+  const resolveExistingAncestor = Effect.fn("GitVcsDriver.resolveExistingAncestor")(function* (
+    candidate: string,
+  ) {
+    let current = candidate;
+    while (!(yield* fileSystem.exists(current))) {
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      current = parent;
+    }
+    return yield* fileSystem.realPath(current);
+  });
+
   const executeRaw: GitVcsDriver.GitVcsDriverShape["execute"] = Effect.fnUntraced(
     function* (input) {
       const commandInput = {
@@ -1926,10 +1950,40 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const targetBranch = input.newRefName ?? input.refName;
     const sanitizedBranch = targetBranch.replace(/\//g, "-");
     const repoName = path.basename(input.cwd);
-    const worktreePath = input.path ?? path.join(worktreesDir, repoName, sanitizedBranch);
+    const worktreePath = path.resolve(
+      input.path ?? path.join(worktreesDir, repoName, sanitizedBranch),
+    );
     const args = input.newRefName
       ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
       : ["worktree", "add", worktreePath, input.refName];
+
+    const mapStorageError = (cause: PlatformError.PlatformError) =>
+      createGitCommandError(
+        "GitVcsDriver.createWorktree",
+        input.cwd,
+        args,
+        "Club Code could not validate its managed worktree directory.",
+        cause,
+      );
+    const canonicalRoot = yield* fileSystem
+      .realPath(worktreesDir)
+      .pipe(Effect.mapError(mapStorageError));
+    const canonicalAncestor = yield* resolveExistingAncestor(worktreePath).pipe(
+      Effect.mapError(mapStorageError),
+    );
+    if (
+      !isPathInside(path.resolve(worktreesDir), worktreePath) ||
+      !isPathInsideOrEqual(canonicalRoot, canonicalAncestor)
+    ) {
+      return yield* Effect.fail(
+        createGitCommandError(
+          "GitVcsDriver.createWorktree",
+          input.cwd,
+          args,
+          "Club Code worktrees must stay inside this release folder.",
+        ),
+      );
+    }
 
     yield* executeGit("GitVcsDriver.createWorktree", input.cwd, args, {
       fallbackErrorMessage: "git worktree add failed",

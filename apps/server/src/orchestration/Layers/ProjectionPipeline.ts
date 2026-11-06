@@ -14,6 +14,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { isStaleInactiveSessionSnapshot } from "../sessionSnapshot.ts";
 
 import { toPersistenceSqlError, type ProjectionRepositoryError } from "../../persistence/Errors.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
@@ -1551,7 +1552,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           const existingSession = yield* projectionThreadSessionRepository.getByThreadId({
             threadId: event.payload.threadId,
           });
-          if (Option.isNone(existingSession) || existingSession.value.activeTurnId === null) {
+          if (
+            Option.isNone(existingSession) ||
+            existingSession.value.activeTurnId === null ||
+            isStaleInactiveSessionSnapshot(event.payload.session, existingSession.value)
+          ) {
             return;
           }
           yield* closeStreamingMessagesForTerminalTurn({
@@ -1898,13 +1903,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         threadId: event.payload.threadId,
       });
       if (
-        Option.isSome(existingSession) &&
-        event.payload.session.status === "starting" &&
-        event.payload.session.updatedAt < existingSession.value.updatedAt
+        isStaleInactiveSessionSnapshot(event.payload.session, Option.getOrNull(existingSession))
       ) {
-        // Restart recovery can append a delayed `starting` snapshot after a
-        // newer ready/running observation. Never replace newer state while
-        // retaining only its timestamp on the row.
+        // Resume replay can deliver an old completion after a new turn starts.
+        // Keep the newer session and its active turn.
         return;
       }
       const runningActiveTurn =
@@ -2113,6 +2115,14 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
 
         case "thread.session-set": {
           const turnId = event.payload.session.activeTurnId;
+          const existingSession = yield* projectionThreadSessionRepository.getByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (
+            isStaleInactiveSessionSnapshot(event.payload.session, Option.getOrNull(existingSession))
+          ) {
+            return;
+          }
           if (
             turnId === null &&
             (event.payload.session.status === "ready" ||

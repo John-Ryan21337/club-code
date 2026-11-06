@@ -5,9 +5,14 @@
 // @effect-diagnostics globalTimers:off
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
-import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { fileURLToPath } from "node:url";
+
+import {
+  assertReleasePath,
+  buildReleaseRuntimeEnv,
+  prepareReleaseRuntime,
+} from "../apps/desktop/scripts/release-runtime.mjs";
 
 export const DEFAULT_RESTART_WAIT_MS = 1_500;
 export const DEFAULT_RESTART_DELAY_MS = 750;
@@ -26,6 +31,7 @@ interface NormalizedRestartOptions extends RestartCafeCodeArgs {
   readonly repoRoot: string;
   readonly scriptPath: string;
   readonly resolvedLogDir: string;
+  readonly runtimeEnv: NodeJS.ProcessEnv;
 }
 
 const usage = `Usage:
@@ -38,7 +44,7 @@ relaunches Club Code. The default launch command is:
 Options:
   --wait-ms <n>           Delay before killing the current app (default: 1500)
   --restart-delay-ms <n>  Delay between killall and relaunch (default: 750)
-  --log-dir <path>        Restart log directory (default: $CAFE_CODE_HOME/restart-logs)
+  --log-dir <path>        Log directory inside this release (default: .club-runtime/restart-logs)
   --dry-run               Print what would be scheduled without starting helper
   --help                  Show this help
 
@@ -153,16 +159,17 @@ export function defaultLaunchCommand(nodePath = process.execPath): ReadonlyArray
 export function resolveRestartLogDir(input: {
   readonly explicitLogDir: string | undefined;
   readonly env: NodeJS.ProcessEnv;
-  readonly homeDir: string;
   readonly cwd: string;
 }): string {
+  const runtimeEnv = buildReleaseRuntimeEnv(input.env, input.cwd);
   const configured = input.explicitLogDir?.trim();
-  if (configured) {
-    return NodePath.resolve(input.cwd, configured);
-  }
-
-  const cafeHome = input.env.CAFE_CODE_HOME?.trim() || NodePath.join(input.homeDir, ".cafe-code");
-  return NodePath.join(cafeHome, "restart-logs");
+  return assertReleasePath(
+    input.cwd,
+    configured
+      ? NodePath.resolve(input.cwd, configured)
+      : NodePath.join(runtimeEnv.CAFE_CODE_HOME!, "restart-logs"),
+    "Restart logs",
+  );
 }
 
 export function buildHelperProcessArgs(input: {
@@ -208,14 +215,27 @@ function commandSummary(command: ReadonlyArray<string>): string {
   return `${String(executable)} (${args.length} arg${args.length === 1 ? "" : "s"})`;
 }
 
-function spawnOptions(cwd: string): { readonly cwd: string; readonly shell: boolean } {
+export function restartSpawnOptions(
+  cwd: string,
+  executable: string,
+  platform: NodeJS.Platform = process.platform,
+): { readonly cwd: string; readonly shell: boolean; readonly windowsHide: boolean } {
+  // Direct executables must preserve their argv. Keep custom Windows shim
+  // support until those commands have their own validated launch boundary.
+  const directExecutable =
+    executable === process.execPath || /(?:\.exe$|^node$)/iu.test(NodePath.basename(executable));
   return {
     cwd,
-    shell: process.platform === "win32",
+    shell: platform === "win32" && !directExecutable,
+    windowsHide: true,
   };
 }
 
-async function runCommand(command: ReadonlyArray<string>, cwd: string): Promise<number> {
+async function runCommand(
+  command: ReadonlyArray<string>,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): Promise<number> {
   const [executable, ...args] = command;
   if (executable === undefined) {
     throw new Error("Cannot run an empty command.");
@@ -223,7 +243,8 @@ async function runCommand(command: ReadonlyArray<string>, cwd: string): Promise<
 
   return await new Promise<number>((resolve, reject) => {
     const child = spawn(executable, args, {
-      ...spawnOptions(cwd),
+      ...restartSpawnOptions(cwd, executable),
+      env,
       stdio: ["ignore", "inherit", "inherit"],
     });
     child.once("error", reject);
@@ -237,14 +258,15 @@ async function runCommand(command: ReadonlyArray<string>, cwd: string): Promise<
   });
 }
 
-function spawnDetached(command: ReadonlyArray<string>, cwd: string): void {
+function spawnDetached(command: ReadonlyArray<string>, cwd: string, env: NodeJS.ProcessEnv): void {
   const [executable, ...args] = command;
   if (executable === undefined) {
     throw new Error("Cannot spawn an empty command.");
   }
 
   const child = spawn(executable, args, {
-    ...spawnOptions(cwd),
+    ...restartSpawnOptions(cwd, executable),
+    env,
     stdio: ["ignore", "inherit", "inherit"],
     detached: true,
   });
@@ -257,7 +279,6 @@ function normalizeOptions(args: RestartCafeCodeArgs): NormalizedRestartOptions {
   const resolvedLogDir = resolveRestartLogDir({
     explicitLogDir: args.logDir,
     env: process.env,
-    homeDir: NodeOS.homedir(),
     cwd: repoRoot,
   });
   return {
@@ -265,6 +286,7 @@ function normalizeOptions(args: RestartCafeCodeArgs): NormalizedRestartOptions {
     repoRoot,
     scriptPath,
     resolvedLogDir,
+    runtimeEnv: buildReleaseRuntimeEnv(process.env, repoRoot),
   };
 }
 
@@ -290,6 +312,8 @@ async function scheduleRestart(options: NormalizedRestartOptions): Promise<void>
     return;
   }
 
+  const runtimeEnv = prepareReleaseRuntime(options.runtimeEnv, options.repoRoot);
+  assertReleasePath(options.repoRoot, options.resolvedLogDir, "Restart logs");
   mkdirSync(options.resolvedLogDir, { recursive: true });
   const outFd = openSync(logPath, "a");
   const errFd = openSync(logPath, "a");
@@ -297,9 +321,9 @@ async function scheduleRestart(options: NormalizedRestartOptions): Promise<void>
   try {
     const helper = spawn(process.execPath, helperArgs, {
       cwd: options.repoRoot,
-      env: {
-        ...process.env,
-      },
+      env: runtimeEnv,
+      shell: false,
+      windowsHide: true,
       stdio: ["ignore", outFd, errFd],
       detached: true,
     });
@@ -313,6 +337,7 @@ async function scheduleRestart(options: NormalizedRestartOptions): Promise<void>
 }
 
 async function runHelper(options: NormalizedRestartOptions): Promise<void> {
+  const runtimeEnv = prepareReleaseRuntime(options.runtimeEnv, options.repoRoot);
   const launchCommand = options.launchCommand ?? defaultLaunchCommand();
   const killallCommand = [process.execPath, "apps/server/src/bin.ts", "killall"];
 
@@ -323,7 +348,7 @@ async function runHelper(options: NormalizedRestartOptions): Promise<void> {
 
   await sleep(options.waitMs);
 
-  const killallExitCode = await runCommand(killallCommand, options.repoRoot);
+  const killallExitCode = await runCommand(killallCommand, options.repoRoot, runtimeEnv);
   console.log(`[restart] killall exited with code ${killallExitCode}`);
   if (killallExitCode !== 0) {
     process.exitCode = killallExitCode;
@@ -331,7 +356,7 @@ async function runHelper(options: NormalizedRestartOptions): Promise<void> {
   }
 
   await sleep(options.restartDelayMs);
-  spawnDetached(launchCommand, options.repoRoot);
+  spawnDetached(launchCommand, options.repoRoot, runtimeEnv);
   console.log("[restart] launch command spawned.");
 }
 

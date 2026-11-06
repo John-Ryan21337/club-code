@@ -180,6 +180,7 @@ function sanitizeShadowHomeSegment(value: string): string {
 export function withDefaultCodexShadowHome(input: {
   readonly instanceId: ProviderInstance["instanceId"];
   readonly config: CodexSettings;
+  readonly shadowHomeRoot?: string;
 }): CodexSettings {
   if (input.config.homePath.trim().length > 0 || input.config.shadowHomePath.trim().length > 0) {
     return input.config;
@@ -187,7 +188,7 @@ export function withDefaultCodexShadowHome(input: {
 
   return {
     ...input.config,
-    shadowHomePath: `${DEFAULT_SHADOW_HOME_ROOT}/${sanitizeShadowHomeSegment(String(input.instanceId))}`,
+    shadowHomePath: `${input.shadowHomeRoot ?? DEFAULT_SHADOW_HOME_ROOT}/${sanitizeShadowHomeSegment(String(input.instanceId))}`,
   };
 }
 
@@ -239,8 +240,13 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const path = yield* Path.Path;
       const httpClient = yield* HttpClient.HttpClient;
       const eventLoggers = yield* ProviderEventLoggers;
+      const serverConfig = yield* ServerConfig;
       const processEnv = mergeProviderInstanceEnvironment(environment);
-      const layoutConfig = withDefaultCodexShadowHome({ instanceId, config });
+      const layoutConfig = withDefaultCodexShadowHome({
+        instanceId,
+        config,
+        shadowHomeRoot: path.join(serverConfig.baseDir, "codex-homes"),
+      });
       const homeLayout = yield* resolveCodexHomeLayout(layoutConfig);
       // Cloud instances either refresh from the shared login or preserve an
       // explicitly configured shadow login. OSS instances need neither and

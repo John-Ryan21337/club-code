@@ -427,6 +427,7 @@ const makeWsRpcLayer = (
           const bootstrap = command.bootstrap;
           const { bootstrap: _bootstrap, ...finalTurnStartCommand } = command;
           let createdThread = false;
+          let createdWorktree: { readonly cwd: string; readonly path: string } | null = null;
           let targetProjectId = bootstrap?.createThread?.projectId;
           let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
           let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
@@ -441,6 +442,29 @@ const makeWsRpcLayer = (
                   })
                   .pipe(Effect.ignoreCause({ log: true }))
               : Effect.void;
+
+          const cleanupCreatedResources = () =>
+            Effect.gen(function* () {
+              if (createdWorktree) {
+                const worktree = createdWorktree;
+                yield* gitWorkflow
+                  .removeWorktree({
+                    cwd: worktree.cwd,
+                    path: worktree.path,
+                    force: false,
+                  })
+                  .pipe(
+                    Effect.catch((cause) =>
+                      Effect.logWarning("failed to remove unused bootstrap worktree", {
+                        threadId: command.threadId,
+                        worktreePath: worktree.path,
+                        cause,
+                      }),
+                    ),
+                  );
+              }
+              yield* cleanupCreatedThread();
+            });
 
           const recordSetupScriptLaunchFailure = (input: {
             readonly error: unknown;
@@ -524,6 +548,10 @@ const makeWsRpcLayer = (
                 path: null,
               });
               targetWorktreePath = worktree.worktree.path;
+              createdWorktree = {
+                cwd: bootstrap.prepareWorktree.projectCwd,
+                path: worktree.worktree.path,
+              };
               yield* orchestrationEngine.dispatch({
                 type: "thread.meta.update",
                 commandId: serverCommandId("bootstrap-thread-meta-update"),
@@ -543,9 +571,12 @@ const makeWsRpcLayer = (
             Effect.catchCause((cause) => {
               const dispatchError = toBootstrapDispatchCommandCauseError(cause);
               if (Cause.hasInterruptsOnly(cause)) {
+                // The queued command can still be accepted after its caller is interrupted.
                 return Effect.fail(dispatchError);
               }
-              return cleanupCreatedThread().pipe(Effect.flatMap(() => Effect.fail(dispatchError)));
+              return cleanupCreatedResources().pipe(
+                Effect.flatMap(() => Effect.fail(dispatchError)),
+              );
             }),
           );
         });

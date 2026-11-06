@@ -45,7 +45,9 @@ describe("repository toolchain policy", () => {
 
     expect(yarnConfig).toMatch(/^nodeLinker: node-modules$/m);
     expect(yarnConfig).toMatch(/^enableScripts: false$/m);
-    expect(yarnConfig).toMatch(/^enableGlobalCache: true$/m);
+    expect(yarnConfig).toMatch(/^enableGlobalCache: false$/m);
+    expect(yarnConfig).toMatch(/^cacheFolder: \.\/\.yarn\/cache$/m);
+    expect(yarnConfig).toMatch(/^globalFolder: \.\/\.yarn\/global$/m);
     const buildPolicy = rootPackage.dependenciesMeta as Record<
       string,
       { readonly built?: boolean }

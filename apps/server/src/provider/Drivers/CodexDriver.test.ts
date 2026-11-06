@@ -28,6 +28,17 @@ import { terminateProbeChild } from "../providerSnapshot.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 describe("withDefaultCodexShadowHome", () => {
+  it("stores default shadow homes under the configured application data root", () => {
+    const resolved = withDefaultCodexShadowHome({
+      instanceId: ProviderInstanceId.make("codex_personal-prod"),
+      config: decodeCodexSettings({}),
+      shadowHomeRoot: "M:/ClubCode-local-release/.club-runtime/codex-homes",
+    });
+    assert.equal(
+      resolved.shadowHomePath,
+      "M:/ClubCode-local-release/.club-runtime/codex-homes/codex_personal-prod",
+    );
+  });
   it("isolates the default Codex instance in a Cafe Code shadow home", () => {
     const config = decodeCodexSettings({});
 
