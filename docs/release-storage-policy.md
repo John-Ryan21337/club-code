@@ -4,7 +4,21 @@ Club Code releases own their application files inside the release directory. A s
 
 Application state belongs in `.club-runtime` inside that directory. This includes the database, attachments, settings, application logs, caches, temporary files, managed provider runtimes, and private provider shadow files. Launch and restart helpers must apply this policy before they write files. External application-path overrides and links that escape the release directory must fail clearly. Never recreate a deleted project directory to restore a drive reading.
 
-Database backups are the deliberate visible exception. Store them directly in `backups` at the release root so an operator can copy them to another device without searching through private runtime directories. Club Code creates a verified backup at most once per 24 hours, checks once per hour, and retains the seven newest automatic backups. It removes only files that match its exact automatic-backup name. Unknown files, backup sets, and personal files in `backups` remain untouched.
+State backups belong in `backups` at the release root. Keep restore points for the latest three local calendar days of use. Gaps between uses do not expire them. Multiple launches on one day share that day's restore point. Create a backup at startup and refresh today's point once per hour while Club Code runs. Publish and verify the replacement before removing an older point.
+
+Compress backup files to limit storage use. Three retained points can still require about three compressed copies of the included state. A new backup temporarily needs space for a fourth copy. If copying or verification fails, preserve the previous restore points. Personal files in `backups` remain untouched.
+
+Backups include the thread database, settings, profiles, attachments, imported media, secrets, and durable browser storage. Exclude project files, managed worktrees, application binaries, caches, logs, temporary files, and process markers. External provider-owned sessions and tools remain separate. Never follow their links into a backup.
+
+SQLite uses its online backup API. Other state files are copied while the application runs. This does not provide one atomic transaction across the database and browser storage. Unsaved in-memory work is outside the backup. These restore points reduce recovery work after state damage; a copy on the same drive does not protect against drive loss.
+
+## Backup and recovery commands
+
+From the release directory, create a current restore point with `node scripts/backup-state.mjs backup`. Verify a restore point with `node scripts/backup-state.mjs verify <snapshot-directory-name>`.
+
+Use `node scripts/backup-state.mjs restore <snapshot-directory-name>` to verify and extract a restore point into a new directory under `.club-runtime/recovery`. This command does not overwrite active state. Inspect the recovered files before using them.
+
+To activate recovered state, first stop Club Code and its provider daemon. Preserve the current `userdata` and `codex-homes` directories inside the release. If present, move the extracted `__club-private/codex-homes` directory to `.club-runtime/codex-homes`. Remove the now-empty `__club-private` container from the extracted state. Replace `userdata` with the remaining recovered state, then launch Club Code and check the threads and settings. Do not replace a database while the application is running. Keep the preserved state until recovery is confirmed.
 
 Automatic backups require a validated release location. Ordinary server launches without one keep their existing startup behavior and do not schedule backups. An invalid backup override disables backups with a warning. A redirected backup directory must fail before cleanup or backup writes.
 

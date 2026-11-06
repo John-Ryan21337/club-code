@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { DatabaseSync } from "node:sqlite";
 import * as fs from "node:fs";
+import * as fsAsync from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -14,7 +15,11 @@ import {
   backupDatabaseConnection,
   resolveBackupRoot,
   runAutomaticDatabaseBackup,
+  restoreSnapshot,
+  verifySnapshot,
 } from "./AutomaticDatabaseBackup.ts";
+
+vi.mock("node:fs/promises", { spy: true });
 
 const roots: string[] = [];
 
@@ -119,7 +124,10 @@ describe("automatic database backups", () => {
     const first = await runAutomaticDatabaseBackup({ ...input, now, backupTo });
     expect(first.status).toBe("created");
     expect(first.path).toBeDefined();
-    const restored = new DatabaseSync(first.path!, { readOnly: true });
+    const restoreRoot = path.join(input.root, "restored");
+    fs.mkdirSync(restoreRoot);
+    await restoreSnapshot(first.path!, restoreRoot);
+    const restored = new DatabaseSync(path.join(restoreRoot, "state.sqlite"), { readOnly: true });
     expect(restored.prepare("SELECT title FROM threads WHERE id = 'one'").get()).toEqual({
       title: "Protected thread",
     });
@@ -135,27 +143,183 @@ describe("automatic database backups", () => {
     input.database.close();
   });
 
-  it("removes only service-owned partial files", async () => {
+  it("keeps three used days across gaps and refreshes the same day without adding a slot", async () => {
     const input = fixture();
-    fs.mkdirSync(input.backupRoot, { recursive: true });
-    fs.writeFileSync(
-      path.join(input.backupRoot, "club-code-state-20261104-080000Z.sqlite.partial"),
-      "x",
-    );
-    fs.writeFileSync(path.join(input.backupRoot, "keep-me.partial"), "personal");
+    const stateRoot = path.join(input.root, "userdata");
+    fs.mkdirSync(path.join(stateRoot, "attachments"), { recursive: true });
+    fs.mkdirSync(path.join(stateRoot, "worktrees"));
+    fs.writeFileSync(path.join(stateRoot, "worktrees", "project.txt"), "excluded");
+    fs.writeFileSync(path.join(stateRoot, "attachments", "image.png"), "image bytes");
+    fs.writeFileSync(path.join(stateRoot, "settings.json"), '{"theme":"dark"}');
+    const backupTo = (destination: string) => backupDatabaseConnection(input.database, destination);
+    try {
+      for (const day of ["2026-01-01", "2026-02-01", "2026-05-01", "2026-08-01"]) {
+        await runAutomaticDatabaseBackup({
+          ...input,
+          stateRoot,
+          backupTo,
+          now: new Date(day + "T12:00:00"),
+        });
+      }
+      expect(fs.readdirSync(input.backupRoot)).toHaveLength(3);
+      expect(fs.readdirSync(input.backupRoot).some((n) => n.includes("2026-01-01"))).toBe(false);
+      const latest = await runAutomaticDatabaseBackup({
+        ...input,
+        stateRoot,
+        backupTo,
+        now: new Date("2026-08-01T14:00:00"),
+      });
+      expect(fs.readdirSync(input.backupRoot)).toHaveLength(3);
+      const manifest = await verifySnapshot(latest.path!);
+      expect(manifest.files.map((f) => f.path)).toEqual([
+        "state.sqlite",
+        "attachments/image.png",
+        "settings.json",
+      ]);
+      const recovered = path.join(input.root, "recovered");
+      fs.mkdirSync(recovered);
+      await restoreSnapshot(latest.path!, recovered);
+      expect(fs.readFileSync(path.join(recovered, "attachments", "image.png"), "utf8")).toBe(
+        "image bytes",
+      );
+      expect(fs.readFileSync(path.join(recovered, "settings.json"), "utf8")).toBe(
+        '{"theme":"dark"}',
+      );
+      const before = fs.readdirSync(input.backupRoot);
+      await expect(
+        runAutomaticDatabaseBackup({
+          ...input,
+          stateRoot,
+          now: new Date("2026-09-01T12:00:00"),
+          backupTo: async () => {
+            throw new Error("disk full");
+          },
+        }),
+      ).rejects.toThrow("disk full");
+      expect(fs.readdirSync(input.backupRoot)).toEqual(before);
+    } finally {
+      input.database.close();
+    }
+  });
 
-    await runAutomaticDatabaseBackup({
-      ...input,
-      now: new Date("2026-11-05T08:00:00.000Z"),
-      backupTo: (destination) => backupDatabaseConnection(input.database, destination),
-    });
+  it("counts legacy automatic points in retention and preserves manual backups", async () => {
+    const input = fixture();
+    fs.mkdirSync(input.backupRoot);
+    for (const day of ["01", "02", "03"]) {
+      const file = path.join(input.backupRoot, "club-code-state-202601" + day + "-120000Z.sqlite");
+      fs.writeFileSync(file, "legacy");
+      fs.utimesSync(
+        file,
+        new Date("2026-01-" + day + "T12:00:00"),
+        new Date("2026-01-" + day + "T12:00:00"),
+      );
+    }
+    fs.writeFileSync(path.join(input.backupRoot, "pre-upgrade.sqlite"), "manual");
+    try {
+      await runAutomaticDatabaseBackup({
+        ...input,
+        now: new Date("2026-01-04T12:00:00"),
+        backupTo: (destination) => backupDatabaseConnection(input.database, destination),
+      });
+      expect(fs.readdirSync(input.backupRoot)).toHaveLength(4);
+      expect(
+        fs.existsSync(path.join(input.backupRoot, "club-code-state-20260101-120000Z.sqlite")),
+      ).toBe(false);
+      expect(fs.readFileSync(path.join(input.backupRoot, "pre-upgrade.sqlite"), "utf8")).toBe(
+        "manual",
+      );
+    } finally {
+      input.database.close();
+    }
+  });
 
-    expect(
-      fs.existsSync(path.join(input.backupRoot, "club-code-state-20261104-080000Z.sqlite.partial")),
-    ).toBe(false);
-    expect(fs.readFileSync(path.join(input.backupRoot, "keep-me.partial"), "utf8")).toBe(
-      "personal",
+  it("includes private provider state but excludes runtime locks and shared provider aliases", async () => {
+    const input = fixture();
+    const stateRoot = path.join(input.root, "userdata");
+    const privateHome = path.join(input.root, "codex-homes", "codex");
+    const shared = path.join(input.root, "shared-provider");
+    fs.mkdirSync(stateRoot);
+    fs.mkdirSync(path.join(privateHome, "memories"), { recursive: true });
+    fs.mkdirSync(path.join(privateHome, "thread-writer-locks"));
+    fs.mkdirSync(shared);
+    fs.writeFileSync(path.join(shared, "external-session.json"), "provider owned");
+    fs.symlinkSync(
+      shared,
+      path.join(privateHome, "sessions"),
+      process.platform === "win32" ? "junction" : "dir",
     );
-    input.database.close();
+    fs.writeFileSync(path.join(privateHome, "auth.json"), '{"fixture":"private-auth"}');
+    fs.writeFileSync(path.join(privateHome, "memories", "note.md"), "private memory");
+    fs.writeFileSync(path.join(privateHome, ".sqlite-maintenance.lock"), "lock");
+    fs.writeFileSync(path.join(privateHome, "thread-writer-locks", "thread.lock"), "lock");
+    fs.writeFileSync(path.join(privateHome, "config.toml"), "shared-copy-fixture");
+    try {
+      const snapshot = await runAutomaticDatabaseBackup({
+        ...input,
+        stateRoot,
+        backupTo: (destination) => backupDatabaseConnection(input.database, destination),
+      });
+      const manifest = await verifySnapshot(snapshot.path!);
+      expect(manifest.files.map((file) => file.path)).toEqual([
+        "state.sqlite",
+        "__club-private/codex-homes/codex/auth.json",
+        "__club-private/codex-homes/codex/memories/note.md",
+      ]);
+      const destination = path.join(input.root, "recovered-private");
+      fs.mkdirSync(destination);
+      await restoreSnapshot(snapshot.path!, destination);
+      expect(
+        fs.readFileSync(
+          path.join(destination, "__club-private", "codex-homes", "codex", "auth.json"),
+          "utf8",
+        ),
+      ).toBe('{"fixture":"private-auth"}');
+    } finally {
+      input.database.close();
+    }
+  });
+
+  it("allows the next backup attempt after failed staging cleanup", async () => {
+    const input = fixture();
+    const remove = vi
+      .mocked(fsAsync.rm)
+      .mockRejectedValueOnce(new Error("cleanup temporarily unavailable"));
+    try {
+      await expect(
+        runAutomaticDatabaseBackup({
+          ...input,
+          backupTo: async () => {
+            throw new Error("copy failed");
+          },
+        }),
+      ).rejects.toThrow("cleanup temporarily unavailable");
+      remove.mockRestore();
+      const next = await runAutomaticDatabaseBackup({
+        ...input,
+        backupTo: (destination) => backupDatabaseConnection(input.database, destination),
+      });
+      expect(next.status).toBe("created");
+      await expect(verifySnapshot(next.path!)).resolves.toMatchObject({ version: 1 });
+    } finally {
+      remove.mockRestore();
+      input.database.close();
+    }
+  });
+
+  it("rejects damaged backup payloads before writing a restore", async () => {
+    const input = fixture();
+    try {
+      const snapshot = await runAutomaticDatabaseBackup({
+        ...input,
+        backupTo: (destination) => backupDatabaseConnection(input.database, destination),
+      });
+      fs.writeFileSync(path.join(snapshot.path!, "000000.gz"), "damaged");
+      const target = path.join(input.root, "recover");
+      fs.mkdirSync(target);
+      await expect(restoreSnapshot(snapshot.path!, target)).rejects.toThrow();
+      expect(fs.readdirSync(target)).toEqual([]);
+    } finally {
+      input.database.close();
+    }
   });
 });
