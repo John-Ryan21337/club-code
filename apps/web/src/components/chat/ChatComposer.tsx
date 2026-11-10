@@ -3690,6 +3690,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   models={selectedProviderModels}
                   modelOptions={selectedComposerModelOptions}
                   threadTarget={composerDraftTarget}
+                  paidUsagePolicy={selectedProviderStatus?.paidUsagePolicy}
                 />
                 {isComposerFooterCompact ? (
                   <CompactComposerControlsMenu

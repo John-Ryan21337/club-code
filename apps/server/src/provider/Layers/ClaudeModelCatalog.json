@@ -42,6 +42,46 @@
       }
     },
     {
+      "slug": "claude-fable-5-2",
+      "name": "Claude Fable 5.2",
+      "isCustom": false,
+      "minimumClaudeCodeVersion": "2.1.321",
+      "capabilities": {
+        "optionDescriptors": [
+          {
+            "id": "effort",
+            "label": "Reasoning",
+            "type": "select",
+            "options": [
+              { "id": "low", "label": "Low" },
+              { "id": "medium", "label": "Medium" },
+              { "id": "high", "label": "High", "isDefault": true },
+              { "id": "xhigh", "label": "Extra High" },
+              { "id": "max", "label": "Max" },
+              { "id": "ultrathink", "label": "Ultrathink" }
+            ],
+            "currentValue": "high",
+            "promptInjectedValues": ["ultrathink"]
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast Mode",
+            "type": "boolean"
+          },
+          {
+            "id": "contextWindow",
+            "label": "Context Window",
+            "type": "select",
+            "options": [
+              { "id": "200k", "label": "200k", "isDefault": true },
+              { "id": "1m", "label": "1M" }
+            ],
+            "currentValue": "200k"
+          }
+        ]
+      }
+    },
+    {
       "slug": "claude-fable-5-1",
       "name": "Claude Fable 5.1",
       "isCustom": false,

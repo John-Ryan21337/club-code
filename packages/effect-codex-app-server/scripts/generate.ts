@@ -19,9 +19,9 @@ import {
 } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-// Codex 0.165.0 release commit. Keep generation attached to an immutable
+// Codex 0.167.0 release commit. Keep generation attached to an immutable
 // upstream commit rather than a moving tag so regeneration is reproducible.
-const UPSTREAM_REF = "6ff1e1ca3b30fc8b914720681fcf5fe62e95f856";
+const UPSTREAM_REF = "086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a";
 const USER_AGENT = "effect-codex-app-server-generator";
 // These opt-in methods are deliberately absent from upstream's stable fixtures.
 // Read their exact release exports instead of maintaining handwritten wire shapes.

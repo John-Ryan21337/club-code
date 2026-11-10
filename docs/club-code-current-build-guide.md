@@ -137,6 +137,12 @@ credentials, query strings, and non-API paths are rejected. Start LM Studio's
 server and load a chat model—or enable its just-in-time loading—before
 refreshing Club Code.
 
+The provider status check runs only `codex --version` and queries LM Studio's
+model list. It does not start the Codex app-server. The first chat on a new LM
+Studio instance can take several minutes to start. During that time, Codex
+indexes your existing Codex session history for that instance's private home.
+Later chats start normally.
+
 Codex's built-in LM Studio route in this build has no bearer-token hook.
 Therefore it cannot connect when LM Studio's **Require Authentication** option
 is enabled. Use an unauthenticated endpoint only on loopback or a trusted,

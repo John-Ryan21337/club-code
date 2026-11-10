@@ -292,7 +292,9 @@ const validationLayer = it.layer(
   Layer.effect(
     CodexAdapter,
     Effect.gen(function* () {
-      const codexConfig = decodeCodexSettings({});
+      // Paid routes are opt-in per instance; these tests exercise the Fast /
+      // Ultra Fast tier plumbing, so the policy is explicitly allowed here.
+      const codexConfig = decodeCodexSettings({ allowPaidUsage: true });
       return yield* makeCodexAdapter(codexConfig, {
         makeRuntime: validationRuntimeFactory.factory,
       });
@@ -419,7 +421,7 @@ const sessionErrorLayer = it.layer(
   Layer.effect(
     CodexAdapter,
     Effect.gen(function* () {
-      const codexConfig = decodeCodexSettings({});
+      const codexConfig = decodeCodexSettings({ allowPaidUsage: true });
       return yield* makeCodexAdapter(codexConfig, {
         makeRuntime: sessionRuntimeFactory.factory,
       });
@@ -470,6 +472,57 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
           assert.equal(runtime.sendTurnImpl.mock.calls.at(-1)?.[0].serviceTier, tier);
         }
       }),
+  );
+  it.effect(
+    "forces the standard service tier at startup and on turns while paid usage is off",
+    () => {
+      const blockedRuntimeFactory = makeRuntimeFactory();
+      const blockedLayer = Layer.effect(
+        CodexAdapter,
+        Effect.gen(function* () {
+          // Default provider settings: `allowPaidUsage` is off.
+          const codexConfig = decodeCodexSettings({});
+          assert.equal(codexConfig.allowPaidUsage, false);
+          return yield* makeCodexAdapter(codexConfig, {
+            makeRuntime: blockedRuntimeFactory.factory,
+          });
+        }),
+      ).pipe(
+        Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+        Layer.provideMerge(ServerSettingsService.layerTest()),
+        Layer.provideMerge(providerSessionDirectoryTestLayer),
+        Layer.provideMerge(NodeServices.layer),
+      );
+      return Effect.gen(function* () {
+        const adapter = yield* CodexAdapter;
+        const instanceId = ProviderInstanceId.make("codex");
+        const threadId = asThreadId("paid-usage-blocked");
+        yield* adapter.startSession({
+          provider: ProviderDriverKind.make("codex"),
+          threadId,
+          modelSelection: createModelSelection(instanceId, "gpt-6-astra", [
+            { id: "serviceTier", value: "ultrafast" },
+          ]),
+          runtimeMode: "full-access",
+        });
+        assert.equal(blockedRuntimeFactory.factory.mock.calls.at(-1)?.[0].serviceTier, "default");
+        const runtime = blockedRuntimeFactory.lastRuntime;
+        assert.ok(runtime);
+        for (const options of [
+          [{ id: "serviceTier", value: "ultrafast" }],
+          [{ id: "serviceTier", value: "priority" }],
+          [{ id: "fastMode", value: true }],
+          [{ id: "serviceTier", value: "default" }],
+        ] as const) {
+          yield* adapter.sendTurn({
+            threadId,
+            input: "hello",
+            modelSelection: createModelSelection(instanceId, "gpt-6-astra", [...options]),
+          });
+          assert.equal(runtime.sendTurnImpl.mock.calls.at(-1)?.[0].serviceTier, "default");
+        }
+      }).pipe(Effect.provide(blockedLayer));
+    },
   );
   it.effect(
     "defaults effort to high and preserves explicit effort on resumed sessions and turns",
@@ -650,7 +703,7 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
     const customLayer = Layer.effect(
       CodexAdapter,
       Effect.gen(function* () {
-        const codexConfig = decodeCodexSettings({});
+        const codexConfig = decodeCodexSettings({ allowPaidUsage: true });
         return yield* makeCodexAdapter(codexConfig, {
           instanceId: customInstanceId,
           makeRuntime: customRuntimeFactory.factory,
@@ -2889,6 +2942,18 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
             threadId: "thread-1",
             turnId: "turn-1",
             metadata: { moderation: "provider-private" },
+          },
+        },
+        {
+          id: asEventId("evt-codex-thread-section-changed"),
+          kind: "notification" as const,
+          provider: ProviderDriverKind.make("codex"),
+          threadId: asThreadId("thread-1"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+          method: "thread/section/changed",
+          payload: {
+            threadId: "provider-thread-1",
+            sectionId: "provider-section-1",
           },
         },
         ...[

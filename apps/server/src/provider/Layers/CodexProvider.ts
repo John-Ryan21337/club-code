@@ -53,6 +53,7 @@ import {
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
+import { CODEX_LMSTUDIO_ROOT_ARGS } from "../codexLmStudioLaunch.ts";
 import packageJson from "../../../package.json" with { type: "json" };
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
 
@@ -1248,7 +1249,7 @@ export function buildCodexProviderAppServerArgs(
   modelProvider: CodexSettings["modelProvider"] = "openai",
 ): ReadonlyArray<string> {
   return ossMode
-    ? ["--oss", "--local-provider", "lmstudio", "app-server"]
+    ? [...CODEX_LMSTUDIO_ROOT_ARGS, "app-server"]
     : modelProvider === "gcp"
       ? ["app-server", "-c", 'model_provider="gcp"']
       : ["app-server"];
@@ -1710,6 +1711,45 @@ export function reconcileLmStudioModelDiscovery(
     message: discovery.message,
   };
 }
+
+/**
+ * Status check for an enabled Codex OSS (LM Studio) instance.
+ *
+ * It deliberately does not start `codex app-server`. Codex 0.166 blocks
+ * app-server startup until the per-home state database has indexed every
+ * rollout under `sessions/` (`codex-rs/rollout/src/state_db.rs`,
+ * `wait_for_backfill_gate`). A Club shadow home shares the user's full
+ * session history, so a fresh home can need minutes for that one-time index.
+ * The old status probe started app-server under the 10-second
+ * `AUTH_PROBE_TIMEOUT_MS` bound. It then reported a timeout error, so
+ * reconciliation hid every LM Studio model. Its kill also left the indexing
+ * lease held for 15 minutes (`BACKFILL_LEASE_SECONDS`), and the next
+ * five-minute probe repeated the same claim-and-kill cycle. Because the
+ * picker was empty, no session ever started that could finish the index.
+ *
+ * The cheap `codex --version` check matches the non-OSS badge path. LM
+ * Studio's `/v1/models` response remains the only callable inventory. The
+ * first real session runs app-server without a status deadline, so it can
+ * finish the one-time index for this home.
+ */
+export const checkCodexOssProviderStatus = Effect.fn("checkCodexOssProviderStatus")(function* (
+  codexSettings: CodexSettings,
+  client: HttpClient.HttpClient,
+  environment: NodeJS.ProcessEnv = process.env,
+): Effect.fn.Return<
+  ServerProviderDraft,
+  never,
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+> {
+  const [provider, discovery] = yield* Effect.all(
+    [
+      checkCodexCliProviderStatus(codexSettings, environment),
+      discoverLmStudioModels(codexSettings.ossBaseUrl, client),
+    ],
+    { concurrency: "unbounded" },
+  );
+  return reconcileLmStudioModelDiscovery(provider, discovery);
+});
 
 export function makeCodexHealthProbeCommand(
   codexSettings: CodexSettings,

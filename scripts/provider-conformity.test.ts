@@ -209,19 +209,19 @@ describe("provider conformity workflow", () => {
 
   it("accepts source pins only when all compatibility boundaries match", () => {
     const texts = new Map([
-      ["apps/server/package.json", '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.317"}}'],
-      ["scripts/package.json", '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.317"}}'],
+      ["apps/server/package.json", '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.322"}}'],
+      ["scripts/package.json", '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.322"}}'],
       [
         "packaging/desktop-runtime/package.json",
-        '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.317"}}',
+        '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.322"}}',
       ],
       [
         "packages/effect-codex-app-server/scripts/generate.ts",
-        "6ff1e1ca3b30fc8b914720681fcf5fe62e95f856",
+        "086ccc833bc9cf01024ad2dd6af7dbd421b6bf9a",
       ],
       [
         "apps/desktop/resources/managed-runtime/install-managed-provider-runtime.ps1",
-        'Install-ProviderPackage -PackageName "@openai/codex" -Version "0.166.0"\nInstall-ProviderPackage -PackageName "@anthropic-ai/claude-code" -Version "2.1.317"',
+        'Install-ProviderPackage -PackageName "@openai/codex" -Version "0.167.0"\nInstall-ProviderPackage -PackageName "@anthropic-ai/claude-code" -Version "2.1.322"',
       ],
     ]);
     expect(
@@ -234,11 +234,11 @@ describe("provider conformity workflow", () => {
 
   it("rejects managed installer versions paired with the wrong provider package", () => {
     const texts = new Map([
-      ["apps/server/package.json", '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.317"}}'],
-      ["scripts/package.json", '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.317"}}'],
+      ["apps/server/package.json", '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.322"}}'],
+      ["scripts/package.json", '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.322"}}'],
       [
         "packaging/desktop-runtime/package.json",
-        '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.317"}}',
+        '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.322"}}',
       ],
       [
         "packages/effect-codex-app-server/scripts/generate.ts",
@@ -246,7 +246,7 @@ describe("provider conformity workflow", () => {
       ],
       [
         "apps/desktop/resources/managed-runtime/install-managed-provider-runtime.ps1",
-        'Install-ProviderPackage -PackageName "@openai/codex" -Version "2.1.317"\nInstall-ProviderPackage -PackageName "@anthropic-ai/claude-code" -Version "0.166.0"',
+        'Install-ProviderPackage -PackageName "@openai/codex" -Version "2.1.322"\nInstall-ProviderPackage -PackageName "@anthropic-ai/claude-code" -Version "0.167.0"',
       ],
     ]);
     expect(
@@ -280,10 +280,10 @@ describe("provider conformity workflow", () => {
       binaryPath: "/usr/bin/claude",
       installedVersion: "2.1.220",
       registryVersion: "2.1.226",
-      approvedVersion: "2.1.317",
+      approvedVersion: "2.1.322",
       installKind: "npm" as const,
     };
-    expect(providerUpdateCommand(npmObservation)).toContain("@anthropic-ai/claude-code@2.1.317");
+    expect(providerUpdateCommand(npmObservation)).toContain("@anthropic-ai/claude-code@2.1.322");
     expect(() =>
       providerUpdateCommand({
         ...npmObservation,
@@ -310,13 +310,13 @@ describe("provider conformity workflow", () => {
             binaryPath: "/home/me/.local/share/pnpm/claude",
             installedVersion: "2.1.220",
             registryVersion: "2.1.226",
-            approvedVersion: "2.1.317",
+            approvedVersion: "2.1.322",
             installKind: "pnpm",
           },
           { PATH: root },
           "linux",
         ),
-      ).toEqual({ argv: [pnpm, "add", "-g", "@anthropic-ai/claude-code@2.1.317"] });
+      ).toEqual({ argv: [pnpm, "add", "-g", "@anthropic-ai/claude-code@2.1.322"] });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -335,13 +335,13 @@ describe("provider conformity workflow", () => {
             binaryPath: "/usr/lib/node_modules/@anthropic-ai/claude-code/claude",
             installedVersion: "2.1.220",
             registryVersion: null,
-            approvedVersion: "2.1.317",
+            approvedVersion: "2.1.322",
             installKind: "npm",
           },
           { PATH: root },
           "linux",
         ),
-      ).toEqual([npm, "install", "-g", "@anthropic-ai/claude-code@2.1.317"]);
+      ).toEqual([npm, "install", "-g", "@anthropic-ai/claude-code@2.1.322"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -354,7 +354,7 @@ describe("provider conformity workflow", () => {
         binaryPath: "/usr/lib/node_modules/@anthropic-ai/claude-code/claude",
         installedVersion: "2.1.220",
         registryVersion: "2.1.226",
-        approvedVersion: "2.1.317",
+        approvedVersion: "2.1.322",
         installKind: "npm",
       },
       {
@@ -387,9 +387,9 @@ describe("provider conformity workflow", () => {
     const provider = {
       provider: "codex",
       binaryPath: "/usr/bin/codex",
-      installedVersion: "0.166.0",
-      registryVersion: "0.166.0",
-      approvedVersion: "0.166.0",
+      installedVersion: "0.167.0",
+      registryVersion: "0.167.0",
+      approvedVersion: "0.167.0",
       installKind: "npm",
     };
     expect(() =>
@@ -420,9 +420,9 @@ describe("provider conformity workflow", () => {
           {
             provider: "codex",
             binaryPath: "/usr/bin/codex",
-            installedVersion: "0.166.0",
+            installedVersion: "0.167.0",
             registryVersion: null,
-            approvedVersion: "0.166.0",
+            approvedVersion: "0.167.0",
             installKind: "npm",
           },
         ],

@@ -41,6 +41,7 @@ import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { approvedProviderCliVersion } from "@cafecode/shared/providerCompatibility";
+import { applyPaidUsagePolicyToProviderModels } from "@cafecode/shared/model";
 
 import { makeCodexTextGeneration } from "../../textGeneration/CodexTextGeneration.ts";
 import { ServerConfig } from "../../config.ts";
@@ -48,13 +49,11 @@ import { ProviderDriverError } from "../Errors.ts";
 import { makeCodexAdapter } from "../Layers/CodexAdapter.ts";
 import {
   checkCodexCliProviderStatus,
-  checkCodexProviderStatus,
+  checkCodexOssProviderStatus,
   consumeCodexRateLimitResetCredit,
-  discoverLmStudioModels,
   isCodexCliLoginStatusProbeInconclusive,
   makePendingCodexProvider,
   readCodexAccountRateLimitsViaAppServer,
-  reconcileLmStudioModelDiscovery,
 } from "../Layers/CodexProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import {
@@ -149,6 +148,11 @@ const withInstanceIdentity =
     readonly accentColor: string | undefined;
     readonly continuationGroupKey: string;
     readonly authActions: ServerProvider["authActions"] | undefined;
+    // Operator's per-instance `allowPaidUsage` setting. Off strips the Fast /
+    // Ultra Fast descriptors from the advertised models and publishes
+    // `paidUsagePolicy: "blocked"`; `CodexAdapter` and Codex text generation
+    // independently force the standard service tier for the same setting.
+    readonly allowPaidUsage: boolean;
   }) =>
   (snapshot: ServerProviderDraft): ServerProvider => ({
     ...snapshot,
@@ -158,6 +162,11 @@ const withInstanceIdentity =
     ...(input.accentColor ? { accentColor: input.accentColor } : {}),
     ...(input.authActions ? { authActions: input.authActions } : {}),
     continuation: { groupKey: input.continuationGroupKey },
+    paidUsagePolicy: input.allowPaidUsage ? "allowed" : "blocked",
+    models: applyPaidUsagePolicyToProviderModels(
+      snapshot.models,
+      input.allowPaidUsage ? "allowed" : "blocked",
+    ),
     runtimeCapabilities: {
       ...snapshot.runtimeCapabilities,
       liveSteer: "supported",
@@ -258,6 +267,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         displayName,
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
+        allowPaidUsage: config.allowPaidUsage,
         authActions: resolveCodexAuthActions({
           ossMode: layoutConfig.ossMode,
           runtimeSource: layoutConfig.runtimeSource,
@@ -362,26 +372,16 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       // Starting `codex app-server` just to draw the provider badge can run
       // model/skill metadata requests and block for long enough to show a
       // false "provider unavailable" warning before the user has sent a
-      // message. OSS mode is the exception: its app-server probe verifies that
-      // Codex can host the local transport, while LM Studio's `/v1/models`
-      // response supplies the exact callable inventory. Both deliberately
-      // bypass cloud login/account checks and run concurrently on refresh.
+      // message. OSS mode uses the same cheap version check plus LM Studio's
+      // `/v1/models` response, which supplies the exact callable inventory.
+      // It must not start app-server under a status deadline: a fresh shadow
+      // home blocks app-server startup on a one-time state-DB index, and a
+      // killed probe left LM Studio models permanently hidden. See
+      // `checkCodexOssProviderStatus`.
       const checkCodexStatus =
         effectiveConfig.ossMode && effectiveConfig.enabled
-          ? Effect.all(
-              [
-                checkCodexProviderStatus(effectiveConfig, undefined, effectiveEnvironment),
-                discoverLmStudioModels(effectiveConfig.ossBaseUrl, httpClient),
-              ],
-              { concurrency: "unbounded" },
-            ).pipe(
-              Effect.map(([provider, discovery]) =>
-                reconcileLmStudioModelDiscovery(provider, discovery),
-              ),
-            )
-          : effectiveConfig.ossMode
-            ? checkCodexProviderStatus(effectiveConfig, undefined, effectiveEnvironment)
-            : checkCodexCliProviderStatus(effectiveConfig, effectiveEnvironment);
+          ? checkCodexOssProviderStatus(effectiveConfig, httpClient, effectiveEnvironment)
+          : checkCodexCliProviderStatus(effectiveConfig, effectiveEnvironment);
       const checkProvider = Effect.gen(function* () {
         const prepareStartedAtMs = yield* Clock.currentTimeMillis;
         let prepareOutcome: ServerProviderProbePhaseDiagnostics["outcome"] = "success";

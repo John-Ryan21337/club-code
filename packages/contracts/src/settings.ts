@@ -1661,6 +1661,15 @@ export const CodexSettings = makeProviderSettingsSchema(
         providerSettingsForm: { control: "switch" },
       }),
     ),
+    allowPaidUsage: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "Allow paid usage",
+        description:
+          "Let this instance request Codex Fast and Ultra Fast speed tiers, which spend credits or extra allowance beyond the included plan. Off (default) keeps every send on the standard tier. Club Code cannot change account-level billing; manage credits in your ChatGPT account.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
   },
   {
     order: [
@@ -1673,6 +1682,7 @@ export const CodexSettings = makeProviderSettingsSchema(
       "shadowHomePath",
       "autoCompactTokenLimit",
       "ultraCaching",
+      "allowPaidUsage",
     ],
   },
 );
@@ -1735,9 +1745,25 @@ export const ClaudeSettings = makeProviderSettingsSchema(
         providerSettingsForm: { control: "switch" },
       }),
     ),
+    allowPaidUsage: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "Allow paid usage",
+        description:
+          "Let this instance request Claude Fast mode, which bills extra usage outside the included subscription limits. Off (default) sends every turn at standard speed. Club Code cannot change account-level extra-usage settings; manage them in your Claude account.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
   },
   {
-    order: ["runtimeSource", "binaryPath", "homePath", "launchArgs", "ultraCaching"],
+    order: [
+      "runtimeSource",
+      "binaryPath",
+      "homePath",
+      "launchArgs",
+      "ultraCaching",
+      "allowPaidUsage",
+    ],
   },
 );
 export type ClaudeSettings = typeof ClaudeSettings.Type;
@@ -1895,6 +1921,7 @@ const CodexSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
   autoCompactTokenLimit: Schema.optionalKey(CodexAutoCompactTokenLimit),
   ultraCaching: Schema.optionalKey(Schema.Boolean),
+  allowPaidUsage: Schema.optionalKey(Schema.Boolean),
 });
 
 const ClaudeSettingsPatch = Schema.Struct({
@@ -1905,6 +1932,7 @@ const ClaudeSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
   launchArgs: Schema.optionalKey(TrimmedString),
   ultraCaching: Schema.optionalKey(Schema.Boolean),
+  allowPaidUsage: Schema.optionalKey(Schema.Boolean),
 });
 
 const OpenCodeSettingsPatch = Schema.Struct({

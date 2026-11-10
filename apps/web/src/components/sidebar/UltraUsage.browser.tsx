@@ -40,7 +40,7 @@ it("renders verified Ultra with only weekly bars, then a pending temporary sessi
     driver: ProviderDriverKind.make("claudeAgent"),
     enabled: true,
     installed: true,
-    version: "2.1.317",
+    version: "2.1.322",
     status: "ready",
     auth: { status: "authenticated", type: "Claude Ultra" },
     checkedAt,

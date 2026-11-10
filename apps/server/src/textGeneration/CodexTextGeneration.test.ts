@@ -281,6 +281,7 @@ function withFakeCodexSpawner<A, E, R>(
     stderr?: string;
     requireImage?: boolean;
     requireFastServiceTier?: boolean;
+    forbidFastServiceTier?: boolean;
     requireReasoningEffort?: string;
     forbidReasoningEffort?: boolean;
     ossMode?: boolean;
@@ -289,6 +290,7 @@ function withFakeCodexSpawner<A, E, R>(
     expectedOssBaseUrl?: string;
     stdinMustContain?: string;
     stdinMustNotContain?: string;
+    allowPaidUsage?: boolean;
   },
   effectFn: (textGeneration: TextGenerationShape) => Effect.Effect<A, E, R>,
 ) {
@@ -297,6 +299,7 @@ function withFakeCodexSpawner<A, E, R>(
       binaryPath: "fake-codex",
       ...(input.ossMode === undefined ? {} : { ossMode: input.ossMode }),
       ...(input.modelProvider === undefined ? {} : { modelProvider: input.modelProvider }),
+      ...(input.allowPaidUsage === undefined ? {} : { allowPaidUsage: input.allowPaidUsage }),
     });
     const spawner = ChildProcessSpawner.make((unknownCommand) =>
       Effect.gen(function* () {
@@ -321,10 +324,12 @@ function withFakeCodexSpawner<A, E, R>(
           expect(command.args.slice(0, 3)).toEqual(["-c", 'model_provider="gcp"', "exec"]);
         }
         if (input.requireOssMode) {
-          expect(command.args.slice(0, 4)).toEqual([
+          expect(command.args.slice(0, 6)).toEqual([
             "--oss",
             "--local-provider",
             "lmstudio",
+            "-c",
+            'model_provider="lmstudio"',
             "exec",
           ]);
         }
@@ -338,6 +343,9 @@ function withFakeCodexSpawner<A, E, R>(
         const missingRequiredImage = input.requireImage && !command.args.includes("--image");
         if (input.requireFastServiceTier) {
           expect(configValues).toContain('service_tier="fast"');
+        }
+        if (input.forbidFastServiceTier) {
+          expect(configValues).not.toContain('service_tier="fast"');
         }
         if (input.requireReasoningEffort !== undefined) {
           expect(configValues).toContain(
@@ -411,6 +419,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
           requireFastServiceTier: true,
           requireReasoningEffort: "xhigh",
           stdinMustNotContain: "branch must be a short semantic git branch fragment",
+          allowPaidUsage: true,
         },
         (textGeneration) =>
           textGeneration.generateCommitMessage({
@@ -424,6 +433,32 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
             ]),
           }),
       ),
+  );
+
+  it.effect("omits the fast service tier from codex exec while paid usage is off", () =>
+    withFakeCodexSpawner(
+      {
+        output: JSON.stringify({
+          subject: "Add important change",
+          body: "",
+        }),
+        // Default provider settings: `allowPaidUsage` is off, so the saved
+        // Fast selection must not become `service_tier="fast"`.
+        forbidFastServiceTier: true,
+        requireReasoningEffort: "xhigh",
+      },
+      (textGeneration) =>
+        textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/codex-effect",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.4", [
+            { id: "reasoningEffort", value: "xhigh" },
+            { id: "fastMode", value: true },
+          ]),
+        }),
+    ),
   );
 
   it.effect("forwards local model mode to Codex text generation", () =>

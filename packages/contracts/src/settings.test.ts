@@ -1505,6 +1505,26 @@ describe("provider settings", () => {
     });
   });
 
+  it("defaults paid usage off and persists the switch independently per provider", () => {
+    expect(decodeCodexSettings({}).allowPaidUsage).toBe(false);
+    expect(decodeClaudeSettings({}).allowPaidUsage).toBe(false);
+    expect(decodeCodexSettings({ allowPaidUsage: true }).allowPaidUsage).toBe(true);
+    expect(decodeClaudeSettings({ allowPaidUsage: true }).allowPaidUsage).toBe(true);
+    expect(
+      decodeServerSettingsPatch({
+        providers: {
+          codex: { allowPaidUsage: true },
+          claudeAgent: { allowPaidUsage: false },
+        },
+      }),
+    ).toEqual({
+      providers: {
+        codex: { allowPaidUsage: true },
+        claudeAgent: { allowPaidUsage: false },
+      },
+    });
+  });
+
   it("decodes a configured Codex auto-compact token limit", () => {
     expect(decodeCodexSettings({ autoCompactTokenLimit: 150_000 }).autoCompactTokenLimit).toBe(
       150_000,

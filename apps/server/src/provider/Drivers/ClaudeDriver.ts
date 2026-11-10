@@ -25,6 +25,7 @@ import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { compareSemverVersions, parseSemver } from "@cafecode/shared/semver";
 import { approvedProviderCliVersion } from "@cafecode/shared/providerCompatibility";
+import { applyPaidUsagePolicyToProviderModels } from "@cafecode/shared/model";
 
 import { makeClaudeTextGeneration } from "../../textGeneration/ClaudeTextGeneration.ts";
 import { makeClaudeAccessChecker, probeClaudeAccess } from "../ClaudeAccessPreflight.ts";
@@ -142,6 +143,11 @@ const withInstanceIdentity =
     readonly accentColor: string | undefined;
     readonly continuationGroupKey: string;
     readonly authActions: ServerProvider["authActions"] | undefined;
+    // Operator's per-instance `allowPaidUsage` setting. Off strips the Fast
+    // mode descriptor from the advertised models and publishes
+    // `paidUsagePolicy: "blocked"`; `ClaudeAdapter` and Claude text generation
+    // independently send `fastMode: false` for the same setting.
+    readonly allowPaidUsage: boolean;
   }) =>
   (snapshot: ServerProviderDraft): ServerProvider => ({
     ...snapshot,
@@ -151,6 +157,11 @@ const withInstanceIdentity =
     ...(input.accentColor ? { accentColor: input.accentColor } : {}),
     ...(input.authActions ? { authActions: input.authActions } : {}),
     continuation: { groupKey: input.continuationGroupKey },
+    paidUsagePolicy: input.allowPaidUsage ? "allowed" : "blocked",
+    models: applyPaidUsagePolicyToProviderModels(
+      snapshot.models,
+      input.allowPaidUsage ? "allowed" : "blocked",
+    ),
     // The renderer chooses between a non-interrupting `thread.turn.steer`
     // and a per-thread follow-up that waits for a safe boundary from this
     // public snapshot,
@@ -250,6 +261,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         displayName,
         accentColor,
         continuationGroupKey,
+        allowPaidUsage: effectiveConfig.allowPaidUsage,
         authActions:
           effectiveConfig.runtimeSource === "bundled" && process.platform === "win32"
             ? { login: true }

@@ -3,6 +3,7 @@ import type {
   ServerProviderAccountRateLimitSnapshot,
   ServerProviderAccountRateLimitWindow,
   ServerProviderPaidUsage,
+  ServerProviderPaidUsagePolicy,
 } from "@cafecode/contracts";
 import { GaugeIcon, RefreshCwIcon } from "lucide-react";
 import {
@@ -85,6 +86,12 @@ interface ProviderUsageRow {
   readonly exhaustionNotices: ReadonlyArray<UsageExhaustionNotice>;
   readonly paidUsage: ServerProviderPaidUsage | null;
   readonly paidUsageStale: boolean;
+  /**
+   * Club-side per-instance `allowPaidUsage` policy. Distinct from `paidUsage`,
+   * which is the provider-reported account billing state Club cannot change.
+   * `null` means the server predates the policy field.
+   */
+  readonly paidUsagePolicy: ServerProviderPaidUsagePolicy | null;
   readonly resetCredits: ProviderResetCredits;
   readonly accountStatus: ReturnType<typeof claudeUsageStatus>;
 }
@@ -475,6 +482,7 @@ export function buildProviderUsageRows(
         exhaustionNotices: [],
         paidUsage: null,
         paidUsageStale: false,
+        paidUsagePolicy: provider.paidUsagePolicy ?? null,
         resetCredits: resetCreditsForProvider(provider),
         accountStatus: claudeUsageStatus(provider, nowMs),
       };
@@ -528,6 +536,7 @@ export function buildProviderUsageRows(
       exhaustionNotices,
       paidUsage,
       paidUsageStale,
+      paidUsagePolicy: provider.paidUsagePolicy ?? null,
       resetCredits: resetCreditsForProvider(provider),
       accountStatus: claudeUsageStatus(provider, nowMs),
     };
@@ -952,6 +961,30 @@ export function ProviderUsageWidget() {
                           Paid usage is stale; showing the last provider-reported values.
                         </div>
                       ) : null}
+                    </div>
+                  ) : null}
+                  {provider.paidUsagePolicy ? (
+                    <div
+                      className="rounded border border-sidebar-border/60 bg-sidebar-accent/35 px-1.5 py-1.5 text-[9px] leading-relaxed text-sidebar-foreground/65"
+                      data-provider-paid-usage-policy={provider.paidUsagePolicy}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium text-sidebar-foreground/75">
+                          Club Code paid usage
+                        </span>
+                        <span className="font-medium">
+                          {provider.paidUsagePolicy === "allowed" ? "Allowed" : "Off"}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 text-sidebar-foreground/55">
+                        {provider.paidUsagePolicy === "allowed"
+                          ? provider.driver === "codex"
+                            ? "Fast and Ultra Fast sends may use credits or extra allowance. Turn off Allow paid usage in Settings → Providers to block them."
+                            : "Fast mode sends may use paid usage. Turn off Allow paid usage in Settings → Providers to block them."
+                          : provider.driver === "codex"
+                            ? "Sends use the standard service tier. Turn on Allow paid usage in Settings → Providers to use Fast or Ultra Fast."
+                            : "Fast mode stays off. Turn on Allow paid usage in Settings → Providers to use it."}
+                      </div>
                     </div>
                   ) : null}
                   {provider.state === "available" ? (

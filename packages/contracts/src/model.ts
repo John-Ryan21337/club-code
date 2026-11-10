@@ -175,9 +175,10 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Partial<
     "gpt-5.3-spark": "gpt-5.3-codex-spark",
   },
   [CLAUDE_DRIVER_KIND]: {
-    // Family aliases track Claude Code 2.1.303: `default` and the bare
-    // family names resolve to the 5.5 generation (Fable to 5.1). Explicit
-    // versioned spellings keep resolving to the model they name.
+    // Family aliases track Claude Code 2.1.322: `default` and the bare
+    // family names resolve to the 5.5 generation, and Fable resolves to 5.2
+    // (Claude Code 2.1.321+). Explicit versioned spellings keep resolving to
+    // the model they name.
     default: "claude-opus-5-5",
     opus: "claude-opus-5-5",
     "opus-5.5": "claude-opus-5-5",
@@ -188,11 +189,14 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Partial<
     "opus-5": "claude-opus-5",
     opus_5: "claude-opus-5",
     "claude-opus-5[1m]": "claude-opus-5",
-    fable: "claude-fable-5-1",
+    fable: "claude-fable-5-2",
+    "fable-5.2": "claude-fable-5-2",
+    "claude-fable-5.2": "claude-fable-5-2",
+    "claude-fable-5-2[1m]": "claude-fable-5-2",
+    "fable[1m]": "claude-fable-5-2",
     "fable-5.1": "claude-fable-5-1",
     "claude-fable-5.1": "claude-fable-5-1",
     "claude-fable-5-1[1m]": "claude-fable-5-1",
-    "fable[1m]": "claude-fable-5-1",
     "fable-5": "claude-fable-5",
     fable5: "claude-fable-5",
     fable_5: "claude-fable-5",

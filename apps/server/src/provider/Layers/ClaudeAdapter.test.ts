@@ -381,6 +381,211 @@ function promptMessageText(message: SDKUserMessage | undefined): string | undefi
   return content.text;
 }
 
+const CLAUDE_CONTEXT_RECOVERY_FAILED_MESSAGE =
+  "This conversation no longer fits in Claude's selected context window and automatic compaction failed. Select the 1M context window or start a new thread.";
+const CLAUDE_CONTEXT_RECOVERY_STARTED_WARNING =
+  "Claude refused the prompt because the conversation exceeded the selected context window; compacting and retrying once.";
+const PROMPT_TOO_LONG_SESSION_ID = "claude-session-prompt-too-long";
+const ZERO_CLAUDE_USAGE = {
+  input_tokens: 0,
+  output_tokens: 0,
+  cache_creation_input_tokens: 0,
+  cache_read_input_tokens: 0,
+} as const;
+
+function promptIteratorFor(
+  input:
+    | {
+        readonly prompt: AsyncIterable<SDKUserMessage>;
+      }
+    | undefined,
+): AsyncIterator<SDKUserMessage> {
+  if (!input) {
+    throw new Error("Expected Claude query input.");
+  }
+  return input.prompt[Symbol.asyncIterator]();
+}
+
+async function nextPromptMessage(iterator: AsyncIterator<SDKUserMessage>): Promise<SDKUserMessage> {
+  const next = await iterator.next();
+  if (next.done) {
+    throw new Error("Expected another queued Claude prompt message.");
+  }
+  return next.value;
+}
+
+/**
+ * Resolve the next queued prompt, or `undefined` when none is queued within the
+ * window. Use only as a test's final prompt read: a timed-out read leaves its
+ * pending `next()` attached to the iterator.
+ */
+async function nextPromptMessageWithin(
+  iterator: AsyncIterator<SDKUserMessage>,
+  timeoutMs: number,
+): Promise<SDKUserMessage | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), timeoutMs);
+  });
+  try {
+    return await Promise.race([
+      iterator.next().then((next) => (next.done ? undefined : next.value)),
+      timeout,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Emit Claude Code's local context-window refusal: a synthetic, zero-usage
+ * assistant record followed by the `prompt_too_long` result correlated to the
+ * refused prompt UUID.
+ */
+function emitPromptTooLongRefusal(query: FakeClaudeQuery, promptUuid: string, label: string): void {
+  query.emit({
+    type: "assistant",
+    session_id: PROMPT_TOO_LONG_SESSION_ID,
+    uuid: `assistant-refusal-${label}`,
+    parent_tool_use_id: null,
+    error: "invalid_request",
+    message: {
+      id: `synthetic-refusal-${label}`,
+      model: "<synthetic>",
+      role: "assistant",
+      content: [{ type: "text", text: "Prompt is too long" }],
+      usage: ZERO_CLAUDE_USAGE,
+    },
+  } as unknown as SDKMessage);
+  query.emit({
+    type: "result",
+    subtype: "success",
+    is_error: true,
+    result: "Prompt is too long",
+    errors: [],
+    num_turns: 0,
+    terminal_reason: "prompt_too_long",
+    usage: ZERO_CLAUDE_USAGE,
+    session_id: PROMPT_TOO_LONG_SESSION_ID,
+    uuid: `result-refusal-${label}`,
+    user_message_uuid: promptUuid,
+  } as unknown as SDKMessage);
+}
+
+/**
+ * Start a user turn, refuse its prompt as too long, and return the recovery
+ * `/compact` command Cafe queued in response. Runtime events are collected
+ * until the single canonical `turn.completed`.
+ */
+const startPromptTooLongRecovery = (harness: ReturnType<typeof makeHarness>) =>
+  Effect.gen(function* () {
+    const adapter = yield* ClaudeAdapter;
+    const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+      Stream.takeUntil((event) => event.type === "turn.completed"),
+      Stream.runCollect,
+      Effect.forkChild,
+    );
+    const session = yield* adapter.startSession({
+      threadId: THREAD_ID,
+      provider: ProviderDriverKind.make("claudeAgent"),
+      runtimeMode: "full-access",
+    });
+    const turn = yield* adapter.sendTurn({
+      threadId: session.threadId,
+      input: "summarize the repository",
+      attachments: [],
+    });
+    const prompts = promptIteratorFor(harness.getLastCreateQueryInput());
+    const original = yield* Effect.promise(() => nextPromptMessage(prompts));
+    assert.equal(original.uuid as string | undefined, turn.turnId);
+
+    harness.query.emit({
+      type: "system",
+      subtype: "init",
+      capabilities: ["msg_lifecycle_v1"],
+      session_id: PROMPT_TOO_LONG_SESSION_ID,
+      uuid: "init-prompt-too-long",
+    } as unknown as SDKMessage);
+    harness.query.emit({
+      type: "command_lifecycle",
+      command_uuid: turn.turnId,
+      state: "started",
+      session_id: PROMPT_TOO_LONG_SESSION_ID,
+      uuid: "lifecycle-original-started",
+    } as unknown as SDKMessage);
+    emitPromptTooLongRefusal(harness.query, turn.turnId, "original");
+    harness.query.emit({
+      type: "command_lifecycle",
+      command_uuid: turn.turnId,
+      state: "completed",
+      session_id: PROMPT_TOO_LONG_SESSION_ID,
+      uuid: "lifecycle-original-completed",
+    } as unknown as SDKMessage);
+
+    const compact = yield* Effect.promise(() => nextPromptMessage(prompts));
+    assert.equal(promptMessageText(compact), "/compact");
+    assert.notEqual(compact.uuid, original.uuid);
+    // Host-generated: never attested as human keyboard input.
+    assert.isUndefined((compact as { readonly origin?: unknown }).origin);
+    const compactUuid = compact.uuid;
+    if (compactUuid === undefined) {
+      throw new Error("Expected a UUID-stamped recovery compact command.");
+    }
+
+    // The turn stays active while recovery runs.
+    const recoveringSessions = yield* adapter.listSessions();
+    assert.equal(recoveringSessions[0]?.status, "running");
+    assert.equal(recoveringSessions[0]?.activeTurnId, turn.turnId);
+
+    return { adapter, session, turn, prompts, original, compactUuid, runtimeEventsFiber };
+  });
+
+function emitCompactOutcome(
+  query: FakeClaudeQuery,
+  compactUuid: string,
+  outcome: "success" | "failed",
+): void {
+  query.emit({
+    type: "system",
+    subtype: "status",
+    status: "compacting",
+    session_id: PROMPT_TOO_LONG_SESSION_ID,
+    uuid: `status-compacting-${outcome}`,
+  } as unknown as SDKMessage);
+  query.emit({
+    type: "system",
+    subtype: "status",
+    status: null,
+    compact_result: outcome,
+    ...(outcome === "failed" ? { compact_error: "compaction failed" } : {}),
+    session_id: PROMPT_TOO_LONG_SESSION_ID,
+    uuid: `status-compact-${outcome}`,
+  } as unknown as SDKMessage);
+  query.emit({
+    type: "result",
+    subtype: outcome === "success" ? "success" : "error_during_execution",
+    is_error: outcome !== "success",
+    ...(outcome === "success" ? { result: "" } : {}),
+    errors: outcome === "success" ? [] : ["Compaction failed"],
+    num_turns: 0,
+    local_command: "/compact",
+    usage: ZERO_CLAUDE_USAGE,
+    session_id: PROMPT_TOO_LONG_SESSION_ID,
+    uuid: `result-compact-${outcome}`,
+    user_message_uuid: compactUuid,
+  } as unknown as SDKMessage);
+}
+
+function runtimeEventMentionsPromptTooLong(event: ProviderRuntimeEvent): boolean {
+  return (
+    (event.type === "content.delta" ||
+      event.type === "item.started" ||
+      event.type === "item.updated" ||
+      event.type === "item.completed") &&
+    JSON.stringify(event.payload).toLowerCase().includes("prompt is too long")
+  );
+}
+
 function claudeProjectDirectoryForTest(homePath: string, cwd: string): string {
   return path.join(homePath, ".claude", "projects", claudeProjectDirectoryName(path, cwd));
 }
@@ -682,13 +887,98 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("sends explicit fastMode false for a Fast selection while paid usage is off", () => {
+    // Default provider settings keep `allowPaidUsage` off, so the saved Fast
+    // choice must not reach the SDK as `fastMode: true`.
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "claude-opus-5",
+          [{ id: "fastMode", value: true }],
+        ),
+        runtimeMode: "full-access",
+      });
+      const options = harness.getLastCreateQueryInput()?.options;
+      assert.ok(options?.settings && typeof options.settings !== "string");
+      assert.equal(options.settings.fastMode, false);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("forwards a Fast selection once the instance allows paid usage", () => {
+    const harness = makeHarness({ claudeConfig: { allowPaidUsage: true } });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "claude-opus-5",
+          [{ id: "fastMode", value: true }],
+        ),
+        runtimeMode: "full-access",
+      });
+      const options = harness.getLastCreateQueryInput()?.options;
+      assert.ok(options?.settings && typeof options.settings !== "string");
+      assert.equal(options.settings.fastMode, true);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("applies the paid-usage switch to Fable 5.2 Fast selections", () => {
+    // Fable 5.2 is the first Fable model with native fast mode. It must follow
+    // the same per-instance paid-usage gate as Opus.
+    const run = (allowPaidUsage: boolean) => {
+      const harness = makeHarness({ claudeConfig: { allowPaidUsage } });
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          modelSelection: createModelSelection(
+            ProviderInstanceId.make("claudeAgent"),
+            "claude-fable-5-2",
+            [{ id: "fastMode", value: true }],
+          ),
+          runtimeMode: "full-access",
+        });
+        const options = harness.getLastCreateQueryInput()?.options;
+        assert.equal(options?.effort, "high");
+        assert.ok(options?.settings && typeof options.settings !== "string");
+        assert.equal(options.settings.fastMode, allowPaidUsage);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    };
+    return Effect.gen(function* () {
+      yield* run(false);
+      yield* run(true);
+    });
+  });
+
   it.effect(
     "binds smaller context or explicit 1M to each Claude query without changing effort",
     () => {
       const harness = makeHarness();
       return Effect.gen(function* () {
         const adapter = yield* ClaudeAdapter;
-        for (const model of ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]) {
+        for (const model of [
+          "claude-opus-5-5",
+          "claude-fable-5-2",
+          "claude-sonnet-5-5",
+          "claude-haiku-5-5",
+        ]) {
           for (const contextWindow of [undefined, "1m"] as const) {
             const threadId = ThreadId.make(`${model}-${contextWindow ?? "small"}`);
             yield* adapter.startSession({
@@ -1535,6 +1825,258 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(harness.query.interruptCalls.length, 1);
       assert.deepEqual(harness.query.cancelAsyncMessageCalls, []);
       assert.equal(harness.query.closeCalls, 0);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect(
+    "compacts and retries a prompt Claude refused as too long exactly once, then completes",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const { adapter, session, turn, prompts, original, compactUuid, runtimeEventsFiber } =
+          yield* startPromptTooLongRecovery(harness);
+
+        emitCompactOutcome(harness.query, compactUuid, "success");
+        const retry = yield* Effect.promise(() => nextPromptMessage(prompts));
+        assert.notEqual(retry.uuid, original.uuid);
+        assert.notEqual(retry.uuid, compactUuid);
+        // The retry is the operator's original input, byte-identical, still
+        // attested as human input.
+        assert.deepEqual(retry.message, original.message);
+        assert.deepEqual(
+          (retry as { readonly origin?: unknown }).origin,
+          (original as { readonly origin?: unknown }).origin,
+        );
+        assert.deepEqual((retry as { readonly origin?: unknown }).origin, { kind: "human" });
+
+        harness.query.emit({
+          type: "assistant",
+          session_id: PROMPT_TOO_LONG_SESSION_ID,
+          uuid: "assistant-retry",
+          parent_tool_use_id: null,
+          message: {
+            id: "assistant-message-retry",
+            content: [{ type: "text", text: "Repository summary ready." }],
+          },
+        } as unknown as SDKMessage);
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          result: "Repository summary ready.",
+          errors: [],
+          num_turns: 1,
+          session_id: PROMPT_TOO_LONG_SESSION_ID,
+          uuid: "result-retry",
+          user_message_uuid: retry.uuid,
+        } as unknown as SDKMessage);
+
+        const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+        const completions = runtimeEvents.filter((event) => event.type === "turn.completed");
+        assert.equal(completions.length, 1);
+        const completed = completions[0];
+        if (completed?.type === "turn.completed") {
+          assert.equal(completed.turnId, turn.turnId);
+          assert.equal(completed.payload.state, "completed");
+        }
+        assert.equal(
+          runtimeEvents.some((event) => event.type === "runtime.error"),
+          false,
+        );
+        assert.equal(runtimeEvents.some(runtimeEventMentionsPromptTooLong), false);
+        assert.equal(
+          runtimeEvents.some(
+            (event) =>
+              event.type === "runtime.warning" &&
+              event.payload.message === CLAUDE_CONTEXT_RECOVERY_STARTED_WARNING,
+          ),
+          true,
+        );
+        const snapshot = yield* adapter.readThread(session.threadId);
+        assert.equal(
+          JSON.stringify(snapshot.turns).toLowerCase().includes("prompt is too long"),
+          false,
+        );
+        assert.equal(harness.query.closeCalls, 0);
+        assert.equal(harness.query.interruptCalls.length, 0);
+        assert.isUndefined(yield* Effect.promise(() => nextPromptMessageWithin(prompts, 50)));
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  it.effect("fails with actionable guidance when the compacted retry is refused again", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { turn, prompts, compactUuid, runtimeEventsFiber } =
+        yield* startPromptTooLongRecovery(harness);
+
+      emitCompactOutcome(harness.query, compactUuid, "success");
+      const retry = yield* Effect.promise(() => nextPromptMessage(prompts));
+      const retryUuid = retry.uuid;
+      if (retryUuid === undefined) {
+        throw new Error("Expected a UUID-stamped retry prompt.");
+      }
+      emitPromptTooLongRefusal(harness.query, retryUuid, "retry");
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const completed = runtimeEvents.find((event) => event.type === "turn.completed");
+      assert.equal(completed?.type, "turn.completed");
+      if (completed?.type === "turn.completed") {
+        assert.equal(completed.turnId, turn.turnId);
+        assert.equal(completed.payload.state, "failed");
+        assert.equal(completed.payload.errorMessage, CLAUDE_CONTEXT_RECOVERY_FAILED_MESSAGE);
+      }
+      const runtimeErrors = runtimeEvents.filter((event) => event.type === "runtime.error");
+      assert.equal(runtimeErrors.length, 1);
+      if (runtimeErrors[0]?.type === "runtime.error") {
+        assert.equal(runtimeErrors[0].payload.message, CLAUDE_CONTEXT_RECOVERY_FAILED_MESSAGE);
+      }
+      assert.equal(runtimeEvents.some(runtimeEventMentionsPromptTooLong), false);
+      // A context refusal is not an authentication failure: keep the session.
+      assert.equal(harness.query.closeCalls, 0);
+      // Never loop: no second compaction and no third prompt.
+      assert.isUndefined(yield* Effect.promise(() => nextPromptMessageWithin(prompts, 50)));
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("fails with actionable guidance when recovery compaction fails", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { turn, prompts, compactUuid, runtimeEventsFiber } =
+        yield* startPromptTooLongRecovery(harness);
+
+      emitCompactOutcome(harness.query, compactUuid, "failed");
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const completed = runtimeEvents.find((event) => event.type === "turn.completed");
+      assert.equal(completed?.type, "turn.completed");
+      if (completed?.type === "turn.completed") {
+        assert.equal(completed.turnId, turn.turnId);
+        assert.equal(completed.payload.state, "failed");
+        assert.equal(completed.payload.errorMessage, CLAUDE_CONTEXT_RECOVERY_FAILED_MESSAGE);
+      }
+      assert.equal(
+        runtimeEvents.some(
+          (event) =>
+            event.type === "runtime.error" &&
+            event.payload.message === CLAUDE_CONTEXT_RECOVERY_FAILED_MESSAGE,
+        ),
+        true,
+      );
+      assert.equal(harness.query.closeCalls, 0);
+      // The refused prompt is not retried after a failed compaction.
+      assert.isUndefined(yield* Effect.promise(() => nextPromptMessageWithin(prompts, 50)));
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("cancels context-window recovery on an explicit interrupt without retrying", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const { adapter, session, turn, prompts, compactUuid, runtimeEventsFiber } =
+        yield* startPromptTooLongRecovery(harness);
+
+      harness.query.interruptResponse = {
+        still_queued: [],
+        cancelled: [compactUuid],
+      };
+      yield* adapter.interruptTurn(session.threadId, turn.turnId);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const completed = runtimeEvents.find((event) => event.type === "turn.completed");
+      assert.equal(completed?.type, "turn.completed");
+      if (completed?.type === "turn.completed") {
+        assert.equal(completed.turnId, turn.turnId);
+        assert.equal(completed.payload.state, "interrupted");
+      }
+      assert.equal(
+        runtimeEvents.some((event) => event.type === "runtime.error"),
+        false,
+      );
+      assert.equal(harness.query.interruptCalls.length, 1);
+      assert.deepEqual(harness.query.cancelAsyncMessageCalls, []);
+      assert.equal(harness.query.closeCalls, 0);
+
+      // A late compact success after Stop must not resurrect the refused prompt.
+      emitCompactOutcome(harness.query, compactUuid, "success");
+      assert.isUndefined(yield* Effect.promise(() => nextPromptMessageWithin(prompts, 50)));
+      const sessions = yield* adapter.listSessions();
+      assert.equal(sessions[0]?.activeTurnId, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("keeps ordinary Claude execution errors on the existing failure path", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "run the migration",
+        attachments: [],
+      });
+      const prompts = promptIteratorFor(harness.getLastCreateQueryInput());
+      yield* Effect.promise(() => nextPromptMessage(prompts));
+
+      harness.query.emit({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        errors: ["Tool execution crashed"],
+        num_turns: 3,
+        usage: { input_tokens: 1200, output_tokens: 80 },
+        session_id: "claude-session-ordinary-error",
+        uuid: "result-ordinary-error",
+        user_message_uuid: turn.turnId,
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const completed = runtimeEvents.find((event) => event.type === "turn.completed");
+      assert.equal(completed?.type, "turn.completed");
+      if (completed?.type === "turn.completed") {
+        assert.equal(completed.payload.state, "failed");
+        assert.equal(completed.payload.errorMessage, "Tool execution crashed");
+      }
+      assert.equal(
+        runtimeEvents.some(
+          (event) =>
+            event.type === "runtime.error" && event.payload.message === "Tool execution crashed",
+        ),
+        true,
+      );
+      assert.equal(
+        runtimeEvents.some(
+          (event) =>
+            event.type === "runtime.warning" &&
+            event.payload.message === CLAUDE_CONTEXT_RECOVERY_STARTED_WARNING,
+        ),
+        false,
+      );
+      assert.equal(harness.query.closeCalls, 0);
+      assert.isUndefined(yield* Effect.promise(() => nextPromptMessageWithin(prompts, 50)));
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -3555,7 +4097,9 @@ describe("ClaudeAdapterLive", () => {
   });
 
   it.effect("reports a requested Claude fast-mode fallback once per upstream status", () => {
-    const harness = makeHarness();
+    // The upstream fallback only fires when Club actually requested Fast, which
+    // requires this instance to allow paid usage.
+    const harness = makeHarness({ claudeConfig: { allowPaidUsage: true } });
     return Effect.gen(function* () {
       const context = yield* Effect.context<never>();
       const runFork = Effect.runForkWith(context);

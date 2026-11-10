@@ -20,6 +20,14 @@ Claude offers 200K and 1M on its compatible models. Each query receives its own
 `CLAUDE_CODE_DISABLE_1M_CONTEXT` setting. Club Code does not change the global CLI configuration.
 The 200K choice sets this flag to `1`; the 1M choice sets it to `0`.
 
+A resumed Claude conversation can outgrow the selected window. Claude Code then refuses the
+prompt locally with "Prompt is too long" and does not call the API. Club Code hides that
+synthetic reply and keeps the turn active. It adds a work-log warning, runs `/compact` once, and
+then resends the original prompt once. Only the refused prompt is resent, and only when the
+refusal proves that the API did not receive it. An explicit Stop cancels the recovery. If
+compaction fails or Claude refuses the prompt again, the turn fails with this message: select the
+1M context window or start a new thread.
+
 Known hosted Codex models use the pinned native catalog to expose supported context budgets.
 These are configurable budgets within the model's capacity. They are not separate model tiers.
 Club Code does not label an 872K input capacity as 1M. Context changes take effect through the
@@ -42,6 +50,17 @@ Fast as unavailable. Claude retains its supported Fast control.
 
 Fast and Ultra Fast can consume more allowance or paid credits. Selecting a speed does not
 change reasoning effort or context. Unsupported saved speed choices return to Standard.
+
+### Allow paid usage
+
+Each Codex and Claude provider instance has an **Allow paid usage** switch in Settings →
+Providers. It is Off by default. While it is Off, Club Code sends every request at the standard
+service tier (Codex) or with Fast mode off (Claude), including Git text generation, even when a
+thread's saved speed choice is Fast or Ultra Fast. The composer shows a Standard chip that
+explains the block, and the speed controls are hidden until the switch is On. Turning the switch
+On restores the saved speed choice without changing it. The switch only controls which routes
+Club Code requests; it does not change account billing settings at OpenAI or Anthropic, and the
+provider's own paid-usage status still appears separately in the usage widget.
 
 References:
 

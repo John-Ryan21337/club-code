@@ -26,6 +26,7 @@ describe("ProviderSettingsForm helpers", () => {
       "shadowHomePath",
       "autoCompactTokenLimit",
       "ultraCaching",
+      "allowPaidUsage",
     ]);
   });
 

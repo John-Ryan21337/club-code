@@ -328,6 +328,19 @@ export const ServerProviderRuntimeCapabilities = Schema.Struct({
 });
 export type ServerProviderRuntimeCapabilities = typeof ServerProviderRuntimeCapabilities.Type;
 
+/**
+ * Club-side policy deciding whether a provider instance may request paid
+ * routes: Codex Fast (`priority`) / Ultra Fast (`ultrafast`) service tiers and
+ * Claude Fast mode. It projects the operator's per-instance `allowPaidUsage`
+ * provider setting so renderers can hide paid speed controls and explain the
+ * block. It is not account billing state: provider-reported credit and
+ * extra-usage status lives in `accountRateLimits.paidUsage`, and Club Code can
+ * never change that account-level setting. Absence means a pre-policy server;
+ * renderers treat it as `allowed` for backward compatibility.
+ */
+export const ServerProviderPaidUsagePolicy = Schema.Literals(["allowed", "blocked"]);
+export type ServerProviderPaidUsagePolicy = typeof ServerProviderPaidUsagePolicy.Type;
+
 export const ServerProviderContinuation = Schema.Struct({
   groupKey: TrimmedNonEmptyString,
 });
@@ -472,6 +485,7 @@ export const ServerProvider = Schema.Struct({
   skills: Schema.Array(ServerProviderSkill).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   accountRateLimits: Schema.optionalKey(ServerProviderAccountRateLimits),
   runtimeCapabilities: Schema.optionalKey(ServerProviderRuntimeCapabilities),
+  paidUsagePolicy: Schema.optionalKey(ServerProviderPaidUsagePolicy),
   probeDiagnostics: Schema.optionalKey(ServerProviderProbeDiagnostics),
   probePhases: Schema.optionalKey(ServerProviderProbePhaseDiagnosticsList),
   versionAdvisory: Schema.optionalKey(ServerProviderVersionAdvisory),

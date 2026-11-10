@@ -60,6 +60,7 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 import { applyStderrWarningBudget, makeStderrWarningBudgetState } from "../stderrWarningBudget.ts";
 
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
+import { CODEX_LMSTUDIO_ROOT_ARGS } from "../codexLmStudioLaunch.ts";
 import { rewindCodexThreadWithClient } from "./CodexThreadRewind.ts";
 import type { ProviderAdapterRewindOutcomeUnknownError } from "../Errors.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
@@ -392,10 +393,9 @@ export function buildCodexAppServerArgs(
           `features.multi_agent_v2.max_concurrent_threads_per_session=${codexSubagentThreadLimit + 1}`,
         ];
   if (ossMode) {
-    // Keep documented global flags before the app-server subcommand and name
-    // LM Studio explicitly so a non-interactive session never opens Codex's
-    // local-provider picker or silently chooses Ollama.
-    return ["--oss", "--local-provider", "lmstudio", "app-server", ...subagentThreadLimitArgs];
+    // `--oss` alone does not reach app-server; the root model_provider
+    // override does. See CODEX_LMSTUDIO_ROOT_ARGS for the verified reason.
+    return [...CODEX_LMSTUDIO_ROOT_ARGS, "app-server", ...subagentThreadLimitArgs];
   }
   if (modelProvider === "gcp") {
     // Native Vertex AI already uses HTTPS and its own credential source.
@@ -1932,6 +1932,7 @@ function readNotificationThreadId(notification: CodexServerNotification): string
     case "thread/unarchived":
     case "thread/closed":
     case "thread/name/updated":
+    case "thread/section/changed":
     case "thread/attachment/updated":
     case "thread/goal/updated":
     case "thread/goal/cleared":
@@ -2154,6 +2155,7 @@ function shouldSuppressChildConversationNotification(method: string): boolean {
     method === "thread/environment/disconnected" ||
     method === "thread/compacted" ||
     method === "thread/name/updated" ||
+    method === "thread/section/changed" ||
     method === "thread/tokenUsage/updated" ||
     method === "thread/goal/updated" ||
     method === "thread/goal/cleared" ||

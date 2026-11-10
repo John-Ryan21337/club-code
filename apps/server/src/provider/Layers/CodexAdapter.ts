@@ -116,26 +116,85 @@ const CODEX_TURN_DIFF_PREVIEW_CHARS = 4_096;
 const CODEX_HOOK_OUTPUT_PREVIEW_CHARS = 4_096;
 const CODEX_PLUGIN_ATTRIBUTION_MAX_CHARS = 512;
 
-function codexServiceTierOverride(
+type CodexServiceTier = NonNullable<CodexSessionRuntimeOptions["serviceTier"]>;
+
+/**
+ * The service tier the operator's model selection asks for, before the
+ * per-instance paid-usage policy is applied.
+ */
+function codexRequestedServiceTier(
   modelSelection: ProviderSendTurnInput["modelSelection"],
   instanceId: ProviderInstanceId,
-): Pick<CodexSessionRuntimeOptions, "serviceTier"> {
+): CodexServiceTier {
   if (modelSelection?.instanceId !== instanceId) {
-    return { serviceTier: "default" };
+    return "default";
   }
   const tier = getModelSelectionStringOptionValue(modelSelection, "serviceTier");
   if (tier === "default" || tier === "priority" || tier === "ultrafast") {
-    return { serviceTier: tier };
+    return tier;
   }
   if (modelSelection?.options?.some((option) => option.id === "serviceTier")) {
-    return { serviceTier: "default" };
+    return "default";
   }
   const fastMode = getModelSelectionBooleanOptionValue(modelSelection, "fastMode");
   // Codex 0.154.0 uses `priority` for Fast and `default` for an explicit
   // standard route. An unset preference explicitly selects standard speed. A
   // backend-advertised `ultrafast` tier is a distinct paid route and is never
   // selected by this boolean.
-  return { serviceTier: fastMode === true ? "priority" : "default" };
+  return fastMode === true ? "priority" : "default";
+}
+
+/**
+ * Resolve the service tier Club sends to app-server. `priority` (Fast) and
+ * `ultrafast` (Ultra Fast) spend credits or extra allowance beyond the
+ * included plan, so they are honored only when the instance's `allowPaidUsage`
+ * provider setting is on (default off). A blocked request falls back to the
+ * explicit standard tier rather than omitting the field, so the native CLI
+ * default can never re-enable a paid route behind the operator's back.
+ */
+function codexServiceTierOverride(
+  modelSelection: ProviderSendTurnInput["modelSelection"],
+  instanceId: ProviderInstanceId,
+  allowPaidUsage: boolean,
+): Pick<CodexSessionRuntimeOptions, "serviceTier"> {
+  const requested = codexRequestedServiceTier(modelSelection, instanceId);
+  return { serviceTier: allowPaidUsage || requested === "default" ? requested : "default" };
+}
+
+/**
+ * Diagnostic companion to `codexServiceTierOverride`: the paid tier that the
+ * selection asked for but the paid-usage policy refused, or `undefined` when
+ * nothing was blocked. Logged (tier name only, never prompt text) so an
+ * operator wondering why a Fast selection ran at standard speed can find the
+ * policy decision in the backend log.
+ */
+function codexBlockedPaidServiceTier(
+  modelSelection: ProviderSendTurnInput["modelSelection"],
+  instanceId: ProviderInstanceId,
+  allowPaidUsage: boolean,
+): Exclude<CodexServiceTier, "default"> | undefined {
+  if (allowPaidUsage) {
+    return undefined;
+  }
+  const requested = codexRequestedServiceTier(modelSelection, instanceId);
+  return requested === "default" ? undefined : requested;
+}
+
+function logCodexBlockedPaidServiceTier(input: {
+  readonly phase: "thread/start" | "turn/start";
+  readonly threadId: ThreadId;
+  readonly blockedServiceTier: Exclude<CodexServiceTier, "default"> | undefined;
+}): Effect.Effect<void> {
+  if (input.blockedServiceTier === undefined) {
+    return Effect.void;
+  }
+  return Effect.logInfo("codex.serviceTier/paidUsageBlocked", {
+    phase: input.phase,
+    threadId: input.threadId,
+    requestedServiceTier: input.blockedServiceTier,
+    effectiveServiceTier: "default",
+    reason: "provider_setting_allowPaidUsage_off",
+  });
 }
 
 function codexEffortOverride(
@@ -2098,6 +2157,16 @@ function mapToRuntimeEvents(
     return [];
   }
 
+  if (event.method === "thread/section/changed") {
+    // Codex rust-v0.167.0 broadcasts this after a provider thread moves into,
+    // within, or out of a provider sidebar section. Club decodes it for wire
+    // compatibility but never uses provider sections as sidebar truth: one
+    // Club thread can switch provider instances or hold several provider
+    // identities, and Club orders its own durable thread list.
+    readPayload(EffectCodexSchema.V2ThreadSectionChangedNotification, event.payload);
+    return [];
+  }
+
   if (event.method === "turn/moderationMetadata") {
     // Upstream Codex rust-v0.143.0 marks this notification experimental and the
     // TUI routes it to the thread but does not render it in chat. Do the same
@@ -2896,6 +2965,15 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           modelContextWindow === undefined
             ? effectiveAutoCompactTokenLimit
             : Math.min(effectiveAutoCompactTokenLimit, Math.floor(modelContextWindow * 0.9));
+        yield* logCodexBlockedPaidServiceTier({
+          phase: "thread/start",
+          threadId: input.threadId,
+          blockedServiceTier: codexBlockedPaidServiceTier(
+            input.modelSelection,
+            boundInstanceId,
+            codexConfig.allowPaidUsage,
+          ),
+        });
         const runtimeInput: CodexSessionRuntimeOptions = {
           ...(customInstructions !== undefined ? { customInstructions } : {}),
           threadId: input.threadId,
@@ -2926,7 +3004,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           modelProvider: codexConfig.modelProvider,
           agentBrowserMcp,
           ...(contextModelSelection !== undefined ? { model: contextModelSelection.model } : {}),
-          ...codexServiceTierOverride(input.modelSelection, boundInstanceId),
+          ...codexServiceTierOverride(
+            input.modelSelection,
+            boundInstanceId,
+            codexConfig.allowPaidUsage,
+          ),
           effort: codexEffortOverride(input.modelSelection, boundInstanceId, codexConfig.ossMode),
           ...(currentTransportPolicy !== undefined
             ? { transportPolicy: currentTransportPolicy }
@@ -3163,6 +3245,15 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       boundInstanceId,
       codexConfig.ossMode,
     );
+    yield* logCodexBlockedPaidServiceTier({
+      phase: "turn/start",
+      threadId: input.threadId,
+      blockedServiceTier: codexBlockedPaidServiceTier(
+        input.modelSelection,
+        boundInstanceId,
+        codexConfig.allowPaidUsage,
+      ),
+    });
     const turnInput =
       input.modelSelection?.instanceId === boundInstanceId
         ? withCodexDelegationRequest(
@@ -3181,7 +3272,11 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ? { model: input.modelSelection.model }
           : {}),
         ...(reasoningEffort ? { effort: reasoningEffort } : {}),
-        ...codexServiceTierOverride(input.modelSelection, boundInstanceId),
+        ...codexServiceTierOverride(
+          input.modelSelection,
+          boundInstanceId,
+          codexConfig.allowPaidUsage,
+        ),
         ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
         ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
       })

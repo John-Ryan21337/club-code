@@ -63,6 +63,7 @@ const makeCodexConfig = (overrides: Partial<CodexSettings>): CodexSettings => ({
   customModels: [],
   autoCompactTokenLimit: CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
   ultraCaching: false,
+  allowPaidUsage: false,
   ...overrides,
 });
 
@@ -74,6 +75,7 @@ const makeClaudeConfig = (overrides: Partial<ClaudeSettings>): ClaudeSettings =>
   customModels: [],
   launchArgs: "",
   ultraCaching: false,
+  allowPaidUsage: false,
   ...overrides,
 });
 

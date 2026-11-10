@@ -240,8 +240,8 @@ try {
   ) | Set-Content -LiteralPath $npmUserConfig -Encoding UTF8
 
   $results = @(
-    Install-ProviderPackage -Name "Codex" -PackageName "@openai/codex" -Version "0.166.0" -ProviderSlug "codex" -BinaryName "codex" -ManagedRoot $managedRoot -NodeTarget $nodeTarget -NpmPath $npmPath -NpmCache $npmCache -NpmUserConfig $npmUserConfig
-    Install-ProviderPackage -Name "Claude" -PackageName "@anthropic-ai/claude-code" -Version "2.1.317" -ProviderSlug "claude" -BinaryName "claude" -ManagedRoot $managedRoot -NodeTarget $nodeTarget -NpmPath $npmPath -NpmCache $npmCache -NpmUserConfig $npmUserConfig
+    Install-ProviderPackage -Name "Codex" -PackageName "@openai/codex" -Version "0.167.0" -ProviderSlug "codex" -BinaryName "codex" -ManagedRoot $managedRoot -NodeTarget $nodeTarget -NpmPath $npmPath -NpmCache $npmCache -NpmUserConfig $npmUserConfig
+    Install-ProviderPackage -Name "Claude" -PackageName "@anthropic-ai/claude-code" -Version "2.1.322" -ProviderSlug "claude" -BinaryName "claude" -ManagedRoot $managedRoot -NodeTarget $nodeTarget -NpmPath $npmPath -NpmCache $npmCache -NpmUserConfig $npmUserConfig
   )
 
   Write-JsonFile -Path (Join-Path $managedRoot "install-result.json") -Value ([ordered]@{

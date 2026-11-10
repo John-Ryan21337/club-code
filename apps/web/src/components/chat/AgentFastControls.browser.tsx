@@ -118,6 +118,48 @@ it("offers Ultra Fast only when advertised and persists a supported speed withou
     .toBeVisible();
 });
 
+it("shows a non-actionable Standard chip and never persists a speed while paid usage is off", async () => {
+  const screen = await render(
+    <ComposerFastMode
+      {...props}
+      models={models}
+      modelOptions={[{ id: "fastMode", value: true }]}
+      paidUsagePolicy="blocked"
+    />,
+  );
+  const chip = page.getByRole("status", { name: /Speed: Standard/ });
+  await expect.element(chip).toBeVisible();
+  await expect.element(chip).toHaveAttribute("data-composer-fast-mode", "blocked");
+  await expect.element(chip).toHaveTextContent("Standard");
+  await expect.element(page.getByRole("button", { name: /Fast mode/ })).not.toBeInTheDocument();
+  await expect
+    .element(page.getByRole("button", { name: "Speed options", exact: true }))
+    .not.toBeInTheDocument();
+  await chip.click();
+  expect(mocks.save).not.toHaveBeenCalled();
+  await screen.rerender(
+    <ComposerFastMode
+      {...props}
+      provider={ProviderDriverKind.make("claudeAgent")}
+      models={models}
+      modelOptions={[{ id: "fastMode", value: true }]}
+      paidUsagePolicy="blocked"
+    />,
+  );
+  await expect
+    .element(page.getByRole("status", { name: /Speed: Standard/ }))
+    .toHaveAttribute("data-composer-fast-mode", "blocked");
+  await screen.rerender(
+    <ComposerFastMode
+      {...props}
+      models={models}
+      modelOptions={[{ id: "fastMode", value: true }]}
+      paidUsagePolicy="allowed"
+    />,
+  );
+  await expect.element(page.getByRole("button", { name: "Fast mode: On" })).toBeVisible();
+});
+
 it("explains unavailable Ultra Fast for Fast-only Codex without offering it to Claude", async () => {
   const screen = await render(
     <ComposerFastMode

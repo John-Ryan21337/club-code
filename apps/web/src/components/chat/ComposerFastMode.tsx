@@ -4,6 +4,7 @@ import {
   type ProviderOptionSelection,
   type ScopedThreadRef,
   type ServerProviderModel,
+  type ServerProviderPaidUsagePolicy,
 } from "@cafecode/contracts";
 import { getProviderOptionDescriptors } from "@cafecode/shared/model";
 import { ZapIcon } from "lucide-react";
@@ -23,6 +24,14 @@ export const ComposerFastMode = memo(function ComposerFastMode(props: {
   models: ReadonlyArray<ServerProviderModel>;
   modelOptions: ReadonlyArray<ProviderOptionSelection> | null | undefined;
   threadTarget: ScopedThreadRef | DraftId;
+  /**
+   * Club-side `allowPaidUsage` policy from the selected provider snapshot.
+   * `blocked` means the server strips the Fast/Ultra Fast descriptors and
+   * forces the standard tier, so the composer shows a non-actionable Standard
+   * chip that points to Settings → Providers instead of a speed control. A
+   * missing policy (older server) behaves as `allowed`.
+   */
+  paidUsagePolicy?: ServerProviderPaidUsagePolicy | undefined;
 }) {
   const helpId = useId();
   const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
@@ -37,6 +46,36 @@ export const ComposerFastMode = memo(function ComposerFastMode(props: {
   const descriptor = descriptors.find(
     (option) => option.id === "fastMode" && option.type === "boolean",
   );
+  if (props.paidUsagePolicy === "blocked") {
+    const blockedHelp =
+      props.provider === "codex"
+        ? "Paid usage is off for this provider, so sends use the standard service tier. Turn on Allow paid usage in Settings → Providers to use Fast or Ultra Fast."
+        : "Paid usage is off for this provider, so Fast mode stays off. Turn on Allow paid usage in Settings → Providers to use Fast mode.";
+    return (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <span
+              role="status"
+              aria-label="Speed: Standard. Paid usage is off for this provider."
+              aria-describedby={helpId}
+              data-composer-fast-mode="blocked"
+              className="inline-flex h-8 shrink-0 cursor-default items-center gap-1 px-2 text-sm text-muted-foreground"
+            />
+          }
+        >
+          <ZapIcon aria-hidden="true" className="size-4 opacity-50" />
+          <span>Standard</span>
+          <span id={helpId} className="sr-only">
+            {blockedHelp}
+          </span>
+        </TooltipTrigger>
+        <TooltipPopup side="top" className="max-w-72">
+          {blockedHelp}
+        </TooltipPopup>
+      </Tooltip>
+    );
+  }
   if (!descriptor && !tierDescriptor) return null;
   const value = descriptor?.currentValue === true;
   const state = value === true ? "On" : "Off";

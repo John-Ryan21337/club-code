@@ -304,7 +304,15 @@ describe("buildCodexAppServerArgs", () => {
       ]);
       assert.deepStrictEqual(
         buildCodexAppServerArgs({ responsesWebsockets: "disabled" }, true, limit),
-        ["--oss", "--local-provider", "lmstudio", "app-server", ...subagentThreadLimitArgs],
+        [
+          "--oss",
+          "--local-provider",
+          "lmstudio",
+          "-c",
+          'model_provider="lmstudio"',
+          "app-server",
+          ...subagentThreadLimitArgs,
+        ],
       );
       assert.deepStrictEqual(
         buildCodexAppServerArgs({ responsesWebsockets: "disabled" }, false, limit).slice(-4),
@@ -338,6 +346,8 @@ describe("buildCodexAppServerArgs", () => {
       "--oss",
       "--local-provider",
       "lmstudio",
+      "-c",
+      'model_provider="lmstudio"',
       "app-server",
     ]);
   });
@@ -364,6 +374,8 @@ describe("buildCodexAppServerArgs", () => {
       "--oss",
       "--local-provider",
       "lmstudio",
+      "-c",
+      'model_provider="lmstudio"',
       "app-server",
     ]);
   });

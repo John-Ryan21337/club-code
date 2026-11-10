@@ -61,6 +61,8 @@ describe("parseCodexModelListResponse", () => {
       "--oss",
       "--local-provider",
       "lmstudio",
+      "-c",
+      'model_provider="lmstudio"',
       "app-server",
     ]);
   });

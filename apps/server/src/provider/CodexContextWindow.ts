@@ -1,6 +1,6 @@
 import type { ModelSelection, ProviderOptionDescriptor } from "@cafecode/contracts";
 
-// Exact input-context capacities from the pinned Codex 0.166.0 model catalog.
+// Exact input-context capacities from the pinned Codex 0.167.0 model catalog (unchanged from 0.166.0).
 // These are configurable budgets, not larger capacities for unknown/local models.
 const CAPACITIES: Readonly<Record<string, readonly [number, number]>> = {
   "gpt-6-astra": [272_000, 872_000],

@@ -37,6 +37,7 @@ import { applyServerSettingsPatch } from "@cafecode/shared/serverSettings";
 import {
   buildCodexProviderAppServerArgs,
   checkCodexCliProviderStatus,
+  checkCodexOssProviderStatus,
   checkCodexProviderStatus,
   CODEX_CLI_LOGIN_STATUS_TIMEOUT_MESSAGE,
   discoverLmStudioModels,
@@ -333,6 +334,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           "--oss",
           "--local-provider",
           "lmstudio",
+          "-c",
+          'model_provider="lmstudio"',
           "app-server",
         ]);
         assert.deepStrictEqual(buildCodexProviderAppServerArgs(false), ["app-server"]);
@@ -2456,6 +2459,104 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           }),
       );
 
+      describe("checkCodexOssProviderStatus", () => {
+        const lmStudioClient = (chatModel: string) =>
+          HttpClient.make((request) =>
+            Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                request.url.endsWith("/api/v1/models")
+                  ? Response.json({
+                      models: [
+                        {
+                          type: "llm",
+                          key: chatModel,
+                          display_name: "Local Chat Model",
+                          loaded_instances: [{ id: chatModel }],
+                        },
+                        {
+                          type: "embedding",
+                          key: "local/embedder",
+                          display_name: "Local Embedder",
+                          loaded_instances: [{ id: "local/embedder" }],
+                        },
+                      ],
+                    })
+                  : Response.json({ data: [{ id: chatModel }, { id: "local/embedder" }] }),
+              ),
+            ),
+          );
+
+        // Regression: a status probe that starts `codex app-server` blocks on
+        // Codex's one-time state-DB index for a fresh shadow home, times out,
+        // and hides every LM Studio model. Only `--version` may be spawned.
+        it.effect("lists LM Studio chat models without starting codex app-server", () =>
+          Effect.gen(function* () {
+            const { layer, commands } = recordingMockSpawnerLayer(() => ({
+              stdout: "codex-cli 0.166.0\n",
+              stderr: "",
+              code: 0,
+            }));
+            const status = yield* checkCodexOssProviderStatus(
+              decodeCodexSettings({ ossMode: true, customModels: ["cloud-only-model"] }),
+              lmStudioClient("local/chat-model"),
+            ).pipe(Effect.provide(layer));
+
+            assert.deepStrictEqual(
+              commands.map((command) => command.args),
+              [["--version"]],
+            );
+            assert.strictEqual(status.status, "ready");
+            assert.strictEqual(status.version, "0.166.0");
+            assert.strictEqual(status.auth.type, "local");
+            assert.deepStrictEqual(
+              status.models.map((model) => model.slug),
+              ["local/chat-model"],
+            );
+          }),
+        );
+
+        it.effect("reports an offline LM Studio server without listing models", () =>
+          Effect.gen(function* () {
+            const status = yield* Effect.gen(function* () {
+              const offlineClient = yield* HttpClient.HttpClient;
+              return yield* checkCodexOssProviderStatus(
+                decodeCodexSettings({ ossMode: true }),
+                offlineClient,
+              );
+            }).pipe(
+              Effect.provide(FetchHttpClient.layer),
+              Effect.provideService(FetchHttpClient.Fetch, () =>
+                Promise.reject(new TypeError("connect ECONNREFUSED 127.0.0.1:1234")),
+              ),
+              Effect.provide(
+                mockSpawnerLayer(() => ({ stdout: "codex-cli 0.166.0\n", stderr: "", code: 0 })),
+              ),
+            );
+
+            assert.strictEqual(status.status, "error");
+            assert.match(status.message ?? "", /LM Studio did not answer/);
+            assert.deepStrictEqual(status.models, []);
+          }),
+        );
+
+        it.effect("keeps a failed Codex CLI as an error even when LM Studio is ready", () =>
+          Effect.gen(function* () {
+            const status = yield* checkCodexOssProviderStatus(
+              decodeCodexSettings({ ossMode: true }),
+              lmStudioClient("local/chat-model"),
+            ).pipe(
+              Effect.provide(
+                mockSpawnerLayer(() => ({ stdout: "", stderr: "broken install\n", code: 1 })),
+              ),
+            );
+
+            assert.strictEqual(status.status, "error");
+            assert.deepStrictEqual(status.models, []);
+          }),
+        );
+      });
+
       it.effect("uses the Codex CLI login status path for lightweight provider status", () =>
         Effect.gen(function* () {
           const status = yield* checkCodexCliProviderStatus(defaultCodexSettings).pipe(
@@ -2981,10 +3082,28 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
               "claude-fable-5",
               "claude-sonnet-5",
             ],
+            upgrade:
+              "Claude Code v2.1.303 is too old for Claude Fable 5.2. Upgrade to v2.1.321 or newer to access it.",
+          },
+          {
+            version: "2.1.321",
+            slugs: [
+              "claude-opus-5-5",
+              "claude-fable-5-2",
+              "claude-fable-5-1",
+              "claude-sonnet-5-5",
+              "claude-haiku-5-5",
+              "claude-opus-5",
+              "claude-opus-4-7",
+              "claude-opus-4-8",
+              "claude-fable-5",
+              "claude-sonnet-5",
+            ],
           },
         ];
         const gatedSlugs = [
           "claude-opus-5-5",
+          "claude-fable-5-2",
           "claude-fable-5-1",
           "claude-sonnet-5-5",
           "claude-haiku-5-5",
@@ -3098,6 +3217,45 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           )
           .map((model) => model.slug);
         assert.deepStrictEqual(fastModeSlugs, ["claude-opus-5", "claude-opus-4-8"]);
+
+        // Fable 5.2 (Claude Code 2.1.321+) supports adaptive effort through
+        // `max`, opt-in fast mode, and a 1M native context. Club defaults it to
+        // High effort and the 200K budget like the other current models.
+        const fable52 = getBuiltInClaudeModelsForVersion("2.1.322").find(
+          (model) => model.slug === "claude-fable-5-2",
+        );
+        assert.strictEqual(fable52?.name, "Claude Fable 5.2");
+        const fable52Descriptors = fable52?.capabilities?.optionDescriptors ?? [];
+        const fable52Effort = fable52Descriptors.find(
+          (descriptor) => descriptor.type === "select" && descriptor.id === "effort",
+        );
+        assert.deepStrictEqual(
+          fable52Effort?.type === "select"
+            ? fable52Effort.options.map((option) => option.id)
+            : undefined,
+          ["low", "medium", "high", "xhigh", "max", "ultrathink"],
+        );
+        assert.equal(fable52Effort?.currentValue, "high");
+        const fable52Context = fable52Descriptors.find(
+          (descriptor) => descriptor.type === "select" && descriptor.id === "contextWindow",
+        );
+        assert.equal(fable52Context?.currentValue, "200k");
+        assert.strictEqual(
+          fable52Descriptors.some(
+            (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",
+          ),
+          true,
+        );
+        // Fable 5.1 does not support fast mode upstream.
+        const fable51 = getBuiltInClaudeModelsForVersion("2.1.322").find(
+          (model) => model.slug === "claude-fable-5-1",
+        );
+        assert.strictEqual(
+          fable51?.capabilities?.optionDescriptors?.some(
+            (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",
+          ),
+          false,
+        );
 
         const latestSlugs = getBuiltInClaudeModelsForVersion("2.1.219").map((model) => model.slug);
         assert.strictEqual(

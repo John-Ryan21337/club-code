@@ -128,6 +128,7 @@ function createBaseServerConfig(): ServerConfig {
           customModels: [],
           autoCompactTokenLimit: CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
           ultraCaching: false,
+          allowPaidUsage: false,
         },
         claudeAgent: {
           enabled: true,
@@ -137,6 +138,7 @@ function createBaseServerConfig(): ServerConfig {
           customModels: [],
           launchArgs: "",
           ultraCaching: false,
+          allowPaidUsage: false,
         },
       },
     },
