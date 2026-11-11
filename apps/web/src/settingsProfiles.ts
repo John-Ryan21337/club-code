@@ -54,6 +54,7 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   notificationsEnabled: "consent",
   completionAlertSoundEnabled: "include",
   completionAlertSpeechEnabled: "include",
+  completionAlertSpeechChimeEnabled: "include",
   completionAlertLanguage: "include",
   completionAlertEnglishVoiceGender: "include",
   completionAlertJapaneseVoiceGender: "include",

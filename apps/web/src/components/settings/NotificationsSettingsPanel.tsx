@@ -166,6 +166,7 @@ export function NotificationsSettingsPanel() {
     englishGender: settings.completionAlertEnglishVoiceGender,
     japaneseGender: settings.completionAlertJapaneseVoiceGender,
     stereoOrder: settings.completionAlertDualStereoOrder,
+    announcementChime: settings.completionAlertSpeechChimeEnabled,
   } as const;
 
   const handleTest = async () => {
@@ -270,6 +271,20 @@ export function NotificationsSettingsPanel() {
                 updateSettings({ completionAlertSpeechEnabled: Boolean(checked) })
               }
               aria-label="Enable spoken completion alert"
+            />
+          }
+        />
+        <SettingsRow
+          title="Station announcement chime"
+          description="Before the spoken alert, play an original rising four-note chime in the style of a Japanese station announcement."
+          control={
+            <Switch
+              checked={settings.completionAlertSpeechChimeEnabled}
+              disabled={!settings.completionAlertSpeechEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ completionAlertSpeechChimeEnabled: Boolean(checked) })
+              }
+              aria-label="Play station announcement chime before spoken alert"
             />
           }
         />

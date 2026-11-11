@@ -16,6 +16,11 @@ export interface CompletionAlertPreferences {
   readonly englishGender: CompletionSpeechGender;
   readonly japaneseGender: CompletionSpeechGender;
   readonly stereoOrder: "ja-left-en-right" | "en-left-ja-right";
+  /**
+   * Play the station-style pre-announcement chime before the speech. Optional
+   * so callers that only exercise speech keep the plain behavior.
+   */
+  readonly announcementChime?: boolean;
 }
 
 export interface CompletionAlertPlaybackReport {
@@ -30,6 +35,33 @@ export interface CompletionAlertPlaybackReport {
 
 const MAX_NATIVE_REASON_LENGTH = 512;
 const MAX_AUDIO_PLAYBACK_MS = 17_000;
+
+/**
+ * Pre-announcement chime in the style of a Japanese station public-address
+ * system: four bell-like notes rising through a major arpeggio (the generic
+ * "pin-pon-pan-pon" attention signal) before the announcement begins.
+ *
+ * It is synthesized here from plain oscillators. It is not a recording, and it
+ * intentionally does not reproduce any railway departure melody or a
+ * manufacturer's chime sample.
+ */
+export const ANNOUNCEMENT_CHIME_NOTES = [
+  { frequency: 698.46, offset: 0, decay: 1.1 }, // F5
+  { frequency: 880.0, offset: 0.36, decay: 1.1 }, // A5
+  { frequency: 1046.5, offset: 0.72, decay: 1.1 }, // C6
+  { frequency: 1396.91, offset: 1.08, decay: 1.5 }, // F6, rings out
+] as const;
+/**
+ * Bell timbre: a fundamental plus quieter, faster-decaying upper partials.
+ * The inharmonic 2.76 ratio adds the metallic strike of a struck bar.
+ */
+const ANNOUNCEMENT_CHIME_PARTIALS = [
+  { ratio: 1, level: 0.7, decayScale: 1 },
+  { ratio: 2, level: 0.18, decayScale: 0.6 },
+  { ratio: 2.76, level: 0.07, decayScale: 0.3 },
+] as const;
+const ANNOUNCEMENT_CHIME_MASTER_GAIN = 0.06;
+const ANNOUNCEMENT_CHIME_TIMEOUT_MS = 5_000;
 
 function makeAudioContext(): AudioContext {
   return new AudioContext();
@@ -115,6 +147,83 @@ export async function playCompletionSound(): Promise<CompletionAlertPlaybackRepo
   await new Promise((resolve) => setTimeout(resolve, 700));
   await context.close();
   return { mode: "sound", message: "Played the built-in original two-tone completion ping." };
+}
+
+/**
+ * Play the station-style pre-announcement chime and resolve when its final
+ * note has rung out, so the announcement starts after the chime as it does
+ * on a platform. Resolves to `false` instead of throwing when Web Audio is
+ * unavailable; the announcement itself must never depend on the chime.
+ */
+export async function playAnnouncementChime(): Promise<boolean> {
+  let context: AudioContext;
+  try {
+    context = makeAudioContext();
+  } catch {
+    return false;
+  }
+  try {
+    const start = context.currentTime + 0.03;
+    const master = context.createGain();
+    master.gain.setValueAtTime(ANNOUNCEMENT_CHIME_MASTER_GAIN, start);
+    master.connect(context.destination);
+
+    let lastOscillator: OscillatorNode | null = null;
+    let lastStopTime = start;
+    for (const note of ANNOUNCEMENT_CHIME_NOTES) {
+      const noteStart = start + note.offset;
+      for (const partial of ANNOUNCEMENT_CHIME_PARTIALS) {
+        const decay = note.decay * partial.decayScale;
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        oscillator.type = "sine";
+        oscillator.frequency.setValueAtTime(note.frequency * partial.ratio, noteStart);
+        // Fast strike, then an exponential ring-down like a struck metal bar.
+        gain.gain.setValueAtTime(0.0001, noteStart);
+        gain.gain.exponentialRampToValueAtTime(partial.level, noteStart + 0.008);
+        gain.gain.exponentialRampToValueAtTime(0.0001, noteStart + decay);
+        oscillator.connect(gain);
+        gain.connect(master);
+        const stopTime = noteStart + decay + 0.02;
+        oscillator.start(noteStart);
+        oscillator.stop(stopTime);
+        if (stopTime >= lastStopTime) {
+          lastStopTime = stopTime;
+          lastOscillator = oscillator;
+        }
+      }
+    }
+
+    await new Promise<void>((resolve) => {
+      // The timeout bounds a suspended context (for example, a background
+      // window under autoplay policy) that never reaches the final note.
+      const timeout = setTimeout(resolve, ANNOUNCEMENT_CHIME_TIMEOUT_MS);
+      lastOscillator?.addEventListener(
+        "ended",
+        () => {
+          clearTimeout(timeout);
+          resolve();
+        },
+        { once: true },
+      );
+    });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    await context.close().catch(() => undefined);
+  }
+}
+
+function withChimeMessage(
+  report: CompletionAlertPlaybackReport,
+  chimePlayed: boolean,
+): CompletionAlertPlaybackReport {
+  if (!chimePlayed) return report;
+  return {
+    ...report,
+    message: `Played the original station-style announcement chime. ${report.message}`,
+  };
 }
 
 function decodeBase64(base64: string): ArrayBuffer {
@@ -372,6 +481,17 @@ function validateNativeResult(
 export async function playCompletionSpeech(
   preferences: CompletionAlertPreferences,
 ): Promise<CompletionAlertPlaybackReport> {
+  // Start the chime immediately. On the desktop path native synthesis runs
+  // in parallel, so the chime also covers the PowerShell synthesis latency.
+  const chime = preferences.announcementChime ? playAnnouncementChime() : Promise.resolve(false);
+  const report = await playCompletionSpeechAfter(preferences, chime);
+  return withChimeMessage(report, await chime);
+}
+
+async function playCompletionSpeechAfter(
+  preferences: CompletionAlertPreferences,
+  chime: Promise<boolean>,
+): Promise<CompletionAlertPlaybackReport> {
   const languages = requestedLanguages(preferences);
   const bridge = window.desktopBridge;
   if (bridge?.synthesizeCompletionSpeech) {
@@ -387,6 +507,8 @@ export async function playCompletionSpeech(
         }),
       ),
     );
+    // Speech must not overlap the chime.
+    await chime;
     const results = settled.map((result, index) => {
       const language = languages[index]!;
       const gender = requestedGender(language, preferences);
@@ -439,6 +561,7 @@ export async function playCompletionSpeech(
     }
     return fallback;
   }
+  await chime;
   return playWebSpeech(languages);
 }
 

@@ -14,6 +14,7 @@ vi.mock("../../hooks/useSettings", () => ({
     notificationsEnabled: false,
     completionAlertSoundEnabled: false,
     completionAlertSpeechEnabled: true,
+    completionAlertSpeechChimeEnabled: true,
     completionAlertLanguage: "ja",
     completionAlertEnglishVoiceGender: "female",
     completionAlertJapaneseVoiceGender: "female",

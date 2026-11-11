@@ -182,6 +182,8 @@ describe("client settings", () => {
       notificationsEnabled: false,
       completionAlertSoundEnabled: false,
       completionAlertSpeechEnabled: false,
+      // Only audible while the off-by-default spoken alert is enabled.
+      completionAlertSpeechChimeEnabled: true,
       completionAlertLanguage: "en",
       completionAlertEnglishVoiceGender: "female",
       completionAlertJapaneseVoiceGender: "female",

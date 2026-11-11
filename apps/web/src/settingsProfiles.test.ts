@@ -188,6 +188,7 @@ describe("settings profile library", () => {
       notificationsEnabled: "consent",
       completionAlertSoundEnabled: "include",
       completionAlertSpeechEnabled: "include",
+      completionAlertSpeechChimeEnabled: "include",
       confirmThreadArchive: "include",
       confirmThreadDelete: "include",
       projectTelemetryHideUnavailableGraphs: "include",

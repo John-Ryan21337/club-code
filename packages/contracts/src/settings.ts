@@ -733,6 +733,12 @@ export const ClientSettingsSchema = Schema.Struct({
   completionAlertSpeechEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
+  // Original synthesized station-style pre-announcement chime played before
+  // the spoken alert. It is audible only while the spoken alert itself is
+  // enabled, so defaulting it on does not make a fresh install noisy.
+  completionAlertSpeechChimeEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(true)),
+  ),
   completionAlertLanguage: Schema.Literals(["en", "ja", "dual"]).pipe(
     Schema.withDecodingDefault(Effect.succeed("en" as const)),
   ),
@@ -1982,6 +1988,7 @@ export const ClientSettingsPatch = Schema.Struct({
   notificationsEnabled: Schema.optionalKey(Schema.Boolean),
   completionAlertSoundEnabled: Schema.optionalKey(Schema.Boolean),
   completionAlertSpeechEnabled: Schema.optionalKey(Schema.Boolean),
+  completionAlertSpeechChimeEnabled: Schema.optionalKey(Schema.Boolean),
   completionAlertLanguage: Schema.optionalKey(Schema.Literals(["en", "ja", "dual"])),
   completionAlertEnglishVoiceGender: Schema.optionalKey(Schema.Literals(["female", "male"])),
   completionAlertJapaneseVoiceGender: Schema.optionalKey(Schema.Literals(["female", "male"])),

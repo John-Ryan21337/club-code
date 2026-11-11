@@ -71,6 +71,7 @@ export function DesktopNotificationWatcher() {
             englishGender: current.completionAlertEnglishVoiceGender,
             japaneseGender: current.completionAlertJapaneseVoiceGender,
             stereoOrder: current.completionAlertDualStereoOrder,
+            announcementChime: current.completionAlertSpeechChimeEnabled,
           }).catch(() => undefined);
         }
       })();
