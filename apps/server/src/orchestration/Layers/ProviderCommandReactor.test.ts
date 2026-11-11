@@ -20,6 +20,7 @@ import { createModelSelection } from "@cafecode/shared/model";
 import {
   ApprovalRequestId,
   CommandId,
+  CheckpointRef,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
   ManualFollowUpId,
@@ -675,6 +676,7 @@ describe("ProviderCommandReactor", () => {
 
     return {
       engine,
+      snapshotQuery,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       startSession,
       sendTurn,
@@ -1191,6 +1193,73 @@ describe("ProviderCommandReactor", () => {
       thread?.activities.some((activity) => activity.kind === "runtime.restart-recovery"),
     ).toBe(true);
   });
+
+  it.each([true, false])(
+    "uses only an exact completed checkpoint during restart recovery (match: %s)",
+    async (matches) => {
+      const harness = await createHarness({ startReactor: false });
+      const threadId = ThreadId.make("thread-1");
+      const turnId = asTurnId("finished-before-restart");
+      const now = "2026-01-01T00:00:01.000Z";
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-inherited-running-session"),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: ProviderDriverKind.make("claudeAgent"),
+            providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+            runtimeMode: "approval-required",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+      // Model an inherited split-consumer state: the checkpoint consumer saved
+      // completion while the chat consumer missed the terminal session event.
+      const original = harness.snapshotQuery.getThreadDetailById;
+      const detailSpy = vi
+        .spyOn(harness.snapshotQuery, "getThreadDetailById")
+        .mockImplementation((id) =>
+          original(id).pipe(
+            Effect.map(
+              Option.map((thread) => ({
+                ...thread,
+                checkpoints: [
+                  {
+                    turnId: matches ? turnId : asTurnId("older-completed-turn"),
+                    checkpointTurnCount: 1,
+                    checkpointRef: CheckpointRef.make("refs/cafe/test"),
+                    status: "ready" as const,
+                    files: [],
+                    assistantMessageId: null,
+                    completedAt: now,
+                  },
+                ],
+              })),
+            ),
+          ),
+        );
+      try {
+        await harness.startReactor();
+        await harness.drain();
+        if (matches) {
+          expect(harness.sendTurn).not.toHaveBeenCalled();
+          const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+          expect(thread?.session?.status).toBe("ready");
+          expect(thread?.session?.activeTurnId).toBeNull();
+        } else {
+          await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+        }
+      } finally {
+        detailSpy.mockRestore();
+      }
+    },
+  );
 
   it("does not continue a projected running turn while its provider runtime is still live", async () => {
     const harness = await createHarness({ startReactor: false });

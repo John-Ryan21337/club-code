@@ -46,6 +46,52 @@ afterEach(async () => {
 });
 
 describe("streamProviderDaemonNdjson", () => {
+  it("rejects a truncated live response so a new stream can replay from the accepted cursor", async () => {
+    let attempts = 0;
+    let disconnect: (() => void) | undefined;
+    const fixture = await serve((response) => {
+      attempts += 1;
+      response.writeHead(200, { "content-type": "application/x-ndjson" });
+      if (attempts === 1) {
+        disconnect = () => response.destroy();
+        response.write('{"cursor":1}\n{"private":"partial');
+      } else {
+        response.end('{"cursor":2}\n');
+      }
+    });
+    const seen: string[] = [];
+    await expect(
+      streamProviderDaemonNdjson(fixture.endpoint, "/events?after=0", {
+        onLine: (line) => {
+          seen.push(line);
+          disconnect?.();
+        },
+      }),
+    ).rejects.toThrow("provider daemon event stream closed before completion");
+    await streamProviderDaemonNdjson(fixture.endpoint, "/events?after=1", {
+      onLine: (line) => {
+        seen.push(line);
+      },
+    });
+    expect(seen).toEqual(['{"cursor":1}', '{"cursor":2}']);
+    expect(attempts).toBe(2);
+  });
+
+  it("finishes accepted async records after a clean HTTP end", async () => {
+    const fixture = await serve((response) => {
+      response.writeHead(200, { "content-type": "application/x-ndjson" });
+      response.end('{"cursor":1}\n{"cursor":2}\n');
+    });
+    const seen: string[] = [];
+    await streamProviderDaemonNdjson(fixture.endpoint, "/events", {
+      onLine: async (line) => {
+        await new Promise((resolve) => setImmediate(resolve));
+        seen.push(line);
+      },
+    });
+    expect(seen).toEqual(['{"cursor":1}', '{"cursor":2}']);
+  });
+
   it("serializes async record handling and preserves order", async () => {
     const fixture = await serve((response) => {
       response.writeHead(200, { "content-type": "application/x-ndjson" });

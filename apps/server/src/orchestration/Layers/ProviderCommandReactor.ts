@@ -1073,6 +1073,30 @@ const make = Effect.gen(function* () {
             }
             const interruptedTurnId = thread.session.activeTurnId;
             const recoveredAt = DateTime.formatIso(yield* DateTime.now);
+            // A checkpoint can reach durable storage through the independent
+            // checkpoint consumer even when chat lifecycle delivery was lost.
+            // That is evidence of completed work, not an orphan to continue.
+            // Only reconcile the exact projected turn after live-owner checks;
+            // never use an older checkpoint to close newer provider work.
+            if (
+              thread.checkpoints.some(
+                (checkpoint) =>
+                  checkpoint.turnId === interruptedTurnId && checkpoint.status === "ready",
+              )
+            ) {
+              yield* setThreadSession({
+                threadId: thread.id,
+                session: {
+                  ...thread.session,
+                  status: "ready",
+                  activeTurnId: null,
+                  lastError: null,
+                  updatedAt: recoveredAt,
+                },
+                createdAt: recoveredAt,
+              });
+              return;
+            }
             const recoveryKey = `${thread.id}:${interruptedTurnId}`;
 
             // Clear only the stale runtime marker. The deterministic command id

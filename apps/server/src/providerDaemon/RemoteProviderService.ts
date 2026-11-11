@@ -23,6 +23,7 @@ import { addProviderBackendBridgeDiagnostics } from "@cafecode/shared/providerPi
 import * as crypto from "node:crypto";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -307,6 +308,26 @@ export function remoteProviderCursorProjectorForConfig(config: {
     : PROVIDER_SUPERVISOR_RUNTIME_CURSOR_PROJECTOR;
 }
 
+/** Attach the durable consumer before opening remote replay. Merely having a
+ * usage/settings observer on the hot PubSub does not mean canonical ingestion
+ * is ready: replay published during layer construction would otherwise vanish. */
+export const makeRemoteProviderEventBridge = (capacity: number) =>
+  Effect.gen(function* () {
+    const pubsub = yield* PubSub.bounded<ProviderRuntimeEvent>(capacity);
+    const ready = yield* Deferred.make<void>();
+    return {
+      awaitCanonicalConsumer: Deferred.await(ready),
+      publish: (event: ProviderRuntimeEvent) => PubSub.publish(pubsub, event),
+      streamEvents: Stream.fromPubSub(pubsub),
+      subscribeCanonicalEvents: () =>
+        Effect.gen(function* () {
+          const subscription = yield* PubSub.subscribe(pubsub);
+          yield* Deferred.succeed(ready, undefined);
+          return Stream.fromSubscription(subscription);
+        }),
+    };
+  });
+
 const makeRemoteProviderService = Effect.gen(function* () {
   const config = yield* ServerConfig;
   const projectionStateRepository = yield* ProjectionStateRepository;
@@ -329,7 +350,7 @@ const makeRemoteProviderService = Effect.gen(function* () {
       ),
     ),
   );
-  const runtimeEventPubSub = yield* PubSub.bounded<ProviderRuntimeEvent>(bridgeQueueCapacity);
+  const bridge = yield* makeRemoteProviderEventBridge(bridgeQueueCapacity);
   const publishContext = yield* Effect.context<never>();
   const publishRuntimeEvent = Effect.runPromiseWith(publishContext);
   const initialProjectionState = yield* projectionStateRepository
@@ -400,6 +421,7 @@ const makeRemoteProviderService = Effect.gen(function* () {
   }
 
   yield* Effect.gen(function* () {
+    yield* bridge.awaitCanonicalConsumer;
     while (true) {
       yield* Effect.tryPromise({
         try: () =>
@@ -424,10 +446,7 @@ const makeRemoteProviderService = Effect.gen(function* () {
               return;
             }
             await publishRuntimeEvent(
-              PubSub.publish(
-                runtimeEventPubSub,
-                attachProviderDaemonRuntimeEventCursor(record.event, record.cursor),
-              ),
+              bridge.publish(attachProviderDaemonRuntimeEventCursor(record.event, record.cursor)),
             );
             addProviderBackendBridgeDiagnostics({ acceptedRecordCount: 1 });
             // A cursor is durable progress only after downstream acceptance.
@@ -495,8 +514,9 @@ const makeRemoteProviderService = Effect.gen(function* () {
     rollbackConversation: (input) =>
       rpc(daemonConfig, { method: "rollbackConversation", payload: input }),
     get streamEvents(): ProviderServiceShape["streamEvents"] {
-      return Stream.fromPubSub(runtimeEventPubSub);
+      return bridge.streamEvents;
     },
+    subscribeCanonicalEvents: bridge.subscribeCanonicalEvents,
   };
 
   return service;

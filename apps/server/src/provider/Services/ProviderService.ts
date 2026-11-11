@@ -11,6 +11,7 @@
  *
  * @module ProviderService
  */
+import type * as Scope from "effect/Scope";
 import type {
   CodexExperimentalInput,
   CodexExperimentalResult,
@@ -227,6 +228,15 @@ export interface ProviderServiceShape {
    * Fan-out is owned by ProviderService (not by a standalone event-bus service).
    */
   readonly streamEvents: Stream.Stream<ProviderRuntimeEvent>;
+
+  /** Acquire the canonical consumer before remote replay starts. Ancillary
+   * observers must use streamEvents; only ingestion or the durable journal
+   * owns this activation boundary. Local adapters do not need a replay gate. */
+  readonly subscribeCanonicalEvents?: () => Effect.Effect<
+    Stream.Stream<ProviderRuntimeEvent>,
+    never,
+    Scope.Scope
+  >;
 }
 
 /**

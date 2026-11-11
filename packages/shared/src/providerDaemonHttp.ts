@@ -173,7 +173,7 @@ export function streamProviderDaemonNdjson(
             let turnRecords = 0;
             let turnBytes = 0;
             let turnStartedAt = performance.now();
-            while (true) {
+            while (!settled) {
               const lineEnd = pending.indexOf(0x0a);
               if (lineEnd < 0) break;
               if (lineEnd > maxLineBytes) {
@@ -201,6 +201,10 @@ export function streamProviderDaemonNdjson(
                 turnStartedAt = performance.now();
               }
             }
+            // A socket can close while downstream acceptance is awaiting a
+            // promise. Do not deliver buffered records after the reconnect
+            // loop has already taken ownership of replay.
+            if (settled) return;
             if (pending.indexOf(0x0a) < 0 && pending.byteLength > maxLineBytes) {
               throw new RangeError(`provider daemon NDJSON line exceeds ${maxLineBytes} bytes`);
             }
@@ -237,9 +241,9 @@ export function streamProviderDaemonNdjson(
           } catch (cause) {
             addProviderBackendBridgeDiagnostics({ decodeFailureCount: 1 });
             finishPause();
+            settleReject(cause);
             response.destroy();
             request.destroy();
-            settleReject(cause);
           } finally {
             processing = false;
           }
@@ -252,9 +256,9 @@ export function streamProviderDaemonNdjson(
             const error = new RangeError(
               `provider daemon NDJSON pending data exceeds ${maxPendingBytes} bytes`,
             );
+            settleReject(error);
             response.destroy();
             request.destroy();
-            settleReject(error);
             return;
           }
           if (pending.byteLength >= PROVIDER_PIPELINE_POLICY.bridgeQueueHighWaterBytes) {
@@ -263,6 +267,18 @@ export function streamProviderDaemonNdjson(
           void processPending();
         });
         response.on("error", settleReject);
+        // `end` is the only clean HTTP body boundary. A daemon/IPC disconnect
+        // may instead surface as `aborted` or `close`; leaving those unhandled
+        // strands the caller in this promise and prevents cursor-based replay.
+        // Keep the failure fixed and payload-free, including for partial lines.
+        const rejectPrematureClose = (): void => {
+          finishPause();
+          settleReject(new Error("provider daemon event stream closed before completion"));
+        };
+        response.on("aborted", rejectPrematureClose);
+        response.on("close", () => {
+          if (!ended) rejectPrematureClose();
+        });
         response.on("end", () => {
           ended = true;
           void processPending();

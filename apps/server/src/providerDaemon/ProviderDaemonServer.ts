@@ -1261,34 +1261,44 @@ export const runProviderDaemonServer = (
       // provider completed. Keep per-event failures local, and restart the
       // subscription if the stream itself terminates unexpectedly.
       while (true) {
-        yield* Stream.runForEach(providerService.streamEvents, (event) =>
-          journal.publish(event).pipe(
-            Effect.tap(() => {
-              const supervisorCursor = readProviderDaemonRuntimeEventCursor(event);
-              return supervisorCursor === undefined
-                ? Effect.void
-                : persistSupervisorBridgeCursor(supervisorCursor);
-            }),
-            Effect.tap(() =>
-              Effect.sync(() => options.onRuntimeEventJournaled?.(event)).pipe(Effect.ignoreCause),
+        // A retry owns a fresh subscription. Release the previous one before
+        // retrying, or its abandoned bounded queue can block every publisher.
+        yield* Effect.gen(function* () {
+          const canonicalEvents = providerService.subscribeCanonicalEvents
+            ? yield* providerService.subscribeCanonicalEvents()
+            : providerService.streamEvents;
+          yield* Stream.runForEach(canonicalEvents, (event) =>
+            journal.publish(event).pipe(
+              Effect.tap(() => {
+                const supervisorCursor = readProviderDaemonRuntimeEventCursor(event);
+                return supervisorCursor === undefined
+                  ? Effect.void
+                  : persistSupervisorBridgeCursor(supervisorCursor);
+              }),
+              Effect.tap(() =>
+                Effect.sync(() => options.onRuntimeEventJournaled?.(event)).pipe(
+                  Effect.ignoreCause,
+                ),
+              ),
+              Effect.catchCause((cause) => {
+                if (Cause.hasInterruptsOnly(cause)) {
+                  return Effect.failCause(cause);
+                }
+                return Effect.logWarning("provider daemon runtime event journal publish failed", {
+                  provider: event.provider,
+                  providerInstanceId: event.providerInstanceId,
+                  threadId: event.threadId,
+                  turnId: event.turnId,
+                  eventId: event.eventId,
+                  eventType: event.type,
+                  cause: Cause.pretty(cause),
+                });
+              }),
+              Effect.asVoid,
             ),
-            Effect.catchCause((cause) => {
-              if (Cause.hasInterruptsOnly(cause)) {
-                return Effect.failCause(cause);
-              }
-              return Effect.logWarning("provider daemon runtime event journal publish failed", {
-                provider: event.provider,
-                providerInstanceId: event.providerInstanceId,
-                threadId: event.threadId,
-                turnId: event.turnId,
-                eventId: event.eventId,
-                eventType: event.type,
-                cause: Cause.pretty(cause),
-              });
-            }),
-            Effect.asVoid,
-          ),
-        ).pipe(
+          );
+        }).pipe(
+          Effect.scoped,
           Effect.catchCause((cause) => {
             if (Cause.hasInterruptsOnly(cause)) {
               return Effect.failCause(cause);

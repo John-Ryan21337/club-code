@@ -2,10 +2,14 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  EventId,
+  TurnId,
   type ProviderSession,
 } from "@cafecode/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Stream from "effect/Stream";
 
 import {
   attachCommandIdToMutatingProviderDaemonRequest,
@@ -18,6 +22,7 @@ import {
   remoteProviderCursorProjectorForConfig,
   toRemoteRequestError,
   requireRemoteCodexOperation,
+  makeRemoteProviderEventBridge,
 } from "./RemoteProviderService.ts";
 import {
   PROVIDER_DAEMON_RUNTIME_CURSOR_PROJECTOR,
@@ -25,6 +30,55 @@ import {
 } from "./ProviderDaemonRuntimeCursor.ts";
 
 describe("RemoteProviderService", () => {
+  it.effect(
+    "holds replay until canonical ingestion subscribes even with an ancillary observer",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const bridge = yield* makeRemoteProviderEventBridge(2);
+          const seen: string[] = [];
+          yield* Stream.runForEach(bridge.streamEvents, (event) =>
+            Effect.sync(() => seen.push(event.type)),
+          ).pipe(Effect.forkScoped);
+          yield* Effect.yieldNow;
+          const base = {
+            provider: ProviderDriverKind.make("claudeAgent"),
+            providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+            threadId: ThreadId.make("replayed-thread"),
+            turnId: TurnId.make("replayed-turn"),
+            createdAt: "2026-11-11T18:06:27.583Z",
+          };
+          const replay = yield* Effect.gen(function* () {
+            yield* bridge.awaitCanonicalConsumer;
+            yield* bridge.publish({
+              ...base,
+              eventId: EventId.make("replayed-start"),
+              type: "turn.started",
+              payload: {},
+            });
+            yield* bridge.publish({
+              ...base,
+              eventId: EventId.make("replayed-completion"),
+              type: "turn.completed",
+              payload: { state: "completed" },
+            });
+          }).pipe(Effect.forkScoped);
+          yield* Effect.yieldNow;
+          assert.isUndefined(replay.pollUnsafe());
+          assert.deepEqual(seen, []);
+          const canonical = yield* bridge.subscribeCanonicalEvents();
+          // Both records may publish before consumption begins: acquisition,
+          // rather than a scheduler delay, must retain the terminal record.
+          yield* Fiber.join(replay);
+          const events = yield* Stream.runCollect(canonical.pipe(Stream.take(2)));
+          assert.deepEqual(
+            events.map((event) => event.type),
+            ["turn.started", "turn.completed"],
+          );
+        }),
+      ),
+  );
+
   it("refuses new Codex operations before sending their payload to an older daemon", async () => {
     for (const method of ["codexThreadAttachments", "codexExperimental"] as const) {
       let sent = false;

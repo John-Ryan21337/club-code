@@ -2829,10 +2829,11 @@ const make = Effect.gen(function* () {
           }),
         ),
       );
+      const canonicalEvents = providerService.subscribeCanonicalEvents
+        ? yield* providerService.subscribeCanonicalEvents()
+        : providerService.streamEvents;
       yield* Effect.forkScoped(
-        Stream.runForEach(providerService.streamEvents, (event) =>
-          worker.enqueue({ source: "runtime", event }),
-        ),
+        Stream.runForEach(canonicalEvents, (event) => worker.enqueue({ source: "runtime", event })),
       );
       yield* Effect.forkScoped(
         Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
