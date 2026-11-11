@@ -218,7 +218,7 @@ describe("EmbeddedBrowserWorkspace agent grant", () => {
     await page.viewport(1280, 720);
   });
 
-  it("allows hiding the panel and retrying when a native tab fails to open", async () => {
+  it("allows closing the panel and retrying when a native tab fails to open", async () => {
     window.desktopBridge = {
       openEmbeddedBrowser: vi
         .fn()
@@ -230,7 +230,7 @@ describe("EmbeddedBrowserWorkspace agent grant", () => {
     } as unknown as NonNullable<typeof window.desktopBridge>;
     const rendered = await render(<EmbeddedBrowserWorkspace />);
     await userEvent.click(page.getByRole("button", { name: "Open isolated browser" }));
-    await userEvent.click(page.getByRole("button", { name: "Hide Agent Browser" }));
+    await userEvent.click(page.getByRole("button", { name: "Close Agent Browser" }));
     await userEvent.click(page.getByRole("button", { name: "Open isolated browser" }));
     await expect.element(page.getByRole("navigation", { name: "Browser tabs" })).toBeVisible();
     await rendered.unmount();
@@ -304,7 +304,7 @@ describe("EmbeddedBrowserWorkspace agent grant", () => {
     await expect
       .element(page.getByRole("button", { name: "Open browser tab: Background updated" }))
       .toHaveAttribute("aria-pressed", "false");
-    await userEvent.click(page.getByRole("button", { name: "Hide Agent Browser" }));
+    await userEvent.click(page.getByRole("button", { name: "Minimize Agent Browser" }));
     expect(desktopBridge.closeEmbeddedBrowser).not.toHaveBeenCalled();
     await expect.element(page.getByRole("navigation", { name: "Browser tabs" })).toBeVisible();
     await userEvent.click(
@@ -562,7 +562,7 @@ describe("EmbeddedBrowserWorkspace agent grant", () => {
     });
     // A delayed heartbeat reply may still carry the completed action.
     expect(desktopBridge.snapshotEmbeddedBrowser).toHaveBeenCalledTimes(2);
-    await userEvent.click(page.getByRole("button", { name: "Hide Agent Browser" }));
+    await userEvent.click(page.getByRole("button", { name: "Minimize Agent Browser" }));
     expect(desktopBridge.closeEmbeddedBrowser).not.toHaveBeenCalled();
     await userEvent.click(page.getByRole("button", { name: /Resume Agent Browser/ }));
     await userEvent.click(page.getByText("Browser tools", { exact: true }));
@@ -570,4 +570,111 @@ describe("EmbeddedBrowserWorkspace agent grant", () => {
     expect(desktopBridge.closeEmbeddedBrowser).toHaveBeenCalledWith({ tabId: "tab-1" });
     await rendered.unmount();
   });
+
+  it("closes individual tabs from the strip without revealing a minimized browser", async () => {
+    rpc.revoke.mockResolvedValue({ status: "inactive", reason: "revoked" });
+    rpc.poll.mockResolvedValue({ grant: { status: "inactive", reason: "idle" }, request: null });
+    const second = { ...privateState, tabId: "tab-2", title: "Second page" };
+    const third = { ...privateState, tabId: "tab-3", title: "Third page" };
+    const desktopBridge = {
+      openEmbeddedBrowser: vi
+        .fn()
+        .mockResolvedValueOnce(privateState)
+        .mockResolvedValueOnce(second)
+        .mockResolvedValueOnce(third),
+      closeEmbeddedBrowser: vi.fn().mockResolvedValue(undefined),
+      setEmbeddedBrowserBounds: vi.fn().mockResolvedValue(undefined),
+      onEmbeddedBrowserState: vi.fn().mockReturnValue(() => undefined),
+    };
+    window.desktopBridge = desktopBridge as unknown as NonNullable<typeof window.desktopBridge>;
+    const rendered = await render(<EmbeddedBrowserWorkspace />);
+    await userEvent.click(page.getByRole("button", { name: "Open isolated browser" }));
+    await userEvent.click(page.getByRole("button", { name: "New browser tab" }));
+    await userEvent.click(page.getByRole("button", { name: "New browser tab" }));
+    await expect
+      .element(page.getByRole("button", { name: "Open browser tab: Third page" }))
+      .toHaveAttribute("aria-pressed", "true");
+
+    // A background tab closes without changing the selection or the panel.
+    await userEvent.click(page.getByRole("button", { name: "Close browser tab: Example" }));
+    expect(desktopBridge.closeEmbeddedBrowser).toHaveBeenCalledWith({ tabId: "tab-1" });
+    await expect
+      .element(page.getByRole("button", { name: "Close browser tab: Example" }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: "Open browser tab: Third page" }))
+      .toHaveAttribute("aria-pressed", "true");
+    await expect
+      .element(page.getByRole("region", { name: "Isolated browser workspace" }))
+      .toBeVisible();
+
+    // Closing the selected tab while minimized selects the next tab but keeps it hidden.
+    await userEvent.click(page.getByRole("button", { name: "Minimize Agent Browser" }));
+    const boundsCallsBeforeClose = desktopBridge.setEmbeddedBrowserBounds.mock.calls.length;
+    await userEvent.click(page.getByRole("button", { name: "Close browser tab: Third page" }));
+    expect(desktopBridge.closeEmbeddedBrowser).toHaveBeenCalledWith({ tabId: "tab-3" });
+    await expect
+      .element(page.getByRole("button", { name: "Resume Agent Browser: Second page" }))
+      .toHaveAttribute("aria-pressed", "true");
+    expect(document.querySelector('section[aria-label="Isolated browser workspace"]')).toBeNull();
+    expect(
+      desktopBridge.setEmbeddedBrowserBounds.mock.calls
+        .slice(boundsCallsBeforeClose)
+        .some(([request]) => (request as { visible: boolean }).visible),
+    ).toBe(false);
+
+    // Closing the last tab removes the strip and returns to the launcher button.
+    await userEvent.click(page.getByRole("button", { name: "Close browser tab: Second page" }));
+    expect(desktopBridge.closeEmbeddedBrowser).toHaveBeenCalledWith({ tabId: "tab-2" });
+    await expect.element(page.getByRole("button", { name: "Open isolated browser" })).toBeVisible();
+    expect(document.querySelector('nav[aria-label="Browser tabs"]')).toBeNull();
+    await rendered.unmount();
+  });
+
+  it.each(["Close Agent Browser", "Close all browser tabs"])(
+    "%s ends every tab session and keeps a tab whose close fails",
+    async (control) => {
+      rpc.revoke.mockResolvedValue({ status: "inactive", reason: "revoked" });
+      rpc.poll.mockResolvedValue({ grant: { status: "inactive", reason: "idle" }, request: null });
+      const second = { ...privateState, tabId: "tab-2", title: "Second page" };
+      const desktopBridge = {
+        openEmbeddedBrowser: vi
+          .fn()
+          .mockResolvedValueOnce(privateState)
+          .mockResolvedValueOnce(second)
+          .mockResolvedValueOnce({ ...privateState, tabId: "tab-3", title: "Reopened" }),
+        closeEmbeddedBrowser: vi
+          .fn()
+          .mockResolvedValueOnce(undefined)
+          .mockRejectedValueOnce(new Error("busy"))
+          .mockResolvedValue(undefined),
+        setEmbeddedBrowserBounds: vi.fn().mockResolvedValue(undefined),
+        onEmbeddedBrowserState: vi.fn().mockReturnValue(() => undefined),
+      };
+      window.desktopBridge = desktopBridge as unknown as NonNullable<typeof window.desktopBridge>;
+      const rendered = await render(<EmbeddedBrowserWorkspace />);
+      await userEvent.click(page.getByRole("button", { name: "Open isolated browser" }));
+      await userEvent.click(page.getByRole("button", { name: "New browser tab" }));
+      await userEvent.click(page.getByRole("button", { name: control }));
+      await vi.waitFor(() => {
+        expect(desktopBridge.closeEmbeddedBrowser).toHaveBeenCalledWith({ tabId: "tab-1" });
+        expect(desktopBridge.closeEmbeddedBrowser).toHaveBeenCalledWith({ tabId: "tab-2" });
+      });
+      expect(rpc.revoke).toHaveBeenCalledWith({ reason: "tab-closed" });
+      expect(document.querySelector('section[aria-label="Isolated browser workspace"]')).toBeNull();
+      // The tab whose native close failed stays visible so it can be closed again.
+      await expect
+        .element(page.getByRole("button", { name: "Open browser tab: Second page" }))
+        .toBeVisible();
+      await expect
+        .element(page.getByRole("button", { name: "Close browser tab: Example" }))
+        .not.toBeInTheDocument();
+      await userEvent.click(page.getByRole("button", { name: "Close all browser tabs" }));
+      await expect
+        .element(page.getByRole("button", { name: "Open isolated browser" }))
+        .toBeVisible();
+      expect(desktopBridge.closeEmbeddedBrowser).toHaveBeenCalledTimes(3);
+      await rendered.unmount();
+    },
+  );
 });
