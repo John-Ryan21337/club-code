@@ -396,23 +396,24 @@ const make = Effect.gen(function* () {
     });
     window.maximize();
     yield* opacityMutex.withPermits(1)(prepareWindowOpacity(window));
-    yield* desktopIpc.trustWebContents(window.webContents, rendererUrl);
+    const webContents = window.webContents;
+    yield* desktopIpc.trustWebContents(webContents, rendererUrl);
     const removeMediaPermissions = installDesktopMediaPermissionBoundaries(
-      () => installTrustedFrameAudioCapture(window.webContents, rendererOrigin),
+      () => installTrustedFrameAudioCapture(webContents, rendererOrigin),
       () =>
         installTrustedMainFrameCameraPermission(
-          window.webContents,
+          webContents,
           rendererOrigin,
           () => !window.isDestroyed() && window.isVisible() && window.isFocused(),
         ),
     );
     // A grant authorizes the current foreground document only. Returning focus
     // or navigating back must require another explicit voice-start action.
-    const revokeMicrophoneGrant = () => revokeTrustedMicrophoneAccess(window.webContents);
+    const revokeMicrophoneGrant = () => revokeTrustedMicrophoneAccess(webContents);
     window.on("blur", revokeMicrophoneGrant);
     window.on("hide", revokeMicrophoneGrant);
-    window.webContents.on("did-start-navigation", revokeMicrophoneGrant);
-    window.webContents.on("render-process-gone", revokeMicrophoneGrant);
+    webContents.on("did-start-navigation", revokeMicrophoneGrant);
+    webContents.on("render-process-gone", revokeMicrophoneGrant);
 
     window.webContents.on("context-menu", (event, params) => {
       event.preventDefault();
@@ -530,8 +531,11 @@ const make = Effect.gen(function* () {
     window.on("closed", () => {
       window.removeListener("blur", revokeMicrophoneGrant);
       window.removeListener("hide", revokeMicrophoneGrant);
-      window.webContents.removeListener("did-start-navigation", revokeMicrophoneGrant);
-      window.webContents.removeListener("render-process-gone", revokeMicrophoneGrant);
+      // Electron can destroy WebContents before the window emits "closed".
+      if (!webContents.isDestroyed()) {
+        webContents.removeListener("did-start-navigation", revokeMicrophoneGrant);
+        webContents.removeListener("render-process-gone", revokeMicrophoneGrant);
+      }
       removeMediaPermissions();
       void runPromise(electronWindow.clearMain(Option.some(window)));
     });

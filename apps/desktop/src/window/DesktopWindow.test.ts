@@ -87,8 +87,10 @@ function makeFakeBrowserWindow() {
     on: window.on,
     openDevTools: webContents.openDevTools,
     setOpacity: window.setOpacity,
+    setDisplayMediaRequestHandler: session.setDisplayMediaRequestHandler,
     setPermissionCheckHandler: session.setPermissionCheckHandler,
     setPermissionRequestHandler: session.setPermissionRequestHandler,
+    webContents,
   };
 }
 
@@ -309,7 +311,15 @@ describe("DesktopWindow", () => {
         }
         const closedListener = fakeWindow.on.mock.calls.find(([event]) => event === "closed")?.[1];
         assert.isFunction(closedListener);
+        fakeWindow.webContents.isDestroyed.mockReturnValue(true);
+        Object.defineProperty(fakeWindow.window, "webContents", {
+          get: () => {
+            throw new TypeError("Object has been destroyed");
+          },
+        });
         closedListener?.();
+        assert.equal(fakeWindow.webContents.removeListener.mock.calls.length, 0);
+        assert.deepEqual(fakeWindow.setDisplayMediaRequestHandler.mock.lastCall, [null]);
         assert.deepEqual(fakeWindow.setPermissionCheckHandler.mock.lastCall, [null]);
         assert.deepEqual(fakeWindow.setPermissionRequestHandler.mock.lastCall, [null]);
       }).pipe(Effect.provide(layer));
