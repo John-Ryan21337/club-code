@@ -56,6 +56,9 @@ const decodeRpcEnvelopeJson = Schema.decodeUnknownSync(
   Schema.fromJsonString(ProviderDaemonRpcEnvelope),
 );
 const decodeHealthJson = Schema.decodeUnknownSync(Schema.fromJsonString(ProviderDaemonHealth));
+const decodeHealthCursorJson = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ eventCursor: ProviderDaemonHealth.fields.eventCursor })),
+);
 const decodeEventRecordJson = Schema.decodeUnknownSync(
   Schema.fromJsonString(ProviderDaemonEventRecord),
 );
@@ -94,6 +97,8 @@ const PROMPT_ROUTING_READ_RPC_METHODS = new Set<ProviderDaemonRpcRequest["method
   "getInstanceInfo",
 ]);
 const PROVIDER_DAEMON_REPLAY_OVERLAP_EVENTS = 1_000;
+const PROVIDER_DAEMON_EVENT_IDLE_INTERVAL_MS = 30_000;
+const PROVIDER_DAEMON_EVENT_HEALTH_DEADLINE_MS = 5_000;
 // Session materialization can legitimately exceed the transport's 30-second
 // default when Codex resumes a large thread and replays its snapshot. A client
 // timeout is especially harmful for mutating RPCs: the daemon keeps executing
@@ -267,24 +272,63 @@ export async function requireRemoteCodexOperation(
   }
 }
 
-async function readEventStream(
+export async function readEventStream(
   daemonConfig: ProviderDaemonClientConfig,
-  afterCursor: number,
-  onRecord: (record: typeof ProviderDaemonEventRecord.Type) => Promise<void>,
+  options: {
+    readonly readAcceptedCursor: () => number;
+    readonly onRecord: (record: typeof ProviderDaemonEventRecord.Type) => Promise<void>;
+    readonly signal: AbortSignal;
+    readonly idleIntervalMs?: number;
+  },
 ): Promise<void> {
   const url = providerDaemonUrl(daemonConfig, PROVIDER_DAEMON_EVENTS_PATH);
-  url.searchParams.set("after", String(Math.max(0, Math.trunc(afterCursor))));
+  url.searchParams.set("after", String(Math.max(0, Math.trunc(options.readAcceptedCursor()))));
   await streamProviderDaemonNdjson(daemonConfig, `${url.pathname}${url.search}`, {
-    onLine: async (line) => onRecord(decodeEventRecordJson(line)),
+    signal: options.signal,
+    onLine: async (line) => options.onRecord(decodeEventRecordJson(line)),
+    ...(options.idleIntervalMs === undefined
+      ? {}
+      : {
+          idleWatchdog: {
+            intervalMs: options.idleIntervalMs,
+            shouldReconnect: async (signal) => {
+              const response = await requestRemoteHealth(
+                daemonConfig,
+                `${PROVIDER_DAEMON_HEALTH_PATH}?cursorOnly=1`,
+                AbortSignal.any([
+                  signal,
+                  AbortSignal.timeout(PROVIDER_DAEMON_EVENT_HEALTH_DEADLINE_MS),
+                ]),
+              );
+              // Older daemons ignore the query and return their full health response.
+              return (
+                decodeHealthCursorJson(response.body).eventCursor > options.readAcceptedCursor()
+              );
+            },
+          },
+        }),
   });
+}
+
+async function requestRemoteHealth(
+  daemonConfig: ProviderDaemonClientConfig,
+  path = PROVIDER_DAEMON_HEALTH_PATH,
+  signal?: AbortSignal,
+) {
+  const response = await requestProviderDaemonJson(daemonConfig, path, {
+    method: "GET",
+    ...(signal === undefined ? {} : { signal }),
+  });
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw new Error(`provider daemon health failed with HTTP ${response.statusCode}`);
+  }
+  return response;
 }
 
 async function readRemoteHealth(
   daemonConfig: ProviderDaemonClientConfig,
 ): Promise<typeof ProviderDaemonHealth.Type> {
-  const response = await requestProviderDaemonJson(daemonConfig, PROVIDER_DAEMON_HEALTH_PATH, {
-    method: "GET",
-  });
+  const response = await requestRemoteHealth(daemonConfig);
   return decodeHealthJson(response.body);
 }
 
@@ -424,34 +468,43 @@ const makeRemoteProviderService = Effect.gen(function* () {
     yield* bridge.awaitCanonicalConsumer;
     while (true) {
       yield* Effect.tryPromise({
-        try: () =>
-          readEventStream(daemonConfig, eventCursor, async (record) => {
-            if (isProviderDaemonQuarantineGap(record.event)) {
-              // The daemon made a durable payload-free forward-progress
-              // decision. Re-read live session inventory before advancing the
-              // bridge cursor so the backend does not infer session truth from
-              // the missing incompatible event.
-              await publishRuntimeEvent(
-                rpc(daemonConfig, { method: "listSessions", payload: {} }).pipe(
-                  Effect.tap((sessions) =>
-                    Effect.logWarning("provider daemon event quarantine gap reconciled", {
-                      cursor: record.cursor,
-                      activeSessionCount: sessions.length,
-                    }),
+        try: (signal) =>
+          readEventStream(daemonConfig, {
+            readAcceptedCursor: () => eventCursor,
+            signal,
+            ...(config.providerDaemon === undefined
+              ? {}
+              : { idleIntervalMs: PROVIDER_DAEMON_EVENT_IDLE_INTERVAL_MS }),
+            onRecord: async (record) => {
+              if (isProviderDaemonQuarantineGap(record.event)) {
+                // The daemon made a durable payload-free forward-progress
+                // decision. Re-read live session inventory before advancing the
+                // bridge cursor so the backend does not infer session truth from
+                // the missing incompatible event.
+                await publishRuntimeEvent(
+                  rpc(daemonConfig, { method: "listSessions", payload: {} }).pipe(
+                    Effect.tap((sessions) =>
+                      Effect.logWarning("provider daemon event quarantine gap reconciled", {
+                        cursor: record.cursor,
+                        activeSessionCount: sessions.length,
+                      }),
+                    ),
+                    Effect.catch(() => Effect.void),
                   ),
-                  Effect.catch(() => Effect.void),
-                ),
+                  { signal },
+                );
+                eventCursor = Math.max(eventCursor, record.cursor);
+                return;
+              }
+              await publishRuntimeEvent(
+                bridge.publish(attachProviderDaemonRuntimeEventCursor(record.event, record.cursor)),
+                { signal },
               );
+              addProviderBackendBridgeDiagnostics({ acceptedRecordCount: 1 });
+              // A cursor is durable progress only after downstream acceptance.
+              // Advancing first can permanently skip a record after a crash.
               eventCursor = Math.max(eventCursor, record.cursor);
-              return;
-            }
-            await publishRuntimeEvent(
-              bridge.publish(attachProviderDaemonRuntimeEventCursor(record.event, record.cursor)),
-            );
-            addProviderBackendBridgeDiagnostics({ acceptedRecordCount: 1 });
-            // A cursor is durable progress only after downstream acceptance.
-            // Advancing first can permanently skip a record after a crash.
-            eventCursor = Math.max(eventCursor, record.cursor);
+            },
           }),
         catch: (cause) => toRemoteRequestError("streamEvents", cause),
       }).pipe(

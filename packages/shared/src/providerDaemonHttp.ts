@@ -1,4 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics globalTimers:off
+import { addAbortListener } from "node:events";
 import * as http from "node:http";
 
 import type { ProviderDaemonClientConfig } from "@cafecode/contracts";
@@ -20,6 +22,7 @@ export interface ProviderDaemonJsonRequestOptions {
   readonly body?: string;
   readonly headers?: Record<string, string>;
   readonly timeoutMs?: number;
+  readonly signal?: AbortSignal;
 }
 
 export interface ProviderDaemonNdjsonRequestOptions {
@@ -27,6 +30,11 @@ export interface ProviderDaemonNdjsonRequestOptions {
   readonly onLine: (line: string) => void | Promise<void>;
   readonly maxLineBytes?: number;
   readonly maxPendingBytes?: number;
+  readonly signal?: AbortSignal;
+  readonly idleWatchdog?: {
+    readonly intervalMs: number;
+    readonly shouldReconnect: (signal: AbortSignal) => Promise<boolean>;
+  };
 }
 
 function yieldToEventLoop(): Promise<void> {
@@ -84,19 +92,25 @@ export function requestProviderDaemonJson(
   };
 
   return new Promise((resolve, reject) => {
-    const request = http.request(requestOptions(endpoint, path, method, headers), (response) => {
-      const chunks: Buffer[] = [];
-      response.on("data", (chunk: Buffer) => {
-        chunks.push(chunk);
-      });
-      response.on("error", reject);
-      response.on("end", () => {
-        resolve({
-          statusCode: response.statusCode ?? 0,
-          body: Buffer.concat(chunks).toString("utf8"),
+    const request = http.request(
+      {
+        ...requestOptions(endpoint, path, method, headers),
+        signal: options.signal,
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => {
+          chunks.push(chunk);
         });
-      });
-    });
+        response.on("error", reject);
+        response.on("end", () => {
+          resolve({
+            statusCode: response.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      },
+    );
 
     request.on("error", reject);
     request.setTimeout(options.timeoutMs ?? 30_000, () => {
@@ -124,16 +138,38 @@ export function streamProviderDaemonNdjson(
       Math.trunc(options.maxPendingBytes ?? PROVIDER_PIPELINE_POLICY.ndjsonMaxPendingBytes),
     );
     let settled = false;
-    const settleReject = (cause: unknown): void => {
+    let processing = false;
+    let ended = false;
+    let finishSettlement: (() => void) | undefined;
+    let abortSubscription: ReturnType<typeof addAbortListener> | undefined;
+    const idleWatchdog = options.idleWatchdog;
+    const probeController = idleWatchdog === undefined ? undefined : new AbortController();
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    let lastActivityAt = performance.now();
+    let activityVersion = 0;
+    let lastSocketBytesRead = 0;
+    const noteActivity = (socketBytesRead?: number): void => {
+      if (idleWatchdog === undefined) return;
+      if (socketBytesRead !== undefined) lastSocketBytesRead = socketBytesRead;
+      lastActivityAt = performance.now();
+      activityVersion += 1;
+    };
+    const stopIdleWatchdog = (): void => {
+      clearTimeout(idleTimer);
+      probeController?.abort();
+    };
+    const settle = (complete: () => void): void => {
       if (settled) return;
       settled = true;
-      reject(cause);
+      stopIdleWatchdog();
+      abortSubscription?.[Symbol.dispose]();
+      // Let an in-flight record finish before the caller uses its accepted
+      // cursor to reconnect. The processing loop will leave buffered records
+      // for replay as soon as it sees that this request has settled.
+      if (processing) finishSettlement = complete;
+      else complete();
     };
-    const settleResolve = (): void => {
-      if (settled) return;
-      settled = true;
-      resolve();
-    };
+    const settleReject = (cause: unknown): void => settle(() => reject(cause));
     const request = http.request(
       requestOptions(endpoint, path, "GET", {
         authorization: `Bearer ${endpoint.token}`,
@@ -141,6 +177,7 @@ export function streamProviderDaemonNdjson(
         ...options.headers,
       }),
       (response) => {
+        noteActivity(response.socket?.bytesRead);
         if ((response.statusCode ?? 0) < 200 || (response.statusCode ?? 0) >= 300) {
           settleReject(
             new Error(`provider daemon stream failed with HTTP ${response.statusCode ?? 0}`),
@@ -150,8 +187,6 @@ export function streamProviderDaemonNdjson(
         }
 
         let pending: Buffer<ArrayBufferLike> = Buffer.alloc(0);
-        let processing = false;
-        let ended = false;
         let pauseStartedAt = 0;
 
         const beginPause = (): void => {
@@ -202,8 +237,7 @@ export function streamProviderDaemonNdjson(
               }
             }
             // A socket can close while downstream acceptance is awaiting a
-            // promise. Do not deliver buffered records after the reconnect
-            // loop has already taken ownership of replay.
+            // promise. Leave buffered records for the next replay.
             if (settled) return;
             if (pending.indexOf(0x0a) < 0 && pending.byteLength > maxLineBytes) {
               throw new RangeError(`provider daemon NDJSON line exceeds ${maxLineBytes} bytes`);
@@ -228,7 +262,7 @@ export function streamProviderDaemonNdjson(
                 }
               }
               finishPause();
-              settleResolve();
+              settle(resolve);
               return;
             }
             if (
@@ -246,10 +280,13 @@ export function streamProviderDaemonNdjson(
             request.destroy();
           } finally {
             processing = false;
+            noteActivity();
+            finishSettlement?.();
           }
         };
 
         response.on("data", (chunk: Buffer) => {
+          noteActivity(response.socket?.bytesRead);
           pending = pending.byteLength === 0 ? chunk : Buffer.concat([pending, chunk]);
           setProviderBackendBridgeDiagnostics({ pendingBytes: pending.byteLength });
           if (pending.byteLength > maxPendingBytes) {
@@ -281,12 +318,70 @@ export function streamProviderDaemonNdjson(
         });
         response.on("end", () => {
           ended = true;
+          stopIdleWatchdog();
           void processPending();
         });
       },
     );
 
     request.on("error", settleReject);
+    if (options.signal !== undefined) {
+      // Keep this listener until record acceptance finishes, even after the
+      // last HTTP body byte has arrived and Node has closed the request.
+      abortSubscription = addAbortListener(options.signal, () => {
+        const cause = new DOMException("The operation was aborted", "AbortError");
+        settleReject(cause);
+        request.destroy(cause);
+      });
+    }
+    if (idleWatchdog !== undefined && probeController !== undefined) {
+      request.on("socket", (socket) => {
+        noteActivity(socket.bytesRead);
+      });
+      const canCheckIdle = (): boolean =>
+        !settled && !ended && !request.destroyed && !options.signal?.aborted;
+      const checkIdle = async (): Promise<void> => {
+        if (!canCheckIdle()) return;
+        const socket = request.socket;
+        const socketBytesRead = socket?.bytesRead ?? 0;
+        // Socket bytes include incomplete headers and framing that might
+        // never reach an HTTP response or body callback.
+        if (socketBytesRead !== lastSocketBytesRead) {
+          noteActivity(socketBytesRead);
+        }
+        let nextCheckMs = idleWatchdog.intervalMs;
+        try {
+          const idleRemainingMs = idleWatchdog.intervalMs - (performance.now() - lastActivityAt);
+          if (processing) return;
+          if (idleRemainingMs > 0) {
+            nextCheckMs = idleRemainingMs;
+            return;
+          }
+          const version = activityVersion;
+          const shouldReconnect = await idleWatchdog.shouldReconnect(probeController.signal);
+          if (
+            shouldReconnect &&
+            canCheckIdle() &&
+            !processing &&
+            version === activityVersion &&
+            request.socket === socket &&
+            (socket?.bytesRead ?? 0) === socketBytesRead
+          ) {
+            const cause = new Error("provider daemon event stream stalled");
+            settleReject(cause);
+            request.destroy(cause);
+          }
+        } catch {
+          // A failed probe provides no evidence that this stream has stalled.
+          nextCheckMs *= 2;
+        } finally {
+          if (canCheckIdle()) {
+            idleTimer = setTimeout(() => void checkIdle(), Math.ceil(nextCheckMs));
+          }
+        }
+      };
+      idleTimer = setTimeout(() => void checkIdle(), idleWatchdog.intervalMs);
+    }
     request.end();
   });
 }

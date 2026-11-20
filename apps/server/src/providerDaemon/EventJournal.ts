@@ -85,6 +85,7 @@ export interface ProviderDaemonPersistentEventJournal {
     readonly replayBoundaryCursor: number;
     readonly unsubscribe: () => void;
   }>;
+  readonly latestCursor: Effect.Effect<number>;
   readonly snapshot: Effect.Effect<ProviderDaemonEventJournalSnapshot>;
   /** Resolves after the bounded post-startup prune, compaction, and index work completes. */
   readonly startupMaintenance: Effect.Effect<void>;
@@ -585,6 +586,17 @@ export const makePersistentProviderDaemonEventJournal = (options?: {
     const replayAfter = (cursor: number): Effect.Effect<ReadonlyArray<ProviderDaemonEventRecord>> =>
       replayPageAfter(cursor, capacity);
 
+    const latestCursor = sql<{ readonly cursor: number }>`
+      SELECT cursor
+      FROM provider_daemon_events
+      WHERE owner_key = ${ownerKey}
+      ORDER BY cursor DESC
+      LIMIT 1
+    `.pipe(
+      Effect.map((rows) => normalizeSqlNumber(rows[0]?.cursor, 0)),
+      Effect.orDie,
+    );
+
     const snapshot: Effect.Effect<ProviderDaemonEventJournalSnapshot> = Effect.gen(function* () {
       const rows = (yield* sql`
         SELECT
@@ -701,6 +713,7 @@ export const makePersistentProviderDaemonEventJournal = (options?: {
       replayPageThrough,
       subscribe,
       subscribeWithReplayBoundary,
+      latestCursor,
       snapshot,
       startupMaintenance: Deferred.await(startupMaintenanceReady),
     };
