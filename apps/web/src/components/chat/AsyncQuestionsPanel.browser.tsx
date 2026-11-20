@@ -32,12 +32,13 @@ beforeEach(() => {
   localStorage.clear();
 });
 
-it("shows one question when a completed provider item is replayed with a new event id", async () => {
+it("stages an answer only once across completed item replay and panel remount", async () => {
   const onAddAnswer = vi.fn(() => true);
+  const replayed = { ...activities[0]!, id: EventId.make("snapshot-replay") };
   const screen = await render(
     <AsyncQuestionsPanel
       scopeKey="test-thread"
-      activities={[...activities, { ...activities[0]!, id: EventId.make("snapshot-replay") }]}
+      activities={[...activities, replayed]}
       disabled={false}
       onAddAnswer={onAddAnswer}
     />,
@@ -47,7 +48,32 @@ it("shows one question when a completed provider item is replayed with a new eve
   await page.getByRole("button", { name: "Add answer to prompt", exact: true }).click();
   expect(onAddAnswer).toHaveBeenCalledTimes(1);
   await expect.element(page.getByRole("textbox")).not.toBeInTheDocument();
+  const stored = localStorage.getItem("cafe-code:async-questions-dismissed:test-thread");
+  expect(stored).toContain("message-1");
+  expect(stored).not.toContain("Which approach?");
+  expect(stored).not.toContain("Answer once");
   await screen.unmount();
+
+  const replay = await render(
+    <AsyncQuestionsPanel
+      scopeKey="test-thread"
+      activities={[
+        replayed,
+        {
+          ...replayed,
+          id: EventId.make("new-question-event"),
+          payload: { itemId: "message-2", questions: [{ title: "Which approach?" }] },
+        },
+      ]}
+      disabled={false}
+      onAddAnswer={onAddAnswer}
+    />,
+  );
+  // A distinct provider item can ask the same question. Only that item is visible.
+  expect(page.getByRole("textbox").all()).toHaveLength(1);
+  await expect.element(page.getByRole("textbox")).toHaveValue("");
+  expect(onAddAnswer).toHaveBeenCalledTimes(1);
+  await replay.unmount();
 });
 
 it("requires an explicit answer, stages it without sending, and keeps rejected drafts", async () => {
@@ -67,6 +93,7 @@ it("requires an explicit answer, stages it without sending, and keeps rejected d
   await add.click();
   expect(onAddAnswer).toHaveBeenCalledWith("Which approach?\nComplete");
   await expect.element(add).toBeVisible();
+  expect(localStorage.getItem("cafe-code:async-questions-dismissed:test-thread")).toBeNull();
   onAddAnswer.mockReturnValue(true);
   await page
     .getByRole("textbox", { name: "Answer: Which approach?", exact: true })
