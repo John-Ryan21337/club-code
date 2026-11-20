@@ -6,8 +6,13 @@
  * has finished processing. This lets tests replace timing-sensitive
  * `Effect.sleep` calls with deterministic `drain()`.
  *
+ * The worker outlives a failed item. A failure of one item, including an
+ * interruption that was not aimed at the worker itself, is logged and the
+ * worker moves on to the next item. Only closing the owning scope stops it.
+ *
  * @module DrainableWorker
  */
+import * as Cause from "effect/Cause";
 import * as Scope from "effect/Scope";
 import * as Effect from "effect/Effect";
 import * as TxQueue from "effect/TxQueue";
@@ -28,6 +33,15 @@ export interface DrainableWorker<A> {
   readonly drain: Effect.Effect<void>;
 }
 
+export interface DrainableWorkerOptions {
+  /**
+   * Short fixed label written with the worker's own warnings, for example
+   * `"provider-runtime-ingestion"`. It must not contain user content, paths,
+   * or identifiers.
+   */
+  readonly name?: string;
+}
+
 /**
  * Create a drainable worker that processes items from an unbounded queue.
  *
@@ -35,25 +49,64 @@ export interface DrainableWorker<A> {
  * the scope closes. A finalizer shuts down the queue.
  *
  * @param process - The effect to run for each queued item.
+ * @param options - Optional label for the worker's own warnings.
  * @returns A `DrainableWorker` with `queue` and `drain`.
  */
 export const makeDrainableWorker = <A, E, R>(
   process: (item: A) => Effect.Effect<void, E, R>,
+  options?: DrainableWorkerOptions,
 ): Effect.Effect<DrainableWorker<A>, never, Scope.Scope | R> =>
   Effect.gen(function* () {
     const queue = yield* Effect.acquireRelease(TxQueue.unbounded<A>(), TxQueue.shutdown);
     const outstanding = yield* TxRef.make(0);
+    const name = options?.name ?? "unnamed";
 
-    yield* TxQueue.take(queue).pipe(
-      Effect.tap((a) =>
-        Effect.ensuring(
-          process(a),
-          TxRef.update(outstanding, (n) => n - 1),
+    /**
+     * Runs one item and never lets its failure end the worker loop.
+     *
+     * Why an item failure must not end the loop: the loop is the only
+     * consumer of the queue. If it stops, every later item is accepted by
+     * `enqueue` and then never processed, and nothing reports it. That
+     * happened in production: a query failed with an interrupt-only cause
+     * that came from shared state left behind by another, cancelled fiber.
+     * The callers rethrow interrupt-only causes because they look like a
+     * normal shutdown, so the loop ended with no log line and provider event
+     * ingestion stopped until the backend was restarted.
+     *
+     * Why catching interrupt-only causes here does not block shutdown: when
+     * the worker fiber itself is interrupted (its scope is closing), Effect
+     * 4.0.0-beta.59 skips failure handlers on the way out (`failCause` in
+     * `effect/internal/core.ts` passes over them while the fiber is
+     * interruptible and has a pending interruption). This handler therefore
+     * runs only for causes that belong to the item, and an interrupt-only
+     * cause that reaches it was never aimed at the worker. The test "stops
+     * when its scope closes while an item is in progress" pins that behavior.
+     *
+     * Only item processing is guarded. A failure of `TxQueue.take`, for
+     * example after the queue was shut down, still ends the loop, so a closed
+     * worker cannot spin.
+     */
+    const processItem = (item: A): Effect.Effect<void, never, R> =>
+      Effect.ensuring(
+        process(item),
+        TxRef.update(outstanding, (n) => n - 1),
+      ).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? // No cause text: an interrupt-only cause carries no detail, and
+              // the item itself may hold user content.
+              Effect.logWarning(
+                "drainable worker item ended with an interruption that was not aimed at the worker; continuing with the next item",
+                { worker: name },
+              )
+            : Effect.logWarning("drainable worker item failed; continuing with the next item", {
+                worker: name,
+                cause: Cause.pretty(cause),
+              }),
         ),
-      ),
-      Effect.forever,
-      Effect.forkScoped,
-    );
+      );
+
+    yield* TxQueue.take(queue).pipe(Effect.tap(processItem), Effect.forever, Effect.forkScoped);
 
     const drain: DrainableWorker<A>["drain"] = TxRef.get(outstanding).pipe(
       Effect.tap((n) => (n > 0 ? Effect.txRetry : Effect.void)),

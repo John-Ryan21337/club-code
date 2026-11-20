@@ -9,7 +9,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
-import * as Semaphore from "effect/Semaphore";
+import * as Semaphore from "@cafecode/shared/InterruptSafeSemaphore";
 import * as Stream from "effect/Stream";
 import { type AuthAccessStreamEvent, AuthSessionId } from "@cafecode/contracts/auth";
 import {

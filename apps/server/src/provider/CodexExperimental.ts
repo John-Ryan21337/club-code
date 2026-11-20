@@ -4,7 +4,7 @@ import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as Semaphore from "effect/Semaphore";
+import * as Semaphore from "@cafecode/shared/InterruptSafeSemaphore";
 import type { CodexAppServerClientShape } from "effect-codex-app-server/client";
 import type { CodexAppServerIncomingNotification } from "effect-codex-app-server/protocol";
 import { CodexAppServerProtocolParseError } from "effect-codex-app-server/errors";

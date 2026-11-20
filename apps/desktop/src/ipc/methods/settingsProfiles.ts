@@ -3,7 +3,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Random from "effect/Random";
-import * as Semaphore from "effect/Semaphore";
+import * as Semaphore from "@cafecode/shared/InterruptSafeSemaphore";
 import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
 import { makeIpcMethod } from "../DesktopIpc.ts";
 
