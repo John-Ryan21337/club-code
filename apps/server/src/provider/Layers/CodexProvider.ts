@@ -1004,7 +1004,7 @@ function makeStaticCodexReasoningCapabilities(input: {
 
 const CODEX_STANDARD_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
 const CODEX_MAX_REASONING_EFFORTS = [...CODEX_STANDARD_REASONING_EFFORTS, "max"] as const;
-// Includes the visible Codex 0.165.0 catalog and older fallback entries. The live
+// Includes the visible Codex 0.169.1 catalog and older fallback entries. The live
 // app-server response remains authoritative when available; this fallback keeps
 // fresh installs usable before the full Codex probe refreshes provider cache.
 const CODEX_ULTRA_REASONING_EFFORTS = [...CODEX_MAX_REASONING_EFFORTS, "ultra"] as const;
@@ -1028,6 +1028,18 @@ const KNOWN_CUSTOM_CODEX_MODELS: ReadonlyMap<string, ServerProviderModel> = new 
 ]);
 
 const STATIC_CODEX_MODELS: ReadonlyArray<ServerProviderModel> = [
+  ...["sol", "astra"].map(
+    (family): ServerProviderModel => ({
+      slug: `gpt-6.2-${family}`,
+      name: `GPT-6.2-${family === "sol" ? "Sol" : "Astra"}`,
+      isCustom: false,
+      capabilities: makeStaticCodexReasoningCapabilities({
+        defaultEffort: "low",
+        supportedEfforts: CODEX_ULTRA_REASONING_EFFORTS,
+        supportsFastMode: true,
+      }),
+    }),
+  ),
   ASTRA_CODEX_MODEL,
   {
     slug: "gpt-6.1-sol",
@@ -1444,13 +1456,21 @@ export const fallbackCodexModelsFromSettings = (
             }),
           }
         : model;
-    }).filter(
-      (model) =>
-        model.slug !== "gpt-6.1-terra" ||
+    }).filter((model) => {
+      // Gate only the cold-start fallback. The account's live native catalog
+      // remains authoritative, including models delivered ahead of a CLI update.
+      const minimumVersion = model.slug.startsWith("gpt-6.2-")
+        ? "0.169.1"
+        : model.slug === "gpt-6.1-terra"
+          ? "0.165.0"
+          : undefined;
+      return (
+        !minimumVersion ||
         (!!cliVersion &&
           parseSemver(cliVersion) !== null &&
-          compareSemverVersions(cliVersion, "0.165.0") >= 0),
-    ),
+          compareSemverVersions(cliVersion, minimumVersion) >= 0)
+      );
+    }),
     codexSettings.customModels,
   );
 

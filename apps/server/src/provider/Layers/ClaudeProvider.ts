@@ -769,6 +769,12 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     });
   }
 
+  // Check the transport version even if initialization cannot return capabilities.
+  // A failed probe must not hide the required upgrade behind an authentication warning.
+  const requiresTransportUpgrade =
+    !parsedVersion || compareSemverVersions(parsedVersion, "2.1.327") < 0;
+  const transportUpgradeMessage =
+    "Upgrade Claude Code to v2.1.327 or newer to connect browser tools securely.";
   const capabilities = resolveCapabilities
     ? yield* resolveCapabilities(claudeSettings).pipe(Effect.orElseSucceed(() => undefined))
     : undefined;
@@ -785,9 +791,11 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       probe: {
         installed: true,
         version: parsedVersion,
-        status: "warning",
+        status: requiresTransportUpgrade ? "error" : "warning",
         auth: { status: "unknown" },
-        message: "Could not verify Claude authentication status from initialization result.",
+        message: requiresTransportUpgrade
+          ? transportUpgradeMessage
+          : "Could not verify Claude authentication status from initialization result.",
       },
     });
   }
@@ -805,13 +813,17 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     probe: {
       installed: true,
       version: parsedVersion,
-      status: "ready",
+      status: requiresTransportUpgrade ? "error" : "ready",
       auth: {
         status: "authenticated",
         ...(capabilities.email ? { email: capabilities.email } : {}),
         ...(authMetadata ? authMetadata : {}),
       },
-      ...(modelUpgradeMessage ? { message: modelUpgradeMessage } : {}),
+      ...(requiresTransportUpgrade
+        ? { message: transportUpgradeMessage }
+        : modelUpgradeMessage
+          ? { message: modelUpgradeMessage }
+          : {}),
     },
   });
 });

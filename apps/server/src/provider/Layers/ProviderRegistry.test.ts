@@ -2953,6 +2953,23 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
     // ── checkClaudeProviderStatus tests ──────────────────────────
 
     describe("checkClaudeProviderStatus", () => {
+      for (const version of ["2.1.322", "2.1.326", "2.1.327", "2.1.328"]) {
+        it.effect(`checks the secure MCP transport version boundary (${version})`, () =>
+          Effect.gen(function* () {
+            const status = yield* checkClaudeProviderStatus(
+              defaultClaudeSettings,
+              claudeCapabilities(),
+            );
+            const supported = version === "2.1.327" || version === "2.1.328";
+            assert.equal(status.status, supported ? "ready" : "error");
+            if (!supported) assert.match(status.message ?? "", /Upgrade Claude Code to v2\.1\.327/);
+          }).pipe(
+            Effect.provide(
+              mockSpawnerLayer(() => ({ stdout: `${version}\n`, stderr: "", code: 0 })),
+            ),
+          ),
+        );
+      }
       it.effect("returns ready when claude is installed and authenticated", () =>
         Effect.gen(function* () {
           const status = yield* checkClaudeProviderStatus(
@@ -2966,7 +2983,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           Effect.provide(
             mockSpawnerLayer((args) => {
               const joined = args.join(" ");
-              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "--version") return { stdout: "2.1.327\n", stderr: "", code: 0 };
               if (joined === "auth status")
                 return {
                   stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
@@ -3296,7 +3313,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           Effect.provide(
             mockSpawnerLayer((args) => {
               const joined = args.join(" ");
-              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "--version") return { stdout: "2.1.327\n", stderr: "", code: 0 };
               if (joined === "auth status")
                 return {
                   stdout:
@@ -3313,7 +3330,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
       it.effect("runs Claude status probes with the configured Claude HOME", () => {
         const recorded = recordingMockSpawnerLayer((args) => {
           const joined = args.join(" ");
-          if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+          if (joined === "--version") return { stdout: "2.1.327\n", stderr: "", code: 0 };
           if (joined === "auth status")
             return {
               stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
@@ -3368,7 +3385,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           Effect.provide(
             mockSpawnerLayer((args) => {
               const joined = args.join(" ");
-              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "--version") return { stdout: "2.1.327\n", stderr: "", code: 0 };
               if (joined === "auth status")
                 return {
                   stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
@@ -3411,7 +3428,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           Effect.provide(
             mockSpawnerLayer((args) => {
               const joined = args.join(" ");
-              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "--version") return { stdout: "2.1.327\n", stderr: "", code: 0 };
               if (joined === "auth status")
                 return {
                   stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
@@ -3438,7 +3455,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           Effect.provide(
             mockSpawnerLayer((args) => {
               const joined = args.join(" ");
-              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "--version") return { stdout: "2.1.327\n", stderr: "", code: 0 };
               if (joined === "auth status")
                 return {
                   stdout: '{"loggedIn":true,"authMethod":"api-key"}\n',
@@ -3491,6 +3508,26 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
         ),
       );
 
+      for (const version of ["2.1.326", "unparseable"]) {
+        it.effect(
+          `requires the secure transport upgrade when initialization is unavailable (${version})`,
+          () =>
+            Effect.gen(function* () {
+              const status = yield* checkClaudeProviderStatus(
+                defaultClaudeSettings,
+                noClaudeCapabilities,
+              );
+              assert.strictEqual(status.status, "error");
+              assert.strictEqual(status.auth.status, "unknown");
+              assert.match(status.message ?? "", /Upgrade Claude Code to v2\.1\.327/);
+            }).pipe(
+              Effect.provide(
+                mockSpawnerLayer(() => ({ stdout: `${version}\n`, stderr: "", code: 0 })),
+              ),
+            ),
+        );
+      }
+
       it.effect("returns warning when the Claude initialization result is unavailable", () =>
         Effect.gen(function* () {
           const status = yield* checkClaudeProviderStatus(
@@ -3508,7 +3545,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           Effect.provide(
             mockSpawnerLayer((args) => {
               const joined = args.join(" ");
-              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "--version") return { stdout: "2.1.327\n", stderr: "", code: 0 };
               if (joined === "auth status")
                 return {
                   stdout: '{"loggedIn":false}\n',

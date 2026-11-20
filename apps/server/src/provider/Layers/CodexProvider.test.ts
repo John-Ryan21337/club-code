@@ -12,6 +12,33 @@ import {
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 describe("parseCodexModelListResponse", () => {
+  it("offers the 6.2 models on a compatible cold start without duplicate custom entries", () => {
+    const settings = decodeCodexSettings({ customModels: ["gpt-6.2-sol"] });
+    const models = fallbackCodexModelsFromSettings(settings, "0.169.1");
+    expect(models.slice(0, 2).map((model) => model.slug)).toEqual(["gpt-6.2-sol", "gpt-6.2-astra"]);
+    expect(models.filter((model) => model.slug === "gpt-6.2-sol")).toHaveLength(1);
+    for (const model of models.slice(0, 2)) {
+      expect(model.capabilities?.optionDescriptors).toContainEqual(
+        expect.objectContaining({
+          id: "reasoningEffort",
+          options: expect.arrayContaining([
+            expect.objectContaining({ id: "high" }),
+            expect.objectContaining({ id: "ultra" }),
+          ]),
+        }),
+      );
+      expect(
+        model.capabilities?.optionDescriptors?.some((option) => option.id === "serviceTier"),
+      ).toBe(false);
+    }
+    for (const version of [undefined, "invalid", "0.169.0", "0.169.1-alpha.1"]) {
+      expect(
+        fallbackCodexModelsFromSettings(decodeCodexSettings({}), version).some((model) =>
+          model.slug.startsWith("gpt-6.2-"),
+        ),
+      ).toBe(false);
+    }
+  });
   it("offers Ultra Fast only when the model advertises that exact tier", () => {
     for (const extraTier of ["ultrafast", "unknown-paid-tier"]) {
       const [model] = parseCodexModelListResponse({

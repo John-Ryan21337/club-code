@@ -5601,6 +5601,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               ...(promptAppend ? { append: promptAppend } : {}),
             },
         settingSources: [...CLAUDE_SETTING_SOURCES],
+        // SDK 0.3.327 sends MCP headers over stdin with this option. Keep the
+        // browser capability off process arguments; older CLIs fail closed.
+        mcpServersDelivery: "initialize",
         mcpServers: {
           club_browser: {
             type: "http",

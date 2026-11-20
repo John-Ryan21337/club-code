@@ -766,7 +766,17 @@ it("keeps Codex 0.157 gateway login capability opt-in and its responses typed", 
   );
   for (const method of ["account/gatewayOAuth/login", "account/gatewayOAuth/cancel"] as const) {
     assert.equal(CodexSchema.CLIENT_REQUEST_METHODS[method], method);
-    assert.equal(CodexSchema.CLIENT_REQUEST_PARAMS[method], undefined);
+    if (method === "account/gatewayOAuth/cancel") {
+      assert.equal(CodexSchema.CLIENT_REQUEST_PARAMS[method], undefined);
+    } else {
+      const decode = Schema.decodeUnknownSync(CodexSchema.CLIENT_REQUEST_PARAMS[method]);
+      assert.equal(decode(undefined), undefined);
+      assert.equal(decode(null), null);
+      assert.deepEqual(decode({ deviceAuth: true, modelProvider: "gcp" }), {
+        deviceAuth: true,
+        modelProvider: "gcp",
+      });
+    }
     assert.deepEqual(
       Schema.decodeUnknownSync(CodexSchema.CLIENT_REQUEST_RESPONSES[method])({}),
       {},

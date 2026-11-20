@@ -9,6 +9,12 @@ describe("Codex context budgets", () => {
     ...(value ? { options: [{ id: "contextWindow", value }] } : {}),
   });
   it("uses a smaller explicit budget and offers only pinned capacities", () => {
+    expect(resolveCodexContextWindow(selection("gpt-6.2-sol"))).toBe(200_000);
+    expect(resolveCodexContextWindow(selection("gpt-6.2-sol", "500k"))).toBe(500_000);
+    expect(resolveCodexContextWindow(selection("gpt-6.2-astra", "272k"))).toBe(272_000);
+    expect(resolveCodexContextWindow(selection("gpt-6.2-astra", "500k"))).toBe(200_000);
+    expect(resolveCodexContextWindow(selection("gpt-6.2-sol", "872k"))).toBe(872_000);
+    expect(resolveCodexContextWindow(selection("gpt-6.2-astra", "872k"))).toBe(872_000);
     expect(resolveCodexContextWindow(selection("gpt-6-astra"))).toBe(200_000);
     expect(codexContextWindowDescriptor("gpt-6-astra")).toMatchObject({
       currentValue: "200k",

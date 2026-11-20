@@ -16,6 +16,20 @@ describe("buildModelPickerSearchText", () => {
 });
 
 describe("scoreModelPickerSearch", () => {
+  it.each(["Sol", "Astra"])("finds %s 6.2 by family, version, and provider instance", (family) => {
+    expect(
+      scoreModelPickerSearch(
+        {
+          driverKind: "codex",
+          providerDisplayName: "Codex Personal",
+          name: `GPT-6.2 ${family}`,
+          shortName: `${family} 6.2`,
+        },
+        `${family} 6.2 personal`,
+      ),
+    ).not.toBeNull();
+  });
+
   it("matches typo-tolerant multi-token queries", () => {
     expect(
       scoreModelPickerSearch(

@@ -338,6 +338,46 @@ describe("ProviderModelPicker", () => {
     }
   });
 
+  it.each(["sol", "astra"])(
+    "displays and selects GPT-6.2 %s from the live inventory",
+    async (family) => {
+      const slug = `gpt-6.2-${family}`;
+      const name = `GPT-6.2-${family === "sol" ? "Sol" : "Astra"}`;
+      const mounted = await mountPicker({
+        model: "gpt-6-astra",
+        lockedProvider: null,
+        providers: [
+          buildCodexProvider([
+            ...["Sol", "Astra"].map((modelFamily) => ({
+              slug: `gpt-6.2-${modelFamily.toLowerCase()}`,
+              name: `GPT-6.2-${modelFamily}`,
+              isCustom: false,
+              capabilities: createModelCapabilities({ optionDescriptors: [] }),
+            })),
+            {
+              slug: "gpt-6-astra",
+              name: "GPT-6-Astra",
+              isCustom: false,
+              capabilities: createModelCapabilities({ optionDescriptors: [] }),
+            },
+          ]),
+        ],
+      });
+
+      try {
+        await page.getByRole("button").click();
+        await vi.waitFor(() => {
+          expect(getVisibleModelNames()).toEqual(["GPT-6.2-Sol", "GPT-6.2-Astra", "GPT-6-Astra"]);
+        });
+        await page.getByPlaceholder("Search models...").fill(`${family} 6.2`);
+        await page.getByText(name, { exact: true }).click();
+        expect(mounted.onInstanceModelChange).toHaveBeenCalledWith(CODEX_INSTANCE_ID, slug);
+      } finally {
+        await mounted.cleanup();
+      }
+    },
+  );
+
   it("shows favorites first in the provider sidebar", async () => {
     const mounted = await mountPicker({
       activeInstanceId: CLAUDE_INSTANCE_ID,

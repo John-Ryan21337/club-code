@@ -687,6 +687,7 @@ describe("ClaudeAdapterLive", () => {
       });
 
       const server = harness.getLastCreateQueryInput()?.options.mcpServers?.club_browser;
+      assert.equal(harness.getLastCreateQueryInput()?.options.mcpServersDelivery, "initialize");
       assert.ok(server && server.type === "http");
       assert.match(server.url, /^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
       assert.match(server.headers?.Authorization ?? "", /^Bearer [A-Za-z0-9_-]{40,}$/);
