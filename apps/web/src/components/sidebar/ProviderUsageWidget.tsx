@@ -670,15 +670,10 @@ export function ProviderUsageWidget() {
             connection.client.server.refreshProviders({ instanceId, usageOnly: true, force }),
           ),
         );
-        let failed = false;
-        for (const result of results) {
-          if (result.status === "fulfilled") {
-            applyProvidersUpdated(result.value);
-          } else {
-            failed = true;
-          }
-        }
-        setRefreshFailed(failed);
+        // The config stream publishes usage changes. Each reply contains the
+        // whole registry as it was when that request finished, so replaying
+        // replies here can erase a newer update for another provider.
+        setRefreshFailed(results.some((result) => result.status === "rejected"));
         setNowMs(Date.now());
       } catch {
         // The primary environment can disappear between the visibility check

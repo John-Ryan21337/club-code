@@ -1735,12 +1735,16 @@ const makeWsRpcLayer = (
                 })),
               );
               const providerStatuses = providerRegistry.streamChanges.pipe(
+                Stream.debounce(Duration.millis(PROVIDER_STATUS_DEBOUNCE_MS)),
+                // A refresh can finish writing its cache after another refresh
+                // has advanced the registry. Sample the current snapshot when
+                // publishing the coalesced change.
+                Stream.mapEffect(() => providerRegistry.getProviders),
                 Stream.map((providers) => ({
                   version: 1 as const,
                   type: "providerStatuses" as const,
                   payload: { providers },
                 })),
-                Stream.debounce(Duration.millis(PROVIDER_STATUS_DEBOUNCE_MS)),
               );
               const settingsUpdates = serverSettings.streamChanges.pipe(
                 Stream.map((settings) => redactServerSettingsForClient(settings)),

@@ -36,6 +36,7 @@ import {
   EditorId,
   type ServerRuntimeLayerDiagnosticsInput,
   type ServerRuntimeLayerDiagnosticsResult,
+  type ServerProvider,
   DEFAULT_CLIENT_SETTINGS,
 } from "@cafecode/contracts";
 import { assert, it } from "@effect/vitest";
@@ -3917,7 +3918,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("routes websocket rpc subscribeServerConfig emits provider status updates", () =>
+  it.effect("streams the latest provider registry when a status notification is outdated", () =>
     Effect.gen(function* () {
       const nextProviders = [
         {
@@ -3935,6 +3936,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         },
       ] as const;
 
+      const providers = yield* Ref.make<ReadonlyArray<ServerProvider>>([]);
       yield* buildAppUnderTest({
         layers: {
           keybindings: {
@@ -3945,8 +3947,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             streamChanges: Stream.empty,
           },
           providerRegistry: {
-            getProviders: Effect.succeed([]),
-            streamChanges: Stream.succeed(nextProviders),
+            getProviders: Ref.get(providers),
+            streamChanges: Stream.fromEffect(Ref.set(providers, nextProviders).pipe(Effect.as([]))),
           },
         },
       });
