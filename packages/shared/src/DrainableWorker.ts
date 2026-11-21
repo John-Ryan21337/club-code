@@ -33,13 +33,23 @@ export interface DrainableWorker<A> {
   readonly drain: Effect.Effect<void>;
 }
 
-export interface DrainableWorkerOptions {
+export interface DrainableWorkerOptions<A = never, E = never, R = never> {
   /**
    * Short fixed label written with the worker's own warnings, for example
    * `"provider-runtime-ingestion"`. It must not contain user content, paths,
    * or identifiers.
    */
   readonly name?: string;
+  /**
+   * Take a bounded FIFO batch of already queued items. The factory sets up
+   * state for this batch. The worker invokes its processor once per item.
+   */
+  readonly batch?: {
+    readonly maxSize: number;
+    readonly makeProcessor: (
+      items: ReadonlyArray<A>,
+    ) => (item: A, index: number) => Effect.Effect<void, E, R>;
+  };
 }
 
 /**
@@ -49,12 +59,12 @@ export interface DrainableWorkerOptions {
  * the scope closes. A finalizer shuts down the queue.
  *
  * @param process - The effect to run for each queued item.
- * @param options - Optional label for the worker's own warnings.
+ * @param options - Optional warning label and batch processor.
  * @returns A `DrainableWorker` with `queue` and `drain`.
  */
 export const makeDrainableWorker = <A, E, R>(
   process: (item: A) => Effect.Effect<void, E, R>,
-  options?: DrainableWorkerOptions,
+  options?: DrainableWorkerOptions<A, E, R>,
 ): Effect.Effect<DrainableWorker<A>, never, Scope.Scope | R> =>
   Effect.gen(function* () {
     const queue = yield* Effect.acquireRelease(TxQueue.unbounded<A>(), TxQueue.shutdown);
@@ -86,9 +96,9 @@ export const makeDrainableWorker = <A, E, R>(
      * example after the queue was shut down, still ends the loop, so a closed
      * worker cannot spin.
      */
-    const processItem = (item: A): Effect.Effect<void, never, R> =>
+    const processItem = (run: () => Effect.Effect<void, E, R>): Effect.Effect<void, never, R> =>
       Effect.ensuring(
-        process(item),
+        Effect.suspend(run),
         TxRef.update(outstanding, (n) => n - 1),
       ).pipe(
         Effect.catchCause((cause) =>
@@ -106,7 +116,25 @@ export const makeDrainableWorker = <A, E, R>(
         ),
       );
 
-    yield* TxQueue.take(queue).pipe(Effect.tap(processItem), Effect.forever, Effect.forkScoped);
+    const batch = options?.batch;
+    const takeAndProcess =
+      batch && Number.isSafeInteger(batch.maxSize) && batch.maxSize > 1
+        ? TxQueue.takeBetween(queue, 1, batch.maxSize).pipe(
+            Effect.flatMap((items) => {
+              let processInBatch: ReturnType<typeof batch.makeProcessor> | undefined;
+              return Effect.forEach(
+                items,
+                (item, index) =>
+                  processItem(() => {
+                    processInBatch ??= batch.makeProcessor(items);
+                    return processInBatch(item, index);
+                  }),
+                { discard: true },
+              );
+            }),
+          )
+        : TxQueue.take(queue).pipe(Effect.tap((item) => processItem(() => process(item))));
+    yield* takeAndProcess.pipe(Effect.forever, Effect.forkScoped);
 
     const drain: DrainableWorker<A>["drain"] = TxRef.get(outstanding).pipe(
       Effect.tap((n) => (n > 0 ? Effect.txRetry : Effect.void)),
