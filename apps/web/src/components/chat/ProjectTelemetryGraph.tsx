@@ -649,7 +649,7 @@ export function ProjectTelemetryGraph({
             gpu,
             temperatures,
             history: appendBoundedTelemetryHistory(
-              current.history,
+              current.targetKey === activeRequest.targetKey ? current.history : [],
               point,
               activeRequest.historyLimit,
             ),
@@ -732,7 +732,11 @@ export function ProjectTelemetryGraph({
     setManuallyCollapsed((current) => !current);
   };
 
-  const telemetry = visibleView.status === "ready" ? visibleView.snapshot : null;
+  // The failed poll adds a history gap while the last successful readings stay visible.
+  const telemetry = visibleView.snapshot;
+  const readFailed = visibleView.status === "unavailable";
+  const telemetryUnavailable = readFailed && telemetry === null;
+  const missingTelemetryDetail = telemetryUnavailable ? "Telemetry unavailable" : "Waiting";
   const cpuPercent =
     telemetry?.cpu.status === "available" ? telemetry.cpu.utilizationPercent : null;
   const memoryPercent =
@@ -759,25 +763,20 @@ export function ProjectTelemetryGraph({
   const cpuDetail =
     telemetry?.cpu.status === "available"
       ? `${telemetry.cpu.logicalProcessorCount} logical CPUs · selected environment`
-      : (telemetry?.cpu.detail ??
-        (visibleView.status === "unavailable" ? "Telemetry unavailable" : "Waiting"));
+      : (telemetry?.cpu.detail ?? missingTelemetryDetail);
   const memoryDetail =
     telemetry?.memory.status === "available"
       ? `${formatTelemetryBytes(telemetry.memory.availableBytes)} available · selected environment`
-      : (telemetry?.memory.detail ??
-        (visibleView.status === "unavailable" ? "Telemetry unavailable" : "Waiting"));
+      : (telemetry?.memory.detail ?? missingTelemetryDetail);
   const diskDetail =
     telemetry?.projectVolume.status === "available"
       ? `${formatTelemetryBytes(telemetry.projectVolume.availableBytes)} free · selected project volume`
-      : (telemetry?.projectVolume.detail ??
-        (visibleView.status === "unavailable" ? "Telemetry unavailable" : "Waiting"));
+      : (telemetry?.projectVolume.detail ?? missingTelemetryDetail);
   const networkDetail =
     telemetry?.network.status === "available"
       ? "Aggregate throughput · no traffic inspection"
-      : (telemetry?.network.detail ??
-        (visibleView.status === "unavailable" ? "Telemetry unavailable" : "Waiting"));
+      : (telemetry?.network.detail ?? missingTelemetryDetail);
   const gpuLoading = visibleView.status === "loading";
-  const telemetryUnavailable = visibleView.status === "unavailable";
   const gpuDetail = gpuLoading
     ? "Waiting"
     : telemetryUnavailable
@@ -846,9 +845,7 @@ export function ProjectTelemetryGraph({
     ? temperatureCards.filter((card) => card.metric.celsius !== null)
     : temperatureCards;
   const lastSample =
-    visibleView.snapshot === null
-      ? null
-      : new Date(DateTime.toEpochMillis(visibleView.snapshot.sampledAt));
+    telemetry === null ? null : new Date(DateTime.toEpochMillis(telemetry.sampledAt));
 
   return (
     <div
@@ -890,7 +887,7 @@ export function ProjectTelemetryGraph({
               <div className="truncate text-xs text-muted-foreground">
                 {projectName ?? "Selected project"}
                 {lastSample
-                  ? ` · ${telemetryUnavailable ? "last successful " : ""}${lastSample.toLocaleString()}`
+                  ? ` · ${readFailed ? "last successful " : ""}${lastSample.toLocaleString()}`
                   : ""}
               </div>
             </div>
