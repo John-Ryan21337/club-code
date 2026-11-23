@@ -812,21 +812,53 @@ describe("ProjectTelemetryGraph", () => {
     }
   });
 
-  it("replaces stale values with an explicit outage state after a successful sample", async () => {
+  it("keeps available readings visible through a failed refresh and leaves a gap after retry", async () => {
+    await page.viewport(1_200, 800);
     const diagnostic = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const outage = deferred<void>();
+    const telemetry: ServerProjectSystemTelemetryResult = {
+      ...telemetryFixture({ projectId: projectA, minimumSampleIntervalMs: 250 }),
+      gpu: {
+        status: "available",
+        adapters: [
+          {
+            index: 0,
+            name: "NVIDIA GPU 0",
+            utilizationPercent: 24,
+            memoryTotalBytes: 4 * 1024 ** 3,
+            memoryUsedBytes: 1024 ** 3,
+            memoryUtilizationPercent: 25,
+            temperatureCelsius: 49,
+          },
+          {
+            index: 1,
+            name: "NVIDIA GPU 1",
+            utilizationPercent: 7,
+            memoryTotalBytes: 4 * 1024 ** 3,
+            memoryUsedBytes: 1024 ** 3,
+            memoryUtilizationPercent: 25,
+          },
+        ],
+        reason: null,
+        detail: null,
+      },
+    };
+    const recovered: ServerProjectSystemTelemetryResult = {
+      ...telemetry,
+      sampledAt: DateTime.makeUnsafe("2026-07-26T12:00:11.000Z"),
+      cpu: { ...telemetry.cpu, status: "available", utilizationPercent: 67, detail: null },
+    };
     const readTelemetry = vi
-      .fn()
-      .mockResolvedValueOnce(
-        telemetryFixture({ projectId: projectA, minimumSampleIntervalMs: 250 }),
-      )
-      .mockImplementation(async () => {
+      .fn(async () => recovered)
+      .mockResolvedValueOnce(telemetry)
+      .mockImplementationOnce(async () => {
         await outage.promise;
         throw { _tag: "TelemetryOffline", message: "private telemetry failure detail" };
       });
     const mounted = await render(
       <ProjectTelemetryGraph
         environmentId={environmentA}
+        hideUnavailableGraphs
         pollIntervalMs={250}
         projectId={projectA}
         readTelemetry={readTelemetry}
@@ -834,22 +866,49 @@ describe("ProjectTelemetryGraph", () => {
     );
 
     try {
-      await page.getByLabelText("Expand Resources").click();
       await expect.element(page.getByLabelText(/Host CPU: 42%/i)).toBeVisible();
       await vi.waitFor(() => expect(readTelemetry).toHaveBeenCalledTimes(2));
       outage.resolve();
-      await expect
-        .element(page.getByLabelText(/Host CPU: Unavailable. Telemetry unavailable/i))
-        .toBeVisible();
-      await expect
-        .element(page.getByLabelText(/Host GPU: Unavailable. Telemetry unavailable/i))
-        .toBeVisible();
-      expect(document.body.textContent).toContain("last successful");
-      expect(document.querySelector('[aria-label^="Host CPU: 42%"]')).toBeNull();
+      await expect.element(page.getByText(/last successful/i)).toBeVisible();
+      for (const label of [
+        "Host CPU: 42%",
+        "Host RAM: 75%",
+        "Project disk: 70%",
+        "Host network: ↓ 1 MiB/s · ↑ 256 KiB/s",
+        "GPU 1: 24%",
+        "GPU 1 VRAM: 1 GiB / 4 GiB",
+        "GPU 1 temp: 49°C",
+        "CPU temp: 62°C",
+      ]) {
+        expect(document.querySelector(`[aria-label^="${label}"]`), label).not.toBeNull();
+      }
+      expect(document.querySelector('[data-project-telemetry-card="GPU 2 temp"]')).toBeNull();
       expect(document.body.textContent).not.toContain("private telemetry failure detail");
       expect(diagnostic.mock.calls).toEqual([
         ["[PROJECT_TELEMETRY] read failed", "TelemetryOffline"],
       ]);
+      await vi.waitFor(() => expect(readTelemetry).toHaveBeenCalledTimes(3), { timeout: 15_000 });
+      await expect.element(page.getByLabelText(/Host CPU: 67%/i)).toBeVisible();
+      expect(document.body.textContent).not.toContain("last successful");
+      const cpuLineSelector = '[data-project-telemetry-series="Host CPU"] path[stroke-width="1.8"]';
+      expect(document.querySelector(cpuLineSelector)?.getAttribute("d")?.match(/M /g)).toHaveLength(
+        2,
+      );
+
+      await mounted.rerender(
+        <ProjectTelemetryGraph
+          environmentId={environmentB}
+          projectId={projectB}
+          readTelemetry={async () => {
+            throw new Error("Initial read failed");
+          }}
+        />,
+      );
+      await expect
+        .element(page.getByLabelText(/Host CPU: Unavailable. Telemetry unavailable/i))
+        .toBeVisible();
+      expect(document.body.textContent).not.toContain("last successful");
+      expect(document.querySelector(cpuLineSelector)).toBeNull();
     } finally {
       outage.resolve();
       await mounted.unmount();
