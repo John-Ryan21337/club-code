@@ -5,6 +5,8 @@ import { useClientSettingsHydrated, useSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import {
   captureSettingsProfilePayload,
+  useSettingsProfilesReady,
+  flushSettingsProfileLibrary,
   settingsProfileLibraryStore,
   useSettingsProfileLibrary,
 } from "../settingsProfiles";
@@ -35,7 +37,9 @@ export function shouldSeedMobileSettingsProfile(input: {
 
 export function MobileSettingsProfileBootstrap() {
   const isMobile = useIsMobile();
-  const settingsHydrated = useClientSettingsHydrated();
+  const clientHydrated = useClientSettingsHydrated();
+  const profilesReady = useSettingsProfilesReady();
+  const settingsHydrated = clientHydrated && profilesReady;
   const settings = useSettings();
   const { theme } = useTheme();
   const library = useSettingsProfileLibrary();
@@ -64,6 +68,7 @@ export function MobileSettingsProfileBootstrap() {
     if (!settings.mobileOptimizedPresentation) {
       settingsProfileLibraryStore.activate(null);
     }
+    void flushSettingsProfileLibrary();
   }, [isMobile, library.profiles.length, settings, settingsHydrated, theme]);
 
   return null;

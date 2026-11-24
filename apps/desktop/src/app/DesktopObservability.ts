@@ -13,7 +13,7 @@ import * as PlatformError from "effect/PlatformError";
 import * as References from "effect/References";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as Semaphore from "effect/Semaphore";
+import * as Semaphore from "@cafecode/shared/InterruptSafeSemaphore";
 import * as Tracer from "effect/Tracer";
 import { OtlpSerialization, OtlpTracer } from "effect/unstable/observability";
 

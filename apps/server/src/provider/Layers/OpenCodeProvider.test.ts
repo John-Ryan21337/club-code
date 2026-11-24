@@ -181,7 +181,7 @@ it.layer(testLayer)("checkOpenCodeProviderStatus", (it) => {
       assert.ok(variantDescriptor && variantDescriptor.type === "select");
       assert.equal(
         variantDescriptor.options.find((option) => option.isDefault === true)?.id,
-        "medium",
+        "high",
       );
       const agentDescriptor = model.capabilities?.optionDescriptors?.find(
         (descriptor) => descriptor.id === "agent" && descriptor.type === "select",

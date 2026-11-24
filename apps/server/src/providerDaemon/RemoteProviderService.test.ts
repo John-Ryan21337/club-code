@@ -1,11 +1,19 @@
+// @effect-diagnostics nodeBuiltinImport:off
 import {
+  PROVIDER_DAEMON_EVENTS_PATH,
+  PROVIDER_DAEMON_HEALTH_PATH,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  EventId,
+  TurnId,
   type ProviderSession,
 } from "@cafecode/contracts";
-import { assert, describe, it } from "@effect/vitest";
+import { assert, describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Stream from "effect/Stream";
+import * as http from "node:http";
 
 import {
   attachCommandIdToMutatingProviderDaemonRequest,
@@ -15,9 +23,11 @@ import {
   PROVIDER_DAEMON_PROMPT_ROUTING_READ_TIMEOUT_MS,
   ProviderDaemonRpcResponseError,
   providerDaemonRpcTimeoutMs,
+  readEventStream,
   remoteProviderCursorProjectorForConfig,
   toRemoteRequestError,
   requireRemoteCodexOperation,
+  makeRemoteProviderEventBridge,
 } from "./RemoteProviderService.ts";
 import {
   PROVIDER_DAEMON_RUNTIME_CURSOR_PROJECTOR,
@@ -25,6 +35,167 @@ import {
 } from "./ProviderDaemonRuntimeCursor.ts";
 
 describe("RemoteProviderService", () => {
+  it("recovers idle streams only when authenticated health is ahead of the accepted cursor", async () => {
+    const token = "provider-daemon-test-token-000000000000000000000000";
+    const requestedCursors: Array<string | null> = [];
+    const authorizations: Array<string | undefined> = [];
+    const healthCursors: number[] = [];
+    const cursorOnlyQueries: Array<string | null> = [];
+    const createdAt = "2026-11-11T18:06:27.583Z";
+    const eventRecord = (cursor: number): string =>
+      JSON.stringify({
+        cursor,
+        emittedAt: createdAt,
+        event: {
+          provider: "claudeAgent",
+          providerInstanceId: "claudeAgent",
+          threadId: "replayed-thread",
+          eventId: `replayed-event-${cursor}`,
+          createdAt,
+          type: "session.started",
+          payload: {},
+        },
+      }) + "\n";
+    const server = http.createServer((request, response) => {
+      authorizations.push(request.headers.authorization);
+      const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      if (url.pathname === PROVIDER_DAEMON_HEALTH_PATH) {
+        const probe = healthCursors.length;
+        const eventCursor = probe < 2 ? 1 : 3;
+        healthCursors.push(eventCursor);
+        cursorOnlyQueries.push(url.searchParams.get("cursorOnly"));
+        response.writeHead(probe === 2 ? 503 : 200, { "content-type": "application/json" });
+        if (probe !== 0) {
+          response.end(JSON.stringify({ eventCursor }));
+          return;
+        }
+        // Older daemon: ignores the query and returns the full health shape.
+        response.end(
+          JSON.stringify({
+            ok: true,
+            mode: "provider-daemon",
+            pid: 1,
+            ppid: 0,
+            version: "test",
+            startedAt: createdAt,
+            activeSessionCount: 1,
+            configuredInstanceCount: 1,
+            eventCursor,
+          }),
+        );
+        return;
+      }
+      if (url.pathname !== PROVIDER_DAEMON_EVENTS_PATH) {
+        response.writeHead(404).end();
+        return;
+      }
+      requestedCursors.push(url.searchParams.get("after"));
+      if (requestedCursors.length === 1) return;
+      response.writeHead(200, { "content-type": "application/x-ndjson" });
+      if (requestedCursors.length === 2) {
+        response.write(eventRecord(1));
+      } else {
+        response.end(eventRecord(2) + eventRecord(3));
+      }
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      assert.isNotNull(address);
+      if (address === null || typeof address === "string") {
+        throw new Error("The daemon test server did not bind a TCP port.");
+      }
+      const endpoint = { httpBaseUrl: `http://127.0.0.1:${address.port}`, token };
+      let acceptedCursor = 0;
+      const accepted: number[] = [];
+      const options = {
+        readAcceptedCursor: () => acceptedCursor,
+        onRecord: async (record: { readonly cursor: number }) => {
+          acceptedCursor = record.cursor;
+          accepted.push(record.cursor);
+        },
+        idleIntervalMs: 20,
+        signal: AbortSignal.timeout(5_000),
+      };
+
+      await expect(readEventStream(endpoint, options)).rejects.toThrow(
+        "provider daemon event stream stalled",
+      );
+      assert.deepEqual(accepted, []);
+      await expect(readEventStream(endpoint, options)).rejects.toThrow(
+        "provider daemon event stream stalled",
+      );
+      assert.deepEqual(accepted, [1]);
+      assert.deepEqual(healthCursors, [1, 1, 3, 3]);
+      await readEventStream(endpoint, options);
+
+      assert.deepEqual(requestedCursors, ["0", "0", "1"]);
+      assert.deepEqual(accepted, [1, 2, 3]);
+      assert.deepEqual(cursorOnlyQueries, ["1", "1", "1", "1"]);
+      assert.deepEqual(
+        authorizations,
+        Array.from({ length: 7 }, () => `Bearer ${token}`),
+      );
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      });
+    }
+  });
+
+  it.effect(
+    "holds replay until canonical ingestion subscribes even with an ancillary observer",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const bridge = yield* makeRemoteProviderEventBridge(2);
+          const seen: string[] = [];
+          yield* Stream.runForEach(bridge.streamEvents, (event) =>
+            Effect.sync(() => seen.push(event.type)),
+          ).pipe(Effect.forkScoped);
+          yield* Effect.yieldNow;
+          const base = {
+            provider: ProviderDriverKind.make("claudeAgent"),
+            providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+            threadId: ThreadId.make("replayed-thread"),
+            turnId: TurnId.make("replayed-turn"),
+            createdAt: "2026-11-11T18:06:27.583Z",
+          };
+          const replay = yield* Effect.gen(function* () {
+            yield* bridge.awaitCanonicalConsumer;
+            yield* bridge.publish({
+              ...base,
+              eventId: EventId.make("replayed-start"),
+              type: "turn.started",
+              payload: {},
+            });
+            yield* bridge.publish({
+              ...base,
+              eventId: EventId.make("replayed-completion"),
+              type: "turn.completed",
+              payload: { state: "completed" },
+            });
+          }).pipe(Effect.forkScoped);
+          yield* Effect.yieldNow;
+          assert.isUndefined(replay.pollUnsafe());
+          assert.deepEqual(seen, []);
+          const canonical = yield* bridge.subscribeCanonicalEvents();
+          // Both records may publish before consumption begins: acquisition,
+          // rather than a scheduler delay, must retain the terminal record.
+          yield* Fiber.join(replay);
+          const events = yield* Stream.runCollect(canonical.pipe(Stream.take(2)));
+          assert.deepEqual(
+            events.map((event) => event.type),
+            ["turn.started", "turn.completed"],
+          );
+        }),
+      ),
+  );
+
   it("refuses new Codex operations before sending their payload to an older daemon", async () => {
     for (const method of ["codexThreadAttachments", "codexExperimental"] as const) {
       let sent = false;

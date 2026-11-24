@@ -2,7 +2,6 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ClientSettingsPatch,
   CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS,
-  DEFAULT_AMBIENT_CLIENT_SETTINGS,
   DEFAULT_CLIENT_SETTINGS,
   MAX_SIDEBAR_STAR_SPEED,
 } from "@cafecode/contracts";
@@ -149,14 +148,17 @@ it.layer(NodeServices.layer)("server client settings", (it) => {
 
       assert.equal(settings.timestampFormat, "24-hour");
       assert.isFalse(settings.showSidebarMascot);
-      for (const [key, value] of Object.entries(DEFAULT_AMBIENT_CLIENT_SETTINGS)) {
-        assert.deepEqual(settings[key as keyof typeof DEFAULT_AMBIENT_CLIENT_SETTINGS], value);
-        assert.deepEqual(persisted[key as keyof typeof DEFAULT_AMBIENT_CLIENT_SETTINGS], value);
-      }
+      assert.isTrue(settings.fallingEffectsEnabled);
+      assert.isTrue(persisted.fallingEffectsEnabled);
+      assert.equal(settings.fallingEffectSpeed, DEFAULT_CLIENT_SETTINGS.fallingEffectSpeed);
+      assert.include(
+        yield* fs.readFileString(`${config.clientSettingsPath}.before-recovery`),
+        malformedPersistedValue,
+      );
 
       // @effect-diagnostics-next-line preferSchemaOverJson:off
       const serializedLogs = JSON.stringify(loggedMessages);
-      assert.include(serializedLogs, "recovered malformed ambient client settings");
+      assert.include(serializedLogs, "recovered invalid client settings fields");
       assert.notInclude(serializedLogs, JSON.stringify(config.clientSettingsPath));
       assert.notInclude(serializedLogs, malformedPersistedValue);
     }).pipe(
@@ -197,22 +199,13 @@ it.layer(NodeServices.layer)("server client settings", (it) => {
       assert.notProperty(persisted, "settings");
       assert.equal(persisted.timestampFormat, "12-hour");
       assert.equal(persisted.showSidebarSearch, false);
-      assert.deepEqual(
-        Object.fromEntries(
-          Object.keys(DEFAULT_AMBIENT_CLIENT_SETTINGS).map((key) => [
-            key,
-            settings[key as keyof typeof settings],
-          ]),
-        ),
-        DEFAULT_AMBIENT_CLIENT_SETTINGS,
-      );
-      for (const [key, value] of Object.entries(DEFAULT_AMBIENT_CLIENT_SETTINGS)) {
-        assert.deepEqual(persisted[key], value);
-      }
+      assert.isTrue(settings.ambientVideoEnabled);
+      assert.deepEqual(settings.ambientVideoSource, DEFAULT_CLIENT_SETTINGS.ambientVideoSource);
+      assert.isTrue(persisted.ambientVideoEnabled);
     }).pipe(Effect.provide(makeServerClientSettingsLayer())),
   );
 
-  it.effect("keeps whole-document corruption on conservative schema defaults", () =>
+  it.effect("preserves valid settings when a non-ambient field is invalid", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const config = yield* ServerConfig;
@@ -230,7 +223,9 @@ it.layer(NodeServices.layer)("server client settings", (it) => {
       const service = yield* ServerClientSettingsService;
       const settings = yield* service.getSettings;
 
-      assert.deepEqual(settings, DEFAULT_CLIENT_SETTINGS);
+      assert.equal(settings.timestampFormat, "24-hour");
+      assert.isTrue(settings.fallingEffectsEnabled);
+      assert.equal(settings.showSidebarMascot, DEFAULT_CLIENT_SETTINGS.showSidebarMascot);
       assert.notDeepEqual(settings, CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS);
     }).pipe(Effect.provide(makeServerClientSettingsLayer())),
   );

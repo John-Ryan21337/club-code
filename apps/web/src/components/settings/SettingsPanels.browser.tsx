@@ -1177,8 +1177,8 @@ describe("settings panels", () => {
         continueBackgroundAnimations: false,
       });
       expect(profilePatch).not.toHaveProperty("autoNudgeMode");
-      expect(profilePatch).not.toHaveProperty("providerModelPreferences");
-      expect(profilePatch).not.toHaveProperty("modelPacingEnabled");
+      expect(profilePatch).toHaveProperty("providerModelPreferences");
+      expect(profilePatch).toHaveProperty("modelPacingEnabled");
     });
     await expect.element(page.getByText("Loaded “Mobile”.", { exact: true })).toBeInTheDocument();
     await expect.element(page.getByLabelText("Theme preference")).toHaveTextContent("Dark");
@@ -1398,6 +1398,22 @@ describe("settings panels", () => {
     );
 
     await expect.element(page.getByText("Accent color")).toBeInTheDocument();
+    const promptSuggestions = page.getByRole("switch", {
+      name: "Suggested next prompt",
+      exact: true,
+    });
+    await expect.element(promptSuggestions).not.toBeChecked();
+    await promptSuggestions.click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ promptSuggestionsEnabled: true });
+    });
+    await expect.element(promptSuggestions).toBeChecked();
+    await page
+      .getByRole("button", { name: "Reset suggested next prompt to default", exact: true })
+      .click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ promptSuggestionsEnabled: false });
+    });
     setColorInput("Branding prefix", "Acme");
 
     await vi.waitFor(() => {

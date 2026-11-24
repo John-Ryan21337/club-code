@@ -14,6 +14,7 @@ import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@cafecode/sha
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
 import { expandHomePath } from "../pathExpansion.ts";
+import { CODEX_LMSTUDIO_ROOT_ARGS } from "../provider/codexLmStudioLaunch.ts";
 import { TextGenerationError } from "@cafecode/contracts";
 import {
   type BranchNameGenerationInput,
@@ -193,7 +194,12 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       const command = ChildProcess.make(
         codexConfig.binaryPath || "codex",
         [
-          ...(codexConfig.ossMode ? ["--oss", "--local-provider", "lmstudio"] : []),
+          // Root LM Studio selection; `--oss` alone leaves exec's embedded
+          // app-server on `openai` (modelProviderMismatch).
+          ...(codexConfig.ossMode ? CODEX_LMSTUDIO_ROOT_ARGS : []),
+          ...(!codexConfig.ossMode && codexConfig.modelProvider === "gcp"
+            ? ["-c", 'model_provider="gcp"']
+            : []),
           "exec",
           "--ephemeral",
           "--skip-git-repo-check",
@@ -203,7 +209,10 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
           modelSelection.model,
           "--config",
           `model_reasoning_effort="${reasoningEffort}"`,
-          ...(getModelSelectionBooleanOptionValue(modelSelection, "fastMode") === true
+          // Codex Fast (`service_tier="fast"`) is a paid route; honor the
+          // selection only when the instance's `allowPaidUsage` setting is on.
+          ...(codexConfig.allowPaidUsage &&
+          getModelSelectionBooleanOptionValue(modelSelection, "fastMode") === true
             ? ["--config", `service_tier="fast"`]
             : []),
           "--output-schema",

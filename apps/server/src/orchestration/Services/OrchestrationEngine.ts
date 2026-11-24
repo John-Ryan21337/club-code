@@ -46,6 +46,12 @@ export interface OrchestrationEngineShape {
   ) => Effect.Effect<{ sequence: number }, OrchestrationDispatchError, never>;
 
   /**
+   * In-memory revision for optional projection read reuse. Undefined while
+   * the command worker may be changing projections.
+   */
+  readonly stableProjectionSequence?: Effect.Effect<number | undefined>;
+
+  /**
    * Read the small in-memory command-processing counters used by diagnostics.
    *
    * This intentionally exposes only queue depth and aggregate command outcomes.

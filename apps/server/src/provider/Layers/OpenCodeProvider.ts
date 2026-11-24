@@ -144,12 +144,15 @@ function titleCaseSlug(value: string): string {
     .join(" ");
 }
 
-function inferDefaultVariant(
+export function inferDefaultVariant(
   providerID: string,
   variants: ReadonlyArray<string>,
 ): string | undefined {
   if (variants.length === 1) {
     return variants[0];
+  }
+  if (variants.includes("high")) {
+    return "high";
   }
   if (providerID === "anthropic" || providerID.startsWith("google")) {
     return variants.includes("high") ? "high" : undefined;

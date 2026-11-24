@@ -21,10 +21,12 @@ import {
   MessageId,
   ProjectId,
   ProviderItemId,
+  RuntimeItemId,
   type ServerSettings,
   ThreadId,
   TurnId,
 } from "@cafecode/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -32,7 +34,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
@@ -42,6 +44,8 @@ import {
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
 import { RepositoryIdentityResolver } from "../../project/Services/RepositoryIdentityResolver.ts";
+import { attachProviderDaemonRuntimeEventCursor } from "../../providerDaemon/ProviderDaemonRuntimeCursor.ts";
+import * as ingestionProgress from "../../providerDaemon/ProviderRuntimeIngestionProgress.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
@@ -49,7 +53,10 @@ import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
 import { RuntimeReceiptBusLive } from "./RuntimeReceiptBus.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
-import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import {
+  ProjectionSnapshotQuery,
+  type ProjectionSnapshotQueryShape,
+} from "../Services/ProjectionSnapshotQuery.ts";
 import { RuntimeReceiptBus } from "../Services/RuntimeReceiptBus.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -113,7 +120,9 @@ function isLegacyTurnCompletedEvent(
   );
 }
 
-function createProviderServiceHarness() {
+function createProviderServiceHarness(
+  observeRuntimeEvent?: (event: ProviderRuntimeEvent) => Effect.Effect<void>,
+) {
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
   const runtimeSessions: ProviderSession[] = [];
 
@@ -147,7 +156,10 @@ function createProviderServiceHarness() {
     },
     rollbackConversation: () => unsupported(),
     get streamEvents() {
-      return Stream.fromPubSub(runtimeEventPubSub);
+      const events = Stream.fromPubSub(runtimeEventPubSub);
+      return observeRuntimeEvent === undefined
+        ? events
+        : events.pipe(Stream.rechunk(1), Stream.tap(observeRuntimeEvent));
     },
   };
 
@@ -192,6 +204,7 @@ type ProviderRuntimeTestMessage = ProviderRuntimeTestThread["messages"][number];
 type ProviderRuntimeTestProposedPlan = ProviderRuntimeTestThread["proposedPlans"][number];
 type ProviderRuntimeTestActivity = ProviderRuntimeTestThread["activities"][number];
 type ProviderRuntimeTestCheckpoint = ProviderRuntimeTestThread["checkpoints"][number];
+type ThreadShellRead = ReturnType<ProjectionSnapshotQueryShape["getThreadShellById"]>;
 
 async function waitForThread(
   readModel: () => Promise<ProviderRuntimeTestReadModel>,
@@ -248,6 +261,8 @@ describe("ProviderRuntimeIngestion", () => {
 
   async function createHarness(options?: {
     serverSettings?: Partial<ServerSettings>;
+    observeRuntimeEvent?: (event: ProviderRuntimeEvent) => Effect.Effect<void>;
+    wrapThreadShellRead?: (read: ThreadShellRead) => ThreadShellRead;
     /**
      * Fail specific orchestration commands so a test can prove that derived,
      * best-effort writes cannot strand the terminal turn session write.
@@ -256,7 +271,7 @@ describe("ProviderRuntimeIngestion", () => {
   }) {
     const workspaceRoot = makeTempDir("t3-provider-project-");
     fs.mkdirSync(path.join(workspaceRoot, ".git"));
-    const provider = createProviderServiceHarness();
+    const provider = createProviderServiceHarness(options?.observeRuntimeEvent);
     const baseOrchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(OrchestrationProjectionPipelineLive),
@@ -288,10 +303,25 @@ describe("ProviderRuntimeIngestion", () => {
               };
             }),
           ).pipe(Layer.provide(baseOrchestrationLayer));
-    const projectionSnapshotLayer = OrchestrationProjectionSnapshotQueryLive.pipe(
+    const baseProjectionSnapshotLayer = OrchestrationProjectionSnapshotQueryLive.pipe(
       Layer.provide(RepositoryIdentityResolverTest),
       Layer.provide(SqlitePersistenceMemory),
     );
+    const wrapThreadShellRead = options?.wrapThreadShellRead;
+    const projectionSnapshotLayer =
+      wrapThreadShellRead === undefined
+        ? baseProjectionSnapshotLayer
+        : Layer.effect(
+            ProjectionSnapshotQuery,
+            Effect.gen(function* () {
+              const inner = yield* ProjectionSnapshotQuery;
+              return {
+                ...inner,
+                getThreadShellById: (threadId: ThreadId) =>
+                  wrapThreadShellRead(inner.getThreadShellById(threadId)),
+              };
+            }),
+          ).pipe(Layer.provide(baseProjectionSnapshotLayer));
     const layer = ProviderRuntimeIngestionLive.pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
@@ -380,6 +410,248 @@ describe("ProviderRuntimeIngestion", () => {
       drain,
     };
   }
+
+  async function createQueuedBurstHarness(
+    fenceEventId: EventId,
+    afterThreadShellRead?: (readNumber: number) => Effect.Effect<void>,
+  ) {
+    const firstReadStarted = Effect.runSync(Deferred.make<void>());
+    const resumeFirstRead = Effect.runSync(Deferred.make<void>());
+    const prefixQueued = Effect.runSync(Deferred.make<void>());
+    let shellReads = 0;
+    const harness = await createHarness({
+      serverSettings: { enableAssistantStreaming: false },
+      wrapThreadShellRead: (read) =>
+        Effect.suspend(() => {
+          const readNumber = ++shellReads;
+          const beforeRead =
+            readNumber === 1
+              ? Deferred.succeed(firstReadStarted, undefined).pipe(
+                  Effect.andThen(Deferred.await(resumeFirstRead)),
+                )
+              : Effect.void;
+          return beforeRead.pipe(
+            Effect.andThen(read),
+            Effect.tap(() => afterThreadShellRead?.(readNumber) ?? Effect.void),
+          );
+        }),
+      // The observed stream emits one event per chunk. When it reaches the
+      // fence, the serial subscriber has enqueued every preceding event.
+      observeRuntimeEvent: (event) =>
+        event.eventId === fenceEventId
+          ? Deferred.succeed(prefixQueued, undefined).pipe(Effect.asVoid)
+          : Effect.void,
+    });
+    return {
+      ...harness,
+      waitForFirstRead: () => Effect.runPromise(Deferred.await(firstReadStarted)),
+      resumeWithQueuedPrefix: () =>
+        Effect.runPromise(
+          Deferred.await(prefixQueued).pipe(
+            Effect.andThen(Deferred.succeed(resumeFirstRead, undefined)),
+          ),
+        ),
+      getShellReads: () => shellReads,
+    };
+  }
+
+  function nativeCommandOutput(
+    identity: Pick<ProviderRuntimeEvent, "provider" | "providerInstanceId" | "threadId" | "turnId">,
+    sequence: number,
+    createdAt: string,
+  ): ProviderRuntimeEvent {
+    const itemId = RuntimeItemId.make("command-output-item");
+    const delta = `output ${sequence}\n`;
+    return {
+      ...identity,
+      type: "content.delta",
+      eventId: asEventId(`command-output-${sequence}`),
+      createdAt,
+      itemId,
+      payload: { streamKind: "command_output", delta },
+      raw: {
+        source: "codex.app-server.notification",
+        method: "item/commandExecution/outputDelta",
+        payload: { threadId: "native-thread", turnId: identity.turnId, itemId, delta },
+      },
+    };
+  }
+
+  it("shares shell reads for bounded command output runs and preserves every cursor and assistant text", async () => {
+    const completionId = asEventId("command-burst-completed");
+    const harness = await createQueuedBurstHarness(completionId);
+    const identity = {
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("command-burst-turn"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    };
+    const createdAt = "2026-01-01T00:00:01.000Z";
+    const cursorUpdates = vi.spyOn(ingestionProgress, "recordProviderRuntimeIngestionCursor");
+    onTestFinished(() => {
+      cursorUpdates.mockRestore();
+      ingestionProgress.resetProviderRuntimeIngestionCursorForTest();
+    });
+    let cursor = 0;
+    const emit = (event: ProviderRuntimeEvent) =>
+      harness.emit(attachProviderDaemonRuntimeEventCursor(event, ++cursor));
+
+    emit({
+      ...identity,
+      type: "turn.started",
+      eventId: asEventId("command-burst-started"),
+      createdAt,
+      payload: {},
+    });
+    await harness.waitForFirstRead();
+
+    for (let sequence = 0; sequence < 67; sequence += 1) {
+      emit(nativeCommandOutput(identity, sequence, createdAt));
+    }
+    const assistantPrefix = {
+      ...identity,
+      type: "content.delta",
+      eventId: asEventId("command-burst-assistant-prefix"),
+      createdAt,
+      itemId: RuntimeItemId.make("command-burst-assistant"),
+      payload: { streamKind: "assistant_text", delta: "Final " },
+    } satisfies ProviderRuntimeEvent;
+    emit(assistantPrefix);
+    // A retry of an already processed output is a singleton between assistant
+    // deltas. It advances the cursor without reading the thread shell.
+    emit(nativeCommandOutput(identity, 0, createdAt));
+    emit({
+      ...assistantPrefix,
+      eventId: asEventId("command-burst-assistant-suffix"),
+      payload: { streamKind: "assistant_text", delta: "response" },
+    });
+    emit(nativeCommandOutput(identity, 67, createdAt));
+    emit(nativeCommandOutput(identity, 68, createdAt));
+    emit(assistantPrefix);
+    emit({
+      ...identity,
+      type: "turn.completed",
+      eventId: completionId,
+      createdAt,
+      payload: { state: "completed" },
+    });
+
+    await harness.resumeWithQueuedPrefix();
+    const receipt = await Effect.runPromise(
+      harness.receiptBus.awaitTurnIngestionQuiesced(identity),
+    );
+    await harness.drain();
+
+    // One start, two reads for the first output run across the 64-item limit,
+    // two assistant deltas, one read for the later output run, one completion.
+    expect(harness.getShellReads()).toBe(7);
+    expect(cursorUpdates.mock.calls).toEqual(Array.from({ length: cursor }, (_, i) => [i + 1]));
+    expect(receipt.sourceEventId).toBe(completionId);
+    const thread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === identity.threadId,
+    );
+    expect(thread?.session).toMatchObject({ status: "ready", activeTurnId: null });
+    expect(thread?.messages.filter((message) => message.turnId === identity.turnId)).toEqual([
+      expect.objectContaining({ role: "assistant", text: "Final response", streaming: false }),
+    ]);
+  });
+
+  it.each(["before", "during"] as const)(
+    "repairs an active turn that becomes stale %s the queued command output shell read",
+    async (timing) => {
+      const completionId = asEventId("command-repair-completed");
+      const proofReadFinished = Effect.runSync(Deferred.make<void>());
+      const resumeProofRead = Effect.runSync(Deferred.make<void>());
+      const harness = await createQueuedBurstHarness(completionId, (readNumber) =>
+        timing === "during" && readNumber === 2
+          ? Deferred.succeed(proofReadFinished, undefined).pipe(
+              Effect.andThen(Deferred.await(resumeProofRead)),
+            )
+          : Effect.void,
+      );
+      const identity = {
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("command-repair-turn"),
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      };
+      const staleTurnId = asTurnId("command-repair-stale-turn");
+      const startedAt = "2026-01-01T00:00:01.000Z";
+      const outputAt = "2026-01-01T00:00:03.000Z";
+      const completedAt = "2026-01-01T00:00:04.000Z";
+      harness.setProviderSession({
+        provider: identity.provider,
+        providerInstanceId: identity.providerInstanceId,
+        threadId: identity.threadId,
+        activeTurnId: identity.turnId,
+        status: "running",
+        runtimeMode: "approval-required",
+        createdAt: startedAt,
+        updatedAt: outputAt,
+      });
+      harness.emit({
+        ...identity,
+        type: "turn.started",
+        eventId: asEventId("command-repair-started"),
+        turnId: timing === "before" ? staleTurnId : identity.turnId,
+        createdAt: startedAt,
+        payload: {},
+      });
+      await harness.waitForFirstRead();
+      harness.emit(nativeCommandOutput(identity, 0, outputAt));
+      harness.emit(nativeCommandOutput(identity, 1, outputAt));
+      harness.emit({
+        ...identity,
+        type: "turn.completed",
+        eventId: completionId,
+        createdAt: completedAt,
+        payload: { state: "completed" },
+      });
+      await harness.resumeWithQueuedPrefix();
+      if (timing === "during") {
+        // The proof query has returned a healthy shell. Change the projection
+        // through the same engine an independent command reactor uses before
+        // allowing ingestion to use the query result.
+        await Effect.runPromise(Deferred.await(proofReadFinished));
+        const createdAt = "2026-01-01T00:00:02.000Z";
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.make("command-repair-replace-active-turn"),
+            threadId: identity.threadId,
+            session: {
+              threadId: identity.threadId,
+              providerName: identity.provider,
+              providerInstanceId: identity.providerInstanceId,
+              status: "running",
+              activeTurnId: staleTurnId,
+              lastError: null,
+              runtimeMode: "approval-required",
+              updatedAt: createdAt,
+            },
+            createdAt,
+          }),
+        );
+        await Effect.runPromise(Deferred.succeed(resumeProofRead, undefined));
+      }
+      await Effect.runPromise(harness.receiptBus.awaitTurnIngestionQuiesced(identity));
+      await harness.drain();
+
+      const events = await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0)));
+      expect(
+        Array.from(events).flatMap((event) =>
+          event.type === "thread.session-set" && event.payload.session.updatedAt >= startedAt
+            ? [[event.payload.session.status, event.payload.session.activeTurnId]]
+            : [],
+        ),
+      ).toEqual([
+        ...(timing === "during" ? [["running", identity.turnId]] : []),
+        ["running", staleTurnId],
+        ["running", identity.turnId],
+        ["ready", null],
+      ]);
+    },
+  );
 
   it("maps turn started/completed events into thread session updates", async () => {
     const harness = await createHarness();
@@ -1922,61 +2194,90 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
-  it("does not replace streamed output with a divergent completed item", async () => {
-    const harness = await createHarness({ serverSettings: { enableAssistantStreaming: true } });
-    const now = "2026-01-01T00:00:00.000Z";
-    const turnId = asTurnId("turn-divergent-completion");
-    const itemId = asItemId("item-divergent-completion");
-    const streamedText = "Streamed provider text.";
+  it.each([true, false])(
+    "repairs missing words from the exact Codex completed item (streaming=%s)",
+    async (enableAssistantStreaming) => {
+      const harness = await createHarness({ serverSettings: { enableAssistantStreaming } });
+      const now = "2026-01-01T00:00:00.000Z";
+      const turnId = asTurnId("turn-divergent-completion");
+      const itemId = asItemId("item-divergent-completion");
+      const streamedText = "The app separate for text special symbols sogar could different.";
+      const finalText =
+        "The app has separate handling for streamed text and special citation symbols, so “garbled” could mean different failures.";
 
-    harness.emit({
-      type: "content.delta",
-      eventId: asEventId("evt-divergent-completion-delta"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId,
-      itemId,
-      payload: {
-        streamKind: "assistant_text",
-        delta: streamedText,
-      },
-    });
-    await waitForThread(harness.readModel, (entry) =>
-      entry.messages.some(
-        (message: ProviderRuntimeTestMessage) =>
-          message.id === "assistant:item-divergent-completion" && message.streaming,
-      ),
-    );
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId("evt-divergent-completion-delta"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId,
+        itemId,
+        payload: {
+          streamKind: "assistant_text",
+          delta: streamedText,
+        },
+      });
+      if (enableAssistantStreaming)
+        await waitForThread(harness.readModel, (entry) =>
+          entry.messages.some(
+            (message: ProviderRuntimeTestMessage) =>
+              message.id === "assistant:item-divergent-completion" && message.streaming,
+          ),
+        );
 
-    harness.emit({
-      type: "item.completed",
-      eventId: asEventId("evt-divergent-completion-completed"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId,
-      itemId,
-      payload: {
-        itemType: "assistant_message",
-        status: "completed",
-        detail: "Different completed provider text.",
-      },
-    });
+      harness.emit({
+        type: "item.completed",
+        eventId: asEventId("evt-divergent-completion-completed"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId,
+        itemId,
+        payload: {
+          itemType: "assistant_message",
+          status: "completed",
+          detail: finalText,
+          data: {
+            threadId: "native-thread",
+            turnId,
+            item: { type: "agentMessage", id: itemId, text: finalText },
+          },
+        },
+        raw: {
+          source: "codex.app-server.notification",
+          method: "item/completed",
+          payload: {
+            threadId: "native-thread",
+            turnId,
+            item: { type: "agentMessage", id: itemId, text: finalText },
+          },
+        },
+      });
 
-    const thread = await waitForThread(harness.readModel, (entry) =>
-      entry.messages.some(
-        (message: ProviderRuntimeTestMessage) =>
-          message.id === "assistant:item-divergent-completion" && !message.streaming,
-      ),
-    );
-    expect(
-      thread.messages.find(
-        (message: ProviderRuntimeTestMessage) =>
-          message.id === "assistant:item-divergent-completion",
-      )?.text,
-    ).toBe(streamedText);
-  });
+      const thread = await waitForThread(harness.readModel, (entry) =>
+        entry.messages.some(
+          (message: ProviderRuntimeTestMessage) =>
+            message.id === "assistant:item-divergent-completion" && !message.streaming,
+        ),
+      );
+      expect(
+        thread.messages.find(
+          (message: ProviderRuntimeTestMessage) =>
+            message.id === "assistant:item-divergent-completion",
+        )?.text,
+      ).toBe(finalText);
+      const events = await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0)));
+      const completionEvents = Array.from(events).filter(
+        (event) =>
+          event.type === "thread.message-sent" &&
+          event.payload.messageId === `assistant:${itemId}` &&
+          !event.payload.streaming,
+      );
+      expect(completionEvents).toHaveLength(1);
+      expect(completionEvents[0]).toMatchObject({ payload: { text: finalText } });
+    },
+  );
 
   it("ignores Codex snapshot backfill assistant completions that duplicate live assistant output", async () => {
     const harness = await createHarness({ serverSettings: { enableAssistantStreaming: false } });
@@ -4538,6 +4839,108 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBe("runtime exploded");
     expect(activity?.kind).toBe("runtime.error");
     expect(activityPayload?.message).toBe("runtime exploded");
+  });
+
+  it.each(["runtime.error", "runtime.warning"] as const)(
+    "shows the bounded native safety finding without exposing continuation metadata (%s)",
+    async (type) => {
+      const harness = await createHarness();
+      harness.emit({
+        type,
+        eventId: asEventId("evt-safety-finding"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-3"),
+        payload: {
+          message: "Blocked by provider safety systems.",
+          detail: {
+            error: {
+              codexErrorInfo: "misalignmentPolicyViolation",
+              misalignment: {
+                detailedExplanation: "A private document may have been sent to another service.",
+                steer: { message: "DO NOT EXECUTE THIS INSTRUCTION" },
+                reviewTarget: "opaque-review-token",
+              },
+            },
+          },
+        },
+      });
+      const thread = await waitForThread(harness.readModel, (entry) =>
+        entry.activities.some(
+          (activity: ProviderRuntimeTestActivity) => activity.id === "evt-safety-finding",
+        ),
+      );
+      const activity = thread.activities.find(
+        (entry: ProviderRuntimeTestActivity) => entry.id === "evt-safety-finding",
+      );
+      expect(activity?.summary).toBe(
+        type === "runtime.error" ? "Provider safety block" : "Subagent safety block",
+      );
+      expect(JSON.stringify(activity?.payload)).toContain("A private document may have been sent");
+      if (type === "runtime.error") {
+        expect(JSON.stringify(activity?.payload)).toContain(
+          "Repeating the prompt does not clear this block",
+        );
+        expect(thread.session?.status).toBe("error");
+      } else {
+        expect(thread.session?.status).not.toBe("error");
+      }
+      expect(JSON.stringify(activity?.payload)).not.toContain("DO NOT EXECUTE");
+      expect(JSON.stringify(activity?.payload)).not.toContain("opaque-review-token");
+      expect(thread.session?.lastError ?? "").not.toContain("A private document");
+    },
+  );
+
+  it("keeps completion-only safety findings in the exact thread activity, outside session errors", async () => {
+    const harness = await createHarness();
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-completion-safety-finding"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-3"),
+      payload: {
+        state: "failed",
+        errorMessage: "Codex ended this task after a provider safety review.",
+      },
+      raw: {
+        source: "codex.app-server.notification",
+        method: "turn/completed",
+        payload: {
+          turn: {
+            error: {
+              codexErrorInfo: "misalignmentPolicyViolation",
+              misalignment: {
+                detailedExplanation: "A private document may have been sent to another service.",
+                steer: { message: "DO NOT EXECUTE THIS INSTRUCTION" },
+                reviewTarget: "opaque-review-token",
+              },
+            },
+          },
+        },
+      },
+    });
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.session?.lastError === "Codex ended this task after a provider safety review." &&
+        entry.activities.some(
+          (activity: ProviderRuntimeTestActivity) =>
+            activity.id === "evt-completion-safety-finding",
+        ),
+    );
+    const activity = thread.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.id === "evt-completion-safety-finding",
+    );
+    expect(activity?.summary).toBe("Provider safety block");
+    expect(activity?.turnId).toBe("turn-3");
+    expect(JSON.stringify(activity?.payload)).toContain("A private document may have been sent");
+    expect(JSON.stringify(activity?.payload)).not.toContain("DO NOT EXECUTE");
+    expect(JSON.stringify(activity?.payload)).not.toContain("opaque-review-token");
+    expect(thread.session?.lastError).not.toContain("A private document");
+    expect(thread.session?.status).toBe("error");
   });
 
   it("keeps the session running and records transient retry warnings during an active turn", async () => {

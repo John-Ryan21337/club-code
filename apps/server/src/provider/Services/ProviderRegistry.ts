@@ -114,6 +114,9 @@ export interface ProviderRegistryShape {
    */
   readonly updateProviderAccountRateLimits: (input: {
     readonly instanceId: ProviderInstanceId;
+    readonly limitId?: string;
+    readonly limitName?: string;
+    readonly reachedType?: string | null;
     readonly slot: "primary" | "secondary";
     readonly window: ServerProviderAccountRateLimitWindow;
     readonly checkedAt: string;

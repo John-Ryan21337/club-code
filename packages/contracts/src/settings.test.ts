@@ -149,6 +149,7 @@ const decodeClientSettings = Schema.decodeSync(ClientSettingsSchema);
 const decodeClientSettingsPatch = Schema.decodeUnknownSync(ClientSettingsPatch);
 const encodeClientSettings = Schema.encodeSync(ClientSettingsSchema);
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
+const decodeUnknownCodexSettings = Schema.decodeUnknownSync(CodexSettings);
 const decodeUnknownJsonString = Schema.decodeUnknownSync(Schema.UnknownFromJsonString);
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
@@ -181,6 +182,8 @@ describe("client settings", () => {
       notificationsEnabled: false,
       completionAlertSoundEnabled: false,
       completionAlertSpeechEnabled: false,
+      // Only audible while the off-by-default spoken alert is enabled.
+      completionAlertSpeechChimeEnabled: true,
       completionAlertLanguage: "en",
       completionAlertEnglishVoiceGender: "female",
       completionAlertJapaneseVoiceGender: "female",
@@ -263,6 +266,10 @@ describe("client settings", () => {
   });
 
   it("defaults appearance preferences", () => {
+    expect(DEFAULT_CLIENT_SETTINGS.promptSuggestionsEnabled).toBe(false);
+    expect(decodeClientSettingsPatch({ promptSuggestionsEnabled: true })).toEqual({
+      promptSuggestionsEnabled: true,
+    });
     expect(DEFAULT_CLIENT_SETTINGS.continueBackgroundAnimations).toBe(
       DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS,
     );
@@ -1391,6 +1398,15 @@ describe("provider settings", () => {
     });
   });
 
+  it("keeps OpenAI as the default and persists an explicit Vertex AI connection", () => {
+    expect(decodeCodexSettings({}).modelProvider).toBe("openai");
+    expect(decodeCodexSettings({ modelProvider: "gcp" }).modelProvider).toBe("gcp");
+    expect(decodeServerSettingsPatch({ providers: { codex: { modelProvider: "gcp" } } })).toEqual({
+      providers: { codex: { modelProvider: "gcp" } },
+    });
+    expect(() => decodeUnknownCodexSettings({ modelProvider: "unexpected-provider" })).toThrow();
+  });
+
   it("accepts literal loopback, private LAN, and HTTPS LM Studio API roots", () => {
     for (const value of [
       "http://localhost:1234/v1",
@@ -1487,6 +1503,26 @@ describe("provider settings", () => {
       providers: {
         codex: { ultraCaching: true },
         claudeAgent: { ultraCaching: true },
+      },
+    });
+  });
+
+  it("defaults paid usage off and persists the switch independently per provider", () => {
+    expect(decodeCodexSettings({}).allowPaidUsage).toBe(false);
+    expect(decodeClaudeSettings({}).allowPaidUsage).toBe(false);
+    expect(decodeCodexSettings({ allowPaidUsage: true }).allowPaidUsage).toBe(true);
+    expect(decodeClaudeSettings({ allowPaidUsage: true }).allowPaidUsage).toBe(true);
+    expect(
+      decodeServerSettingsPatch({
+        providers: {
+          codex: { allowPaidUsage: true },
+          claudeAgent: { allowPaidUsage: false },
+        },
+      }),
+    ).toEqual({
+      providers: {
+        codex: { allowPaidUsage: true },
+        claudeAgent: { allowPaidUsage: false },
       },
     });
   });

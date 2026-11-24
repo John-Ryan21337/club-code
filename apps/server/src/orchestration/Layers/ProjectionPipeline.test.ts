@@ -1618,6 +1618,33 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-diff-completes-
           },
         });
 
+        for (const status of ["ready", "error", "interrupted", "stopped"] as const) {
+          yield* appendAndProject({
+            type: "thread.session-set",
+            eventId: EventId.make(`evt-old-${status}`),
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: "2026-05-24T16:30:01.500Z",
+            commandId: CommandId.make(`cmd-old-${status}`),
+            causationEventId: null,
+            correlationId: null,
+            metadata: {},
+            payload: {
+              threadId,
+              session: {
+                threadId,
+                status,
+                providerName: "codex",
+                providerInstanceId: ProviderInstanceId.make("codex"),
+                runtimeMode: "full-access",
+                activeTurnId: null,
+                lastError: null,
+                updatedAt: "2026-05-24T16:30:01.500Z",
+              },
+            },
+          });
+        }
+
         const rows = yield* sql<{
           readonly status: string;
           readonly activeTurnId: string | null;

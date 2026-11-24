@@ -905,6 +905,17 @@ export async function handleProviderDaemonEventStream(
   let wakeWriter: (() => void) | null = null;
   let unsubscribe: (() => void) | null = null;
   let replayBoundaryCursor: number | null = null;
+  // Durable catch-up mode. The journal invokes listeners only after the
+  // SQLite INSERT has returned the record's cursor, so every live record is
+  // already replayable from `provider_daemon_events`. When a slow consumer
+  // overflows the finite in-memory live queue we therefore drop the queued
+  // copies and remember only the newest observed cursor; the writer pages the
+  // same records back from SQLite. Disconnecting here instead (the previous
+  // behaviour) forced the backend through a 500 ms reconnect sleep, a new
+  // boundary query, and a replay that refilled the live queue during command
+  // output floods, so the bridge spent about half its time reconnecting and
+  // ingestion fell tens of thousands of events behind the daemon.
+  let catchUpThroughCursor: number | null = null;
 
   const cleanup = (cause?: unknown): void => {
     if (cleaned) return;
@@ -943,22 +954,38 @@ export async function handleProviderDaemonEventStream(
     if (replayBoundaryCursor !== null && record.cursor <= replayBoundaryCursor) {
       return;
     }
+    if (catchUpThroughCursor !== null) {
+      // Already catching up from SQLite: track only the high-water cursor so
+      // memory stays constant however far the consumer lags.
+      catchUpThroughCursor = Math.max(catchUpThroughCursor, record.cursor);
+      wakeWriter?.();
+      wakeWriter = null;
+      return;
+    }
     try {
       const queued = encodeRecord(record);
       // While the boundary snapshot is still being read, most of what arrives
       // here is replay responsibility that will be purged once the cursor is
       // known. Counting it toward the finite live limit turned a slow boundary
       // query under SQLite contention into a lagging disconnect before the
-      // stream had written a byte, i.e. the reconnect loop this handler exists
-      // to prevent. Keep a wider, still finite, allowance until then.
+      // stream had written a byte. Keep a wider, still finite, allowance
+      // until then so ordinary boundary latency does not trigger catch-up.
       const liveLimitMultiplier = replayBoundaryCursor === null ? 4 : 1;
       if (
         liveQueue.length >= PROVIDER_PIPELINE_POLICY.daemonWriterMaxRecords * liveLimitMultiplier ||
         liveQueueBytes + queued.bytes >
           PROVIDER_PIPELINE_POLICY.daemonWriterMaxBytes * liveLimitMultiplier
       ) {
-        addProviderDaemonStreamDiagnostics({ laggingDisconnectCount: 1 });
-        cleanup(new Error("provider daemon event stream live queue exceeded its finite limit"));
+        // The queued records and this one are durable (see
+        // `catchUpThroughCursor`). Release their memory and let the writer
+        // page them back from SQLite on this same response.
+        catchUpThroughCursor = record.cursor;
+        liveQueue.length = 0;
+        liveQueueBytes = 0;
+        addProviderDaemonStreamDiagnostics({ liveOverflowCatchUpCount: 1 });
+        setProviderDaemonStreamDiagnostics({ queuedLiveRecords: 0, queuedLiveBytes: 0 });
+        wakeWriter?.();
+        wakeWriter = null;
         return;
       }
       liveQueue.push(queued);
@@ -979,7 +1006,9 @@ export async function handleProviderDaemonEventStream(
   };
 
   const waitForLive = (): Promise<void> => {
-    if (!active || liveQueue.length > 0) return Promise.resolve();
+    if (!active || liveQueue.length > 0 || catchUpThroughCursor !== null) {
+      return Promise.resolve();
+    }
     return new Promise((resolve) => {
       wakeWriter = resolve;
     });
@@ -1045,33 +1074,57 @@ export async function handleProviderDaemonEventStream(
       }
     };
 
+    // Writes durable pages after `cursor` up to `throughCursor()`, which is
+    // re-read per page so catch-up can extend while records keep arriving.
+    // Returns the bound of the final empty page: SQLite retains nothing in
+    // (`cursor`, bound]. Rows in that range that bounded journal pruning
+    // removed are skipped exactly as a reconnecting client would skip them.
+    const replayDurableThrough = async (throughCursor: () => number): Promise<number> => {
+      for (;;) {
+        if (!active) return cursor;
+        const bound = throughCursor();
+        const page = await runJournalEffect(
+          journal.replayPageThrough(
+            cursor,
+            bound,
+            PROVIDER_PIPELINE_POLICY.daemonReplayPageRecords,
+          ),
+        );
+        if (page.length === 0) return bound;
+        addProviderDaemonStreamDiagnostics({ replayPageCount: 1 });
+        for (const record of page) {
+          if (!active) return cursor;
+          if (record.cursor <= cursor) continue;
+          const queued = encodeRecord(record);
+          addProviderDaemonStreamDiagnostics({ replayRecordCount: 1, replayBytes: queued.bytes });
+          await writeQueued(queued);
+          cursor = record.cursor;
+          await accountWork(queued.bytes);
+        }
+      }
+    };
+
     // Replay is deliberately capped at the captured high-water cursor. Without
     // this bound a busy provider can keep extending historical replay while
     // the same records accumulate in the live queue.
-    for (;;) {
-      if (!active) break;
-      const page = await runJournalEffect(
-        journal.replayPageThrough(
-          cursor,
-          replaySubscription.replayBoundaryCursor,
-          PROVIDER_PIPELINE_POLICY.daemonReplayPageRecords,
-        ),
-      );
-      if (page.length === 0) break;
-      addProviderDaemonStreamDiagnostics({ replayPageCount: 1 });
-      for (const record of page) {
-        if (!active) return;
-        if (record.cursor <= cursor) continue;
-        const queued = encodeRecord(record);
-        addProviderDaemonStreamDiagnostics({ replayRecordCount: 1, replayBytes: queued.bytes });
-        await writeQueued(queued);
-        cursor = record.cursor;
-        await accountWork(queued.bytes);
-      }
-    }
+    const initialBoundary = replaySubscription.replayBoundaryCursor;
+    await replayDurableThrough(() => initialBoundary);
 
     for (;;) {
       if (!active) break;
+      if (catchUpThroughCursor !== null) {
+        // Live-queue overflow: page the dropped records back from SQLite.
+        // Listener callbacks keep raising `catchUpThroughCursor` meanwhile.
+        const drainedThrough = await replayDurableThrough(() => catchUpThroughCursor ?? cursor);
+        if (!active) break;
+        // This check and the mode switch run synchronously after the last
+        // empty page, so no listener callback can interleave: any record
+        // published from here on is queued live, and every earlier one was
+        // covered by replay. If the bound advanced during the final page
+        // query, loop and replay the remainder before resuming live mode.
+        if (catchUpThroughCursor !== null && catchUpThroughCursor > drainedThrough) continue;
+        catchUpThroughCursor = null;
+      }
       while (liveQueue.length > 0) {
         const queued = liveQueue.shift();
         if (queued === undefined) break;
@@ -1261,34 +1314,44 @@ export const runProviderDaemonServer = (
       // provider completed. Keep per-event failures local, and restart the
       // subscription if the stream itself terminates unexpectedly.
       while (true) {
-        yield* Stream.runForEach(providerService.streamEvents, (event) =>
-          journal.publish(event).pipe(
-            Effect.tap(() => {
-              const supervisorCursor = readProviderDaemonRuntimeEventCursor(event);
-              return supervisorCursor === undefined
-                ? Effect.void
-                : persistSupervisorBridgeCursor(supervisorCursor);
-            }),
-            Effect.tap(() =>
-              Effect.sync(() => options.onRuntimeEventJournaled?.(event)).pipe(Effect.ignoreCause),
+        // A retry owns a fresh subscription. Release the previous one before
+        // retrying, or its abandoned bounded queue can block every publisher.
+        yield* Effect.gen(function* () {
+          const canonicalEvents = providerService.subscribeCanonicalEvents
+            ? yield* providerService.subscribeCanonicalEvents()
+            : providerService.streamEvents;
+          yield* Stream.runForEach(canonicalEvents, (event) =>
+            journal.publish(event).pipe(
+              Effect.tap(() => {
+                const supervisorCursor = readProviderDaemonRuntimeEventCursor(event);
+                return supervisorCursor === undefined
+                  ? Effect.void
+                  : persistSupervisorBridgeCursor(supervisorCursor);
+              }),
+              Effect.tap(() =>
+                Effect.sync(() => options.onRuntimeEventJournaled?.(event)).pipe(
+                  Effect.ignoreCause,
+                ),
+              ),
+              Effect.catchCause((cause) => {
+                if (Cause.hasInterruptsOnly(cause)) {
+                  return Effect.failCause(cause);
+                }
+                return Effect.logWarning("provider daemon runtime event journal publish failed", {
+                  provider: event.provider,
+                  providerInstanceId: event.providerInstanceId,
+                  threadId: event.threadId,
+                  turnId: event.turnId,
+                  eventId: event.eventId,
+                  eventType: event.type,
+                  cause: Cause.pretty(cause),
+                });
+              }),
+              Effect.asVoid,
             ),
-            Effect.catchCause((cause) => {
-              if (Cause.hasInterruptsOnly(cause)) {
-                return Effect.failCause(cause);
-              }
-              return Effect.logWarning("provider daemon runtime event journal publish failed", {
-                provider: event.provider,
-                providerInstanceId: event.providerInstanceId,
-                threadId: event.threadId,
-                turnId: event.turnId,
-                eventId: event.eventId,
-                eventType: event.type,
-                cause: Cause.pretty(cause),
-              });
-            }),
-            Effect.asVoid,
-          ),
-        ).pipe(
+          );
+        }).pipe(
+          Effect.scoped,
           Effect.catchCause((cause) => {
             if (Cause.hasInterruptsOnly(cause)) {
               return Effect.failCause(cause);
@@ -1363,6 +1426,11 @@ export const runProviderDaemonServer = (
         if (url.pathname === PROVIDER_DAEMON_HEALTH_PATH && method === "GET") {
           if (!hasCapability(request, "health")) {
             writeJson(response, 401, { error: "unauthorized" });
+            return;
+          }
+          if (url.searchParams.get("cursorOnly") === "1") {
+            const eventCursor = await runProviderEffect(journal.latestCursor);
+            writeJson(response, 200, { eventCursor });
             return;
           }
           const health = await runProviderEffect(

@@ -21,7 +21,7 @@
  * canonicalizes rather than falling through as an unknown plan, but it is not a
  * member of {@link CLAUDE_SUBSCRIPTION_PLAN_TYPES}.
  */
-const CLAUDE_PLAN_FAMILIES = new Set(["pro", "max", "team", "enterprise", "free"]);
+const CLAUDE_PLAN_FAMILIES = new Set(["pro", "max", "ultra", "team", "enterprise", "free"]);
 
 /**
  * Plan families that entitle an account to provider-reported subscription
@@ -30,6 +30,7 @@ const CLAUDE_PLAN_FAMILIES = new Set(["pro", "max", "team", "enterprise", "free"
 export const CLAUDE_SUBSCRIPTION_PLAN_TYPES: ReadonlySet<string> = new Set([
   "pro",
   "max",
+  "ultra",
   "team",
   "enterprise",
 ]);

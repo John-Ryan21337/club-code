@@ -3,7 +3,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
-import * as Semaphore from "effect/Semaphore";
+import * as Semaphore from "@cafecode/shared/InterruptSafeSemaphore";
 
 import * as ElectronPowerSaveBlocker from "../electron/ElectronPowerSaveBlocker.ts";
 

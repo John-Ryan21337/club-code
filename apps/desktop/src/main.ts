@@ -2,6 +2,7 @@ import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeOS from "node:os";
+import { prepareReleaseStorage, resolveReleaseRoot } from "./app/ReleaseStorage.ts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -52,6 +53,31 @@ import {
   isDesktopUpdateDetectionProbeEnabled,
   runDesktopUpdateDetectionProbeAndExit,
 } from "./app/DesktopUpdateDetectionProbe.ts";
+
+try {
+  const storage = prepareReleaseStorage({
+    root: resolveReleaseRoot({
+      dirname: __dirname,
+      executablePath: process.execPath,
+      isPackaged: Electron.app.isPackaged,
+      platform: process.platform,
+      ...(process.env.APPIMAGE ? { appImage: process.env.APPIMAGE } : {}),
+    }),
+    homeDirectory: NodeOS.homedir(),
+    env: process.env,
+  });
+  Electron.app.setPath("userData", storage.stateDir);
+  Electron.app.setPath("sessionData", storage.stateDir);
+  Electron.app.setPath("temp", storage.temp);
+  Electron.app.setPath("crashDumps", storage.crashDumps);
+  Electron.app.setAppLogsPath(storage.logs);
+} catch (error) {
+  Electron.dialog.showErrorBox(
+    "Club Code storage",
+    error instanceof Error ? error.message : "Club Code storage setup failed.",
+  );
+  process.exit(1);
+}
 
 startStartupCpuProfiler({ role: "desktop-main" });
 

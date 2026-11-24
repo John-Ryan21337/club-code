@@ -29,6 +29,7 @@ function truncateDiagnostic(input: string): string {
 }
 
 export interface CodexAppServerClientOptions {
+  readonly losslessNotifications?: boolean;
   readonly logIncoming?: boolean;
   readonly logOutgoing?: boolean;
   /**
@@ -278,6 +279,9 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
 
   const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
     stdio,
+    ...(options.losslessNotifications !== undefined
+      ? { losslessNotifications: options.losslessNotifications }
+      : {}),
     ...(terminationError ? { terminationError } : {}),
     ...(options.logIncoming !== undefined ? { logIncoming: options.logIncoming } : {}),
     ...(options.logOutgoing !== undefined ? { logOutgoing: options.logOutgoing } : {}),

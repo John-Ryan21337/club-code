@@ -78,6 +78,8 @@ const { logInfo: logLifecycleInfo, logError: logLifecycleError } =
   DesktopObservability.makeComponentLogger("desktop-lifecycle");
 
 export const DESKTOP_SHUTDOWN_OVERLAY_MINIMUM_DWELL = Duration.seconds(3);
+const WINDOW_RECOVERY_PERIOD_MS = 60_000;
+const MAX_WINDOW_RECOVERIES_PER_PERIOD = 3;
 
 type ProviderDaemonQuitAction = "leave-running" | "terminate" | "cancel";
 
@@ -136,30 +138,44 @@ const resolveProviderDaemonQuitAction = Effect.fn(
   const providerDaemon = yield* DesktopProviderDaemonManager.DesktopProviderDaemonManager;
   const electronDialog = yield* ElectronDialog.ElectronDialog;
   const health = yield* providerDaemon.refreshHealth;
-  if (Option.isNone(health) || health.value.activeSessionCount === 0) {
+  const activeSessionCount = Option.isSome(health) ? health.value.activeSessionCount : null;
+  yield* Effect.annotateCurrentSpan({ healthAvailable: Option.isSome(health), activeSessionCount });
+  if (activeSessionCount === 0) {
+    yield* Effect.annotateCurrentSpan({ decision: "leave-running" });
     return "leave-running";
   }
 
-  const activeSessionCount = health.value.activeSessionCount;
+  // A failed health probe does not prove that no sessions are active. Keep the
+  // quit decision available when the daemon is busy or cannot be reached.
+  const message =
+    activeSessionCount === null
+      ? "Could not check provider sessions"
+      : "Provider sessions are still running";
   const result = yield* electronDialog.showMessageBox({
     type: "question",
-    title: "Provider sessions are still running",
-    message: "Provider sessions are still running",
-    detail: `${activeSessionCount} provider session${
-      activeSessionCount === 1 ? " is" : "s are"
-    } still active. Leave Codex, Claude, and other provider sessions running so Club Code can reconnect after restart, or stop them now?`,
+    title: message,
+    message,
+    detail:
+      activeSessionCount === null
+        ? "Provider sessions may still be running. Leave them running, stop them, or cancel quitting Club Code."
+        : `${activeSessionCount} provider session${
+            activeSessionCount === 1 ? " is" : "s are"
+          } still active. Leave Codex, Claude, and other provider sessions running so Club Code can reconnect after restart, or stop them now?`,
     buttons: ["Leave Running", "Stop Sessions", "Cancel Quit"],
-    defaultId: 0,
+    defaultId: activeSessionCount === null ? CANCEL_PROVIDER_DAEMON_QUIT_BUTTON_INDEX : 0,
     cancelId: CANCEL_PROVIDER_DAEMON_QUIT_BUTTON_INDEX,
     noLink: true,
   });
 
   if (result.response === CANCEL_PROVIDER_DAEMON_QUIT_BUTTON_INDEX) {
+    yield* Effect.annotateCurrentSpan({ decision: "cancel" });
     return "cancel";
   }
   if (result.response === TERMINATE_PROVIDER_DAEMON_BUTTON_INDEX) {
+    yield* Effect.annotateCurrentSpan({ decision: "terminate" });
     return "terminate";
   }
+  yield* Effect.annotateCurrentSpan({ decision: "leave-running" });
   return "leave-running";
 });
 
@@ -291,20 +307,21 @@ export const layer = Layer.succeed(
       const runEffect = Effect.runPromiseWith(context);
       let quitAllowed = false;
       let shutdownInProgress = false;
-      yield* electronTheme.onUpdated(() => {
+      let windowRecoveryPeriodStartedAt = 0;
+      let windowRecoveryCount = 0;
+      const requestQuit = (event: Electron.Event, source: "before-quit" | "window-close") => {
+        // Use a short span so the request survives even if shutdown never finishes.
         void runEffect(
-          desktopWindow.syncAppearance.pipe(Effect.withSpan("desktop.lifecycle.themeUpdated")),
+          Effect.annotateCurrentSpan({ source, quitAllowed, shutdownInProgress }).pipe(
+            Effect.withSpan("desktop.lifecycle.quitRequested"),
+          ),
         );
-      });
-      yield* electronApp.on("before-quit", (event: Electron.Event) => {
         handleBeforeQuit(
           event,
           runEffect,
           () => quitAllowed,
           () => {
-            if (shutdownInProgress) {
-              return false;
-            }
+            if (shutdownInProgress) return false;
             shutdownInProgress = true;
             return true;
           },
@@ -315,7 +332,40 @@ export const layer = Layer.succeed(
             quitAllowed = true;
           },
         );
+      };
+      yield* electronTheme.onUpdated(() => {
+        void runEffect(
+          desktopWindow.syncAppearance.pipe(Effect.withSpan("desktop.lifecycle.themeUpdated")),
+        );
       });
+      yield* electronApp.on("before-quit", (event: Electron.Event) => {
+        requestQuit(event, "before-quit");
+      });
+      if (environment.platform === "win32") {
+        // Native close runs before window-all-closed and app.before-quit. If the
+        // window disappears first, Cancel Quit cannot preserve the user's view.
+        // Route this event through the same decision while the window still exists.
+        const closeListeners = new Map<Electron.BrowserWindow, (event: Electron.Event) => void>();
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            for (const [window, listener] of closeListeners) {
+              window.removeListener("close", listener);
+            }
+            closeListeners.clear();
+          }),
+        );
+        yield* electronApp.on(
+          "browser-window-created",
+          (_event: Electron.Event, window: Electron.BrowserWindow) => {
+            const onClose = (event: Electron.Event) => requestQuit(event, "window-close");
+            closeListeners.set(window, onClose);
+            window.on("close", onClose);
+            window.once("closed", () => {
+              closeListeners.delete(window);
+            });
+          },
+        );
+      }
       yield* electronApp.on("activate", () => {
         void runEffect(desktopWindow.activate.pipe(Effect.withSpan("desktop.lifecycle.activate")));
       });
@@ -348,10 +398,41 @@ export const layer = Layer.succeed(
           Effect.gen(function* () {
             const app = yield* ElectronApp.ElectronApp;
             const state = yield* DesktopState.DesktopState;
+            if (environment.platform === "win32" && !(yield* Ref.get(state.quitting))) {
+              // Electron 42's sandboxed window.close() destroys webContents and
+              // closes its BrowserWindow without the native close event. Native
+              // closes now enter requestQuit first, so this path is window loss,
+              // not operator consent to stop the app or its backend.
+              const now = Date.now();
+              if (now - windowRecoveryPeriodStartedAt >= WINDOW_RECOVERY_PERIOD_MS) {
+                windowRecoveryPeriodStartedAt = now;
+                windowRecoveryCount = 0;
+              }
+              if (windowRecoveryCount >= MAX_WINDOW_RECOVERIES_PER_PERIOD) {
+                yield* logLifecycleError("unexpected window recovery limit reached", {
+                  recoveryCount: windowRecoveryCount,
+                });
+                // A broken page must not create an unlimited window loop. An
+                // explicit second launch still uses the normal activate path.
+                return;
+              }
+              windowRecoveryCount += 1;
+              yield* Effect.annotateCurrentSpan({
+                unexpectedWindowLoss: true,
+                recoveryCount: windowRecoveryCount,
+              });
+              yield* desktopWindow.revealOrCreateMain;
+              return;
+            }
             if (environment.platform !== "darwin" && !(yield* Ref.get(state.quitting))) {
               yield* app.quit;
             }
-          }).pipe(Effect.withSpan("desktop.lifecycle.windowAllClosed")),
+          }).pipe(
+            Effect.withSpan("desktop.lifecycle.windowAllClosed"),
+            Effect.catchCause((cause) =>
+              logLifecycleError("window recovery failed", { cause: Cause.pretty(cause) }),
+            ),
+          ),
         );
       });
 

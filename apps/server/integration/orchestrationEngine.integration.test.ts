@@ -108,7 +108,7 @@ function withHarness<A, E>(
 
 const seedProjectAndThread = (harness: OrchestrationIntegrationHarness) =>
   Effect.gen(function* () {
-    const createdAt = nowIso();
+    const createdAt = "2026-01-01T00:00:00.000Z";
     const provider = harness.adapterHarness?.provider ?? CODEX_PROVIDER;
     const defaultModel = DEFAULT_MODEL_BY_PROVIDER[provider] ?? DEFAULT_MODEL;
     const instanceId = defaultInstanceIdForDriver(provider);
@@ -150,7 +150,7 @@ const startTurn = (input: {
   readonly messageId: string;
   readonly text: string;
   readonly modelSelection?: ModelSelection;
-  readonly createdAt?: string;
+  readonly createdAt: string;
 }) =>
   input.harness.engine.dispatch({
     type: "thread.turn.start",
@@ -169,7 +169,7 @@ const startTurn = (input: {
       : {}),
     interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
     runtimeMode: "approval-required",
-    createdAt: input.createdAt ?? nowIso(),
+    createdAt: input.createdAt,
   });
 
 it.live("runs a single turn end-to-end and persists checkpoint state in sqlite + git", () =>
@@ -204,6 +204,7 @@ it.live("runs a single turn end-to-end and persists checkpoint state in sqlite +
 
       yield* harness.adapterHarness!.queueTurnResponseForNextSession(turnResponse);
       yield* startTurn({
+        createdAt: "2026-02-24T09:59:59.999Z",
         harness,
         commandId: "cmd-turn-start-single",
         messageId: "msg-user-single",
@@ -309,6 +310,7 @@ it.live("runs multi-turn file edits and persists checkpoint diffs", () =>
       });
 
       yield* startTurn({
+        createdAt: "2026-02-24T10:00:59.999Z",
         harness,
         commandId: "cmd-turn-start-multi-1",
         messageId: "msg-user-multi-1",
@@ -356,6 +358,7 @@ it.live("runs multi-turn file edits and persists checkpoint diffs", () =>
       });
 
       yield* startTurn({
+        createdAt: "2026-02-24T10:01:59.999Z",
         harness,
         commandId: "cmd-turn-start-multi-2",
         messageId: "msg-user-multi-2",
@@ -472,6 +475,7 @@ it.live("tracks approval requests and resolves pending approvals on user respons
       });
 
       yield* startTurn({
+        createdAt: "2026-02-24T10:02:59.999Z",
         harness,
         commandId: "cmd-turn-start-approval",
         messageId: "msg-user-approval",
@@ -566,6 +570,7 @@ it.live("records failed turn runtime state and checkpoint status as error", () =
       });
 
       yield* startTurn({
+        createdAt: "2026-02-24T10:03:59.999Z",
         harness,
         commandId: "cmd-turn-start-failure",
         messageId: "msg-user-failure",
@@ -860,6 +865,7 @@ it.live("starts a claudeAgent session on first turn when provider is requested",
         });
 
         yield* startTurn({
+          createdAt: "2026-02-24T10:09:59.999Z",
           harness,
           commandId: "cmd-turn-start-claude-initial",
           messageId: "msg-user-claude-initial",
@@ -929,6 +935,7 @@ it.live("recovers claudeAgent sessions after provider stopAll using persisted re
         });
 
         yield* startTurn({
+          createdAt: "2026-02-24T10:10:59.999Z",
           harness,
           commandId: "cmd-turn-start-claude-recover-1",
           messageId: "msg-user-claude-recover-1",
@@ -994,6 +1001,7 @@ it.live("recovers claudeAgent sessions after provider stopAll using persisted re
         });
 
         yield* startTurn({
+          createdAt: "2026-02-24T10:11:00.999Z",
           harness,
           commandId: "cmd-turn-start-claude-recover-2",
           messageId: "msg-user-claude-recover-2",
@@ -1067,6 +1075,7 @@ it.live("forwards claudeAgent approval responses to the provider session", () =>
         });
 
         yield* startTurn({
+          createdAt: "2026-02-24T10:11:59.999Z",
           harness,
           commandId: "cmd-turn-start-claude-approval",
           messageId: "msg-user-claude-approval",
@@ -1151,6 +1160,7 @@ it.live("forwards thread.turn.interrupt to claudeAgent provider sessions", () =>
         });
 
         yield* startTurn({
+          createdAt: "2026-02-24T10:12:59.999Z",
           harness,
           commandId: "cmd-turn-start-claude-interrupt",
           messageId: "msg-user-claude-interrupt",
@@ -1236,6 +1246,7 @@ it.live("reverts claudeAgent turns and rolls back provider conversation state", 
         });
 
         yield* startTurn({
+          createdAt: "2026-02-24T10:13:59.999Z",
           harness,
           commandId: "cmd-turn-start-claude-revert-1",
           messageId: "msg-user-claude-revert-1",
@@ -1299,6 +1310,7 @@ it.live("reverts claudeAgent turns and rolls back provider conversation state", 
         });
 
         yield* startTurn({
+          createdAt: "2026-02-24T10:14:00.999Z",
           harness,
           commandId: "cmd-turn-start-claude-revert-2",
           messageId: "msg-user-claude-revert-2",

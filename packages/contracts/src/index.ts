@@ -33,3 +33,4 @@ export * from "./filesystem.ts";
 export * from "./usageStats.ts";
 export * from "./hardwareLighting.ts";
 export * from "./rpc.ts";
+export * from "./research.ts";

@@ -23,6 +23,9 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   publishDebugSnapshot: (snapshot) =>
     ipcRenderer.invoke(IpcChannels.PUBLISH_DEBUG_SNAPSHOT_CHANNEL, snapshot),
   getClientSettings: () => ipcRenderer.invoke(IpcChannels.GET_CLIENT_SETTINGS_CHANNEL),
+  getSettingsProfileLibrary: () => ipcRenderer.invoke("desktop:get-settings-profile-library"),
+  setSettingsProfileLibrary: (document: string) =>
+    ipcRenderer.invoke("desktop:set-settings-profile-library", document),
   setClientSettings: (settings) =>
     ipcRenderer.invoke(IpcChannels.SET_CLIENT_SETTINGS_CHANNEL, settings),
   setPowerSaveBlockerState: (state) =>

@@ -68,6 +68,8 @@ export interface CodexAppServerIncomingRequest {
 
 export interface CodexAppServerPatchedProtocolOptions {
   readonly stdio: Stdio.Stdio;
+  /** Lossless mode requires a continuous consumer, owned by the protocol scope. */
+  readonly losslessNotifications?: boolean;
   /**
    * Maximum UTF-8 byte length of one newline-delimited app-server message.
    * Values that are not safe integers >= 1 fall back to
@@ -417,9 +419,13 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
   ): Effect.fn.Return<CodexAppServerPatchedProtocol, never, Scope.Scope> {
     const protocolScope = yield* Scope.Scope;
     const outgoing = yield* Queue.unbounded<string, Cause.Done<void>>();
-    const incomingNotifications = yield* Queue.sliding<CodexAppServerIncomingNotification>(
-      RAW_INCOMING_NOTIFICATION_QUEUE_CAPACITY,
-    );
+    // Runtime consumers need every delta and completion. Do not block the wire
+    // reader: RPC responses must still arrive while notifications accumulate.
+    // Optional diagnostic consumers retain the bounded sliding queue.
+    const incomingNotifications = yield* options.losslessNotifications
+      ? Queue.unbounded<CodexAppServerIncomingNotification>()
+      : Queue.sliding<CodexAppServerIncomingNotification>(RAW_INCOMING_NOTIFICATION_QUEUE_CAPACITY);
+    yield* Effect.addFinalizer(() => Queue.shutdown(incomingNotifications));
     const incomingRequests = yield* Queue.sliding<CodexAppServerIncomingRequest>(
       RAW_INCOMING_REQUEST_QUEUE_CAPACITY,
     );

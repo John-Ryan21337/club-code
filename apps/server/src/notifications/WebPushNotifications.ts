@@ -22,7 +22,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as Semaphore from "effect/Semaphore";
+import * as Semaphore from "@cafecode/shared/InterruptSafeSemaphore";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import webpush from "web-push";

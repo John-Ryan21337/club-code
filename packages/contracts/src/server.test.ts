@@ -41,6 +41,7 @@ function providerPipelineFixture() {
       queuedLiveRecords: 0,
       queuedLiveBytes: 0,
       laggingDisconnectCount: 0,
+      liveOverflowCatchUpCount: 0,
     },
     backendBridge: {
       pendingBytes: 0,

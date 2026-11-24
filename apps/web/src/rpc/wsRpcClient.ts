@@ -110,6 +110,7 @@ export interface WsRpcClient {
     >;
   };
   readonly server: {
+    readonly suggestNextPrompt: RpcUnaryMethod<typeof WS_METHODS.serverSuggestNextPrompt>;
     readonly codexExperimental: RpcUnaryMethod<typeof WS_METHODS.codexExperimental>;
     readonly codexThreadAttachments: RpcUnaryMethod<typeof WS_METHODS.codexThreadAttachments>;
     readonly getConfig: RpcUnaryNoArgMethod<typeof WS_METHODS.serverGetConfig>;
@@ -316,6 +317,8 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) => client[WS_METHODS.gitPreparePullRequestThread](input)),
     },
     server: {
+      suggestNextPrompt: (input) =>
+        transport.request((client) => client[WS_METHODS.serverSuggestNextPrompt](input)),
       codexExperimental: (input) =>
         transport.request((client) => client[WS_METHODS.codexExperimental](input)),
       codexThreadAttachments: (input) =>

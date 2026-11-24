@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
-import * as Semaphore from "effect/Semaphore";
+import * as Semaphore from "@cafecode/shared/InterruptSafeSemaphore";
 
 export interface ProviderMaintenanceCommandCoordinatorShape<E> {
   readonly withCommandLock: <A, R>(input: {

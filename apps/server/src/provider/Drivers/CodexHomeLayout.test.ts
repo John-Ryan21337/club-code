@@ -1,9 +1,11 @@
+import * as NodeFsPromises from "node:fs/promises";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import { vi } from "vitest";
 
 import { CodexSettings } from "@cafecode/contracts";
 import {
@@ -13,6 +15,9 @@ import {
   resolveCodexHomeLayout,
   shouldShareCodexShadowEntryName,
 } from "./CodexHomeLayout.ts";
+
+vi.mock("node:fs/promises", { spy: true });
+
 const decodeCodexSettingsValue = Schema.decodeSync(CodexSettings);
 
 const decodeCodexSettings = (input: {
@@ -84,6 +89,83 @@ it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
   });
 
   describe("materializeCodexShadowHome", () => {
+    it.effect.skipIf(process.platform !== "win32")(
+      "keeps the existing shared copy available during overlapping Windows refreshes",
+      () =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const sharedHome = yield* makeTempDir("t3code-codex-shared-");
+          const shadowRoot = yield* makeTempDir("t3code-codex-shadow-root-");
+          const shadowHome = path.join(shadowRoot, "shadow");
+          const sharedMarker = path.join(sharedHome, ".personality_migration");
+          const shadowMarker = path.join(shadowHome, ".personality_migration");
+          const layout = yield* resolveCodexHomeLayout(
+            decodeCodexSettings({ homePath: sharedHome, shadowHomePath: shadowHome }),
+          );
+
+          // Precreate the junctions so the refreshes exercise only the shared file.
+          yield* materializeCodexShadowHome(layout);
+          yield* writeTextFile(sharedMarker, "current marker");
+          yield* writeTextFile(shadowMarker, "previous marker");
+          const originalEntries = yield* fileSystem.readDirectory(shadowHome);
+
+          const publishedContents: Array<string | null> = [];
+          const actualFs = yield* Effect.promise(() =>
+            vi.importActual<typeof NodeFsPromises>("node:fs/promises"),
+          );
+          const link = vi.mocked(NodeFsPromises.link);
+          const rename = vi.mocked(NodeFsPromises.rename);
+          link.mockImplementation(async (source) => {
+            expect(source).toBe(sharedMarker);
+            publishedContents.push(
+              await NodeFsPromises.readFile(shadowMarker, "utf8").catch((error: unknown) => {
+                if (
+                  typeof error === "object" &&
+                  error !== null &&
+                  "code" in error &&
+                  error.code === "ENOENT"
+                ) {
+                  return null;
+                }
+                throw error;
+              }),
+            );
+            throw Object.assign(new Error("Simulated cross-volume link"), { code: "EXDEV" });
+          });
+          let publicationAttempts = 0;
+          rename.mockImplementation(async (source, destination) => {
+            if (destination === shadowMarker && publicationAttempts++ === 0) {
+              throw Object.assign(new Error("Simulated Windows sharing violation"), {
+                code: "EPERM",
+              });
+            }
+            await actualFs.rename(source, destination);
+          });
+
+          try {
+            yield* Effect.all(
+              [materializeCodexShadowHome(layout), materializeCodexShadowHome(layout)],
+              {
+                concurrency: 2,
+              },
+            );
+            expect(publishedContents).toHaveLength(2);
+            expect(publicationAttempts).toBeGreaterThanOrEqual(3);
+            for (const contents of publishedContents) {
+              expect(["previous marker", "current marker"]).toContain(contents);
+            }
+            expect(yield* fileSystem.readFileString(shadowMarker)).toBe("current marker");
+            expect(new Set(yield* fileSystem.readDirectory(shadowHome))).toEqual(
+              new Set(originalEntries),
+            );
+          } finally {
+            link.mockReset();
+            rename.mockReset();
+          }
+        }),
+    );
+
     it.effect(
       "materializes a shadow home with shared config/session links and refreshed private auth",
       () =>

@@ -67,7 +67,9 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const worker = yield* makeDrainableWorker(processThreadDeletedSafely);
+  const worker = yield* makeDrainableWorker(processThreadDeletedSafely, {
+    name: "thread-deletion-reactor",
+  });
 
   const start: ThreadDeletionReactorShape["start"] = Effect.fn("start")(function* () {
     yield* Effect.forkScoped(

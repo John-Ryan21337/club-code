@@ -89,21 +89,46 @@ export function getProviderModelCapabilities(
   // intact, and let explicit saved selections override these defaults later.
   return {
     ...caps,
-    optionDescriptors: (caps.optionDescriptors ?? []).map((descriptor) =>
-      descriptor.type === "select" &&
-      ["reasoningEffort", "effort", "variant"].includes(descriptor.id) &&
-      descriptor.options.some((option) => option.id === "high") &&
-      !descriptor.promptInjectedValues?.includes("high")
-        ? {
-            ...descriptor,
-            currentValue: "high",
-            options: descriptor.options.map((option) => ({
-              ...option,
-              isDefault: option.id === "high",
-            })),
-          }
-        : descriptor,
-    ),
+    optionDescriptors: (caps.optionDescriptors ?? [])
+      .map((descriptor) => {
+        if (descriptor.type !== "select") return descriptor;
+        const isEffort = ["reasoningEffort", "effort", "variant"].includes(descriptor.id);
+        const isContext = descriptor.id === "contextWindow";
+        if (!isEffort && !isContext) return descriptor;
+        const concreteOptions = descriptor.options.filter(
+          (option) =>
+            !/^(?:cli[\s_-]*)?default$/i.test(option.id) &&
+            !/^(?:cli[\s_-]*)?default$/i.test(option.label),
+        );
+        const options = concreteOptions;
+        const contextSize = (id: string) => {
+          const match = /^(\d+(?:\.\d+)?)([km])?$/i.exec(id);
+          return match
+            ? Number(match[1]) * (match[2]?.toLowerCase() === "m" ? 1e6 : match[2] ? 1e3 : 1)
+            : Infinity;
+        };
+        const smallestContext = isContext
+          ? options
+              .filter((option) => Number.isFinite(contextSize(option.id)))
+              .toSorted((a, b) => contextSize(a.id) - contextSize(b.id))[0]?.id
+          : undefined;
+        const defaultValue =
+          isEffort &&
+          options.some((option) => option.id === "high") &&
+          !descriptor.promptInjectedValues?.includes("high")
+            ? "high"
+            : (smallestContext ??
+              options.find((option) => option.isDefault)?.id ??
+              options.find((option) => option.id === descriptor.currentValue)?.id ??
+              options[0]?.id);
+        return {
+          ...descriptor,
+          label: isEffort ? "Reasoning effort" : "Context window",
+          ...(defaultValue ? { currentValue: defaultValue } : {}),
+          options: options.map((option) => ({ ...option, isDefault: option.id === defaultValue })),
+        };
+      })
+      .filter((descriptor) => descriptor.type !== "select" || descriptor.options.length > 0),
   };
 }
 

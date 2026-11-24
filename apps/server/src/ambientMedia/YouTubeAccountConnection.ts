@@ -5,7 +5,7 @@ import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Semaphore from "effect/Semaphore";
+import * as Semaphore from "@cafecode/shared/InterruptSafeSemaphore";
 
 import { ServerConfig } from "../config.ts";
 import { ExternalLauncher } from "../process/externalLauncher.ts";

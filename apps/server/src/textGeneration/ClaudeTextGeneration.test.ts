@@ -201,6 +201,43 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
           },
         }),
         argsMustContain: '--effort max --settings {"fastMode":true}',
+        claudeConfig: { allowPaidUsage: true },
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generated = yield* textGeneration.generatePrContent({
+            cwd: process.cwd(),
+            baseBranch: "main",
+            headBranch: "feature/claude-effect",
+            commitSummary: "Improve orchestration",
+            diffSummary: "1 file changed",
+            diffPatch: "diff --git a/README.md b/README.md",
+            modelSelection: {
+              ...createModelSelection(ProviderInstanceId.make("claudeAgent"), "claude-opus-5", [
+                { id: "effort", value: "max" },
+                { id: "fastMode", value: true },
+              ]),
+            },
+          });
+
+          expect(generated.title).toBe("Improve orchestration flow");
+        }),
+    ),
+  );
+
+  it.effect("keeps Claude fast mode out of text generation while paid usage is off", () =>
+    withFakeClaudeEnv(
+      {
+        output: JSON.stringify({
+          structured_output: {
+            title: "Improve orchestration flow",
+            body: "Body",
+          },
+        }),
+        // Default provider settings: `allowPaidUsage` is off, so the saved Fast
+        // selection must not reach the CLI as `fastMode`.
+        argsMustContain: "--effort max",
+        argsMustNotContain: "fastMode",
       },
       (textGeneration) =>
         Effect.gen(function* () {

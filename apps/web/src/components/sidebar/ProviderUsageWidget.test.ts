@@ -1,4 +1,4 @@
-import type { ServerProvider } from "@cafecode/contracts";
+import { ProviderInstanceId, type ServerProvider } from "@cafecode/contracts";
 import { describe, expect, it } from "vitest";
 
 import { buildProviderUsageRows, canRefreshProviderUsage } from "./ProviderUsageWidget";
@@ -191,6 +191,32 @@ describe("buildProviderUsageRows", () => {
         },
       },
     ]);
+  });
+
+  it("carries the Club-side paid-usage policy separately from provider-reported paid usage", () => {
+    const rows = buildProviderUsageRows(
+      [
+        provider({ instanceId: ProviderInstanceId.make("codex"), paidUsagePolicy: "blocked" }),
+        provider({
+          instanceId: ProviderInstanceId.make("codex_work"),
+          paidUsagePolicy: "allowed",
+          accountRateLimits: {
+            checkedAt: "2026-07-23T20:05:00.000Z",
+            rateLimits: {},
+            paidUsage: { status: "enabled" },
+          },
+        }),
+        provider({ instanceId: ProviderInstanceId.make("codex_legacy") }),
+      ],
+      { nowMs: Date.parse("2026-07-23T20:06:00.000Z"), pollMinutes: 2 },
+    );
+    expect(rows.map((row) => [row.instanceId, row.paidUsagePolicy, row.paidUsage?.status])).toEqual(
+      [
+        ["codex", "blocked", undefined],
+        ["codex_work", "allowed", "enabled"],
+        ["codex_legacy", null, undefined],
+      ],
+    );
   });
 
   it("reports polled Codex reset-credit inventory and enables redemption only above zero", () => {

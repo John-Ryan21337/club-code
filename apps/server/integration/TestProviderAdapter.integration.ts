@@ -263,6 +263,9 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
             : {}),
           status: "ready",
           runtimeMode: input.runtimeMode,
+          ...(input.codexSubagentThreadLimit !== undefined
+            ? { codexSubagentThreadLimit: input.codexSubagentThreadLimit }
+            : {}),
           threadId,
           cwd: input.cwd,
           resumeCursor: input.resumeCursor ?? { threadId: String(threadId), seed: sessionCount },

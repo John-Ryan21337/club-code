@@ -1,16 +1,17 @@
 export const PROVIDER_COMPATIBILITY_MATRIX = {
   schemaVersion: 1,
-  approvedAt: "2026-09-19",
+  approvedAt: "2026-11-17",
   providers: {
     codex: {
-      cliVersion: "0.155.1",
+      cliVersion: "0.169.1",
       npmPackage: "@openai/codex",
-      protocolRef: "be2951ea34f0d295ed0becf97079f92fa5f6950e",
+      protocolRef: "c376cf7396eff83ce4c6ac61b9553df142e7a0be",
     },
     claude: {
-      cliVersion: "2.1.224",
+      cliVersion: "2.1.327",
       npmPackage: "@anthropic-ai/claude-code",
-      agentSdkVersion: "0.3.239",
+      // See docs/provider-update-20261117.md for release and capability coverage.
+      agentSdkVersion: "0.3.327",
     },
   },
   requiredGates: [

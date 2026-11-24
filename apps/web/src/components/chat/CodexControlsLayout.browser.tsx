@@ -37,7 +37,7 @@ it.each(["en", "ja", "dual"])(
         style={{ width: 260 }}
         className="bg-background p-3 text-foreground"
       >
-        <p className="mb-3 text-xs text-muted-foreground">Synthetic preview · Codex 0.155.1</p>
+        <p className="mb-3 text-xs text-muted-foreground">Synthetic preview · Codex 0.165.0</p>
         <CodexAttachmentsControl {...props} />
         <CodexExperimentalControl {...props} />
       </main>,

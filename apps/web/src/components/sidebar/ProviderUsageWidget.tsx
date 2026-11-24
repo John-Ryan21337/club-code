@@ -3,6 +3,7 @@ import type {
   ServerProviderAccountRateLimitSnapshot,
   ServerProviderAccountRateLimitWindow,
   ServerProviderPaidUsage,
+  ServerProviderPaidUsagePolicy,
 } from "@cafecode/contracts";
 import { GaugeIcon, RefreshCwIcon } from "lucide-react";
 import {
@@ -30,6 +31,8 @@ import {
   type ModelPacingLimitIdentity,
   type ModelPacingResult,
 } from "../../modelPacing";
+
+import { claudeUsageStatus } from "./claudeUsageStatus";
 
 interface UsageWindowRow {
   readonly key: string;
@@ -83,7 +86,14 @@ interface ProviderUsageRow {
   readonly exhaustionNotices: ReadonlyArray<UsageExhaustionNotice>;
   readonly paidUsage: ServerProviderPaidUsage | null;
   readonly paidUsageStale: boolean;
+  /**
+   * Club-side per-instance `allowPaidUsage` policy. Distinct from `paidUsage`,
+   * which is the provider-reported account billing state Club cannot change.
+   * `null` means the server predates the policy field.
+   */
+  readonly paidUsagePolicy: ServerProviderPaidUsagePolicy | null;
   readonly resetCredits: ProviderResetCredits;
+  readonly accountStatus: ReturnType<typeof claudeUsageStatus>;
 }
 
 export const PROVIDER_USAGE_HEIGHT_STORAGE_KEY = "cafe-code:provider-usage-height:v1";
@@ -121,6 +131,11 @@ export function ProviderUsageScrollRegion({ children }: { readonly children: Rea
   const regionRef = useRef<HTMLElement>(null);
   const dragRef = useRef<{ readonly pointerY: number; readonly height: number } | null>(null);
   const [height, setHeight] = useState(readStoredProviderUsageHeight);
+  useEffect(() => {
+    const restore = () => setHeight(readStoredProviderUsageHeight());
+    window.addEventListener("cafe-code:profile-layout-restored", restore);
+    return () => window.removeEventListener("cafe-code:profile-layout-restored", restore);
+  }, []);
 
   useEffect(() => {
     const clampToViewport = () => {
@@ -467,7 +482,9 @@ export function buildProviderUsageRows(
         exhaustionNotices: [],
         paidUsage: null,
         paidUsageStale: false,
+        paidUsagePolicy: provider.paidUsagePolicy ?? null,
         resetCredits: resetCreditsForProvider(provider),
+        accountStatus: claudeUsageStatus(provider, nowMs),
       };
     }
 
@@ -519,7 +536,9 @@ export function buildProviderUsageRows(
       exhaustionNotices,
       paidUsage,
       paidUsageStale,
+      paidUsagePolicy: provider.paidUsagePolicy ?? null,
       resetCredits: resetCreditsForProvider(provider),
+      accountStatus: claudeUsageStatus(provider, nowMs),
     };
   });
 }
@@ -651,15 +670,10 @@ export function ProviderUsageWidget() {
             connection.client.server.refreshProviders({ instanceId, usageOnly: true, force }),
           ),
         );
-        let failed = false;
-        for (const result of results) {
-          if (result.status === "fulfilled") {
-            applyProvidersUpdated(result.value);
-          } else {
-            failed = true;
-          }
-        }
-        setRefreshFailed(failed);
+        // The config stream publishes usage changes. Each reply contains the
+        // whole registry as it was when that request finished, so replaying
+        // replies here can erase a newer update for another provider.
+        setRefreshFailed(results.some((result) => result.status === "rejected"));
         setNowMs(Date.now());
       } catch {
         // The primary environment can disappear between the visibility check
@@ -829,6 +843,17 @@ export function ProviderUsageWidget() {
                   </div>
                 </div>
                 <div className="space-y-2">
+                  {provider.accountStatus &&
+                  (provider.state === "available" || provider.state === "no-data") ? (
+                    <div
+                      className="rounded border border-sidebar-border/60 px-1.5 py-1 text-[9px] leading-relaxed text-sidebar-foreground/70"
+                      data-claude-verification={provider.accountStatus.verification}
+                      data-claude-verification-stale={provider.accountStatus.stale || undefined}
+                      title={provider.accountStatus.source}
+                    >
+                      {provider.accountStatus.message}
+                    </div>
+                  ) : null}
                   {provider.stateMessage ? (
                     <div
                       className="rounded border border-sidebar-border/60 bg-sidebar-accent/35 px-1.5 py-1 text-[9px] leading-relaxed text-sidebar-foreground/55"
@@ -931,6 +956,30 @@ export function ProviderUsageWidget() {
                           Paid usage is stale; showing the last provider-reported values.
                         </div>
                       ) : null}
+                    </div>
+                  ) : null}
+                  {provider.paidUsagePolicy ? (
+                    <div
+                      className="rounded border border-sidebar-border/60 bg-sidebar-accent/35 px-1.5 py-1.5 text-[9px] leading-relaxed text-sidebar-foreground/65"
+                      data-provider-paid-usage-policy={provider.paidUsagePolicy}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium text-sidebar-foreground/75">
+                          Club Code paid usage
+                        </span>
+                        <span className="font-medium">
+                          {provider.paidUsagePolicy === "allowed" ? "Allowed" : "Off"}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 text-sidebar-foreground/55">
+                        {provider.paidUsagePolicy === "allowed"
+                          ? provider.driver === "codex"
+                            ? "Fast and Ultra Fast sends may use credits or extra allowance. Turn off Allow paid usage in Settings → Providers to block them."
+                            : "Fast mode sends may use paid usage. Turn off Allow paid usage in Settings → Providers to block them."
+                          : provider.driver === "codex"
+                            ? "Sends use the standard service tier. Turn on Allow paid usage in Settings → Providers to use Fast or Ultra Fast."
+                            : "Fast mode stays off. Turn on Allow paid usage in Settings → Providers to use it."}
+                      </div>
                     </div>
                   ) : null}
                   {provider.state === "available" ? (

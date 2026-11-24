@@ -1,3 +1,4 @@
+import { generateClaudeNextPrompt } from "./ClaudeNextPrompt.ts";
 /**
  * ClaudeTextGeneration – Text generation layer using the Claude CLI.
  *
@@ -8,7 +9,9 @@
  * @module ClaudeTextGeneration
  */
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
@@ -62,6 +65,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
   environment: NodeJS.ProcessEnv = process.env,
 ) {
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const claudeEnvironment = yield* makeClaudeEnvironment(claudeSettings, environment);
 
   const readStreamAsString = <E>(
@@ -140,8 +145,12 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     const fastModeDescriptor = findDescriptor("fastMode");
     const thinking =
       thinkingDescriptor?.type === "boolean" ? thinkingDescriptor.currentValue : undefined;
+    // Claude Fast mode bills extra usage; honor the selection only when the
+    // instance's `allowPaidUsage` provider setting is on (default off).
     const fastMode =
-      fastModeDescriptor?.type === "boolean" ? fastModeDescriptor.currentValue : undefined;
+      claudeSettings.allowPaidUsage && fastModeDescriptor?.type === "boolean"
+        ? fastModeDescriptor.currentValue
+        : undefined;
     const settings = {
       ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
       ...(fastMode ? { fastMode: true } : {}),
@@ -375,5 +384,10 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     generateBranchName,
     generateThreadTitle,
     generateAtmosphereCommands,
+    generateNextPrompt: (input) =>
+      generateClaudeNextPrompt(claudeSettings, input, environment).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      ),
   } satisfies TextGenerationShape;
 });

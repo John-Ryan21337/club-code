@@ -19,14 +19,15 @@ import {
 } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-// Codex 0.155.1 release commit. Keep generation attached to an immutable
+// Codex 0.169.1 release commit. Keep generation attached to an immutable
 // upstream commit rather than a moving tag so regeneration is reproducible.
-const UPSTREAM_REF = "be2951ea34f0d295ed0becf97079f92fa5f6950e";
+const UPSTREAM_REF = "c376cf7396eff83ce4c6ac61b9553df142e7a0be";
 const USER_AGENT = "effect-codex-app-server-generator";
 // These opt-in methods are deliberately absent from upstream's stable fixtures.
 // Read their exact release exports instead of maintaining handwritten wire shapes.
 const EXPERIMENTAL_METHODS = new Set([
   "memory/status",
+  "thread/memory/read",
   "userVerification/status",
   "userVerification/enroll",
   "userVerification/delete",
@@ -354,6 +355,14 @@ function resolveSchemaTypeName(
   rawTypeName: string,
   generatedSchemaNames: ReadonlySet<string>,
 ): string {
+  // Codex 0.169 adds `GatewayOAuthReadParams | null`. Resolve the exported
+  // Nullable schema so generated request types retain the exact wire union.
+  if (rawTypeName.endsWith(" | null")) {
+    return resolveSchemaTypeName(
+      `Nullable${rawTypeName.slice(0, -" | null".length)}`,
+      generatedSchemaNames,
+    );
+  }
   if (rawTypeName === "undefined") {
     return "undefined";
   }
@@ -384,7 +393,14 @@ function resolveResponseTypeName(
   generatedSchemaNames: ReadonlySet<string>,
 ): string {
   const overrides: Record<string, string> = {
+    // These parameterless account methods use response names without the
+    // account namespace. Resolve their exact upstream types instead of
+    // inventing an AccountGatewayOAuth* schema from the wire method name.
+    "account/gatewayOAuth/read": "GatewayOAuthReadResponse",
+    "account/gatewayOAuth/login": "GatewayOAuthLoginResponse",
+    "account/gatewayOAuth/cancel": "GatewayOAuthCancelResponse",
     "account/logout": "LogoutAccountResponse",
+    "account/securitySetup/read": "GetAccountSecuritySetupResponse",
     "account/rateLimits/read": "GetAccountRateLimitsResponse",
     "account/usage/read": "GetAccountTokenUsageResponse",
     "account/workspaceMessages/read": "GetWorkspaceMessagesResponse",
@@ -608,7 +624,7 @@ const generateFiles = Effect.fn("generateFiles")(function* () {
     throw new Error("Missing experimental release methods");
   const experimentalFiles = Object.keys(archive.json_schema).filter(
     (file) =>
-      /^v2\/(MemoryStatus|UserVerification|ThreadRealtime(Start|Stop|AppendText))(Params|Response)\.json$/.test(
+      /^v2\/(MemoryStatus|ThreadMemoryRead|UserVerification|ThreadRealtime(Start|Stop|AppendText))(Params|Response)\.json$/.test(
         file,
       ) ||
       /^v2\/UserVerification(Status|Enroll|Delete|Verify|Cancel)(Params|Response)\.json$/.test(

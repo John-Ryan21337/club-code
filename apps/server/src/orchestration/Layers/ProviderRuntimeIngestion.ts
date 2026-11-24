@@ -31,6 +31,8 @@ import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@cafecode/shared/DrainableWorker";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { readCodexSafetyBlock } from "../../provider/CodexSafetyBlock.ts";
+import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
 import { ProjectionStateRepository } from "../../persistence/Services/ProjectionState.ts";
 import { ProjectionStateRepositoryLive } from "../../persistence/Layers/ProjectionState.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
@@ -52,6 +54,7 @@ import {
   assistantCompletionTextFromRuntimeEvent,
   completedAssistantTextDelta,
   hasRenderableAssistantText,
+  isAuthoritativeCodexAssistantCompletion,
 } from "../providerAssistantCompletionText.ts";
 import { AssistantStreamTextCommitment } from "../providerAssistantStreamCommitment.ts";
 import { classifyMatrixActivityObservation } from "../matrixActivityObservation.ts";
@@ -95,6 +98,7 @@ const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(120);
 const PROCESSED_RUNTIME_EVENT_IDS_CACHE_CAPACITY = 100_000;
 const PROCESSED_RUNTIME_EVENT_IDS_TTL = Duration.minutes(120);
 const PROVIDER_DAEMON_RUNTIME_CURSOR_PERSIST_INTERVAL = 1_000;
+const RUNTIME_INGESTION_MAX_BATCH_SIZE = 64;
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
 const STREAMED_MESSAGE_IDS_CACHE_CAPACITY = 20_000;
 const STREAMED_MESSAGE_IDS_TTL = Duration.minutes(120);
@@ -126,6 +130,21 @@ type RuntimeIngestionInput =
       source: "domain";
       event: RuntimeIngestionDomainEvent;
     };
+
+function nativeCodexCommandOutput(input: RuntimeIngestionInput) {
+  if (input.source !== "runtime") return undefined;
+  const { event } = input;
+  return event.provider === "codex" &&
+    event.type === "content.delta" &&
+    event.payload.streamKind === "command_output" &&
+    event.providerInstanceId &&
+    event.turnId &&
+    event.itemId &&
+    event.raw?.source === "codex.app-server.notification" &&
+    event.raw.method === "item/commandExecution/outputDelta"
+    ? event
+    : undefined;
+}
 
 function toTurnId(value: TurnId | string | undefined): TurnId | undefined {
   return value === undefined ? undefined : TurnId.make(String(value));
@@ -449,6 +468,29 @@ function runtimeEventToActivities(
       : {};
   })();
   switch (event.type) {
+    case "turn.completed": {
+      const safetyBlock = event.provider === "codex" && readCodexSafetyBlock(event.raw?.payload);
+      if (!safetyBlock) return [];
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "error",
+          kind: "runtime.error",
+          summary: "Provider safety block",
+          payload: {
+            message: "Codex ended this task after a provider safety review.",
+            detail: [
+              "Review the preceding actions. Repeating the prompt does not clear this block.",
+              ...(safetyBlock.explanation ? [`Provider finding:\n${safetyBlock.explanation}`] : []),
+            ].join("\n\n"),
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "request.opened": {
       if (event.payload.requestType === "tool_user_input") {
         return [];
@@ -505,15 +547,26 @@ function runtimeEventToActivities(
     }
 
     case "runtime.error": {
+      const safetyBlock = event.provider === "codex" && readCodexSafetyBlock(event.payload.detail);
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
           tone: "error",
           kind: "runtime.error",
-          summary: "Runtime error",
+          summary: safetyBlock ? "Provider safety block" : "Runtime error",
           payload: {
             message: truncateDetail(event.payload.message),
+            ...(safetyBlock
+              ? {
+                  detail: [
+                    "Codex ended this task after a provider safety review. Review the preceding actions. Repeating the prompt does not clear this block.",
+                    ...(safetyBlock.explanation
+                      ? [`Provider finding:\n${safetyBlock.explanation}`]
+                      : []),
+                  ].join("\n\n"),
+                }
+              : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -523,7 +576,9 @@ function runtimeEventToActivities(
 
     case "runtime.warning": {
       const detail = event.payload.detail;
+      const safetyBlock = event.provider === "codex" && readCodexSafetyBlock(detail);
       const isRetrying =
+        !safetyBlock &&
         detail !== null &&
         typeof detail === "object" &&
         !Array.isArray(detail) &&
@@ -535,10 +590,22 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "runtime.warning",
-          summary: isRetrying ? "Provider transport retrying" : "Runtime warning",
+          summary: safetyBlock
+            ? "Subagent safety block"
+            : isRetrying
+              ? "Provider transport retrying"
+              : "Runtime warning",
           payload: {
             message: truncateDetail(event.payload.message),
-            ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),
+            ...(safetyBlock
+              ? {
+                  detail:
+                    safetyBlock.explanation ??
+                    "Codex ended the subagent task after a provider safety review.",
+                }
+              : event.payload.detail !== undefined
+                ? { detail: event.payload.detail }
+                : {}),
             ...(isRetrying ? { retrying: true } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
@@ -1474,12 +1541,40 @@ const make = Effect.gen(function* () {
         input.messageId,
       );
       const streamObserved = Option.isSome(streamCommitment);
-      const canonicalFinalText = streamObserved
-        ? hasRenderableAssistantText(input.fallbackText) &&
-          streamCommitment.value.matchesPrefixOf(input.fallbackText!)
-          ? input.fallbackText
-          : undefined
-        : input.fallbackText;
+      // Preserve upstream exact-text checks for ambiguous or split items.
+      // An intact, matching native Codex completion can also repair lost deltas.
+      const authoritativeCodexItem = isAuthoritativeCodexAssistantCompletion(
+        input.event,
+        input.messageId,
+      );
+      const canonicalFinalText =
+        streamObserved && !authoritativeCodexItem
+          ? hasRenderableAssistantText(input.fallbackText) &&
+            streamCommitment.value.matchesPrefixOf(input.fallbackText!)
+            ? input.fallbackText
+            : undefined
+          : input.fallbackText;
+      if (
+        streamObserved &&
+        hasRenderableAssistantText(input.fallbackText) &&
+        canonicalFinalText === undefined
+      ) {
+        // A lossy provider mapping (even trimming a final newline) can make an
+        // otherwise authoritative completion fail this exact-text boundary.
+        // Keep the strict commitment check and make the refusal observable
+        // without retaining provider text, digests or conversation identities.
+        // This is completion-only, not per-token work; consuming the commitment
+        // below and canonical-event deduplication bound repeated observations.
+        yield* Effect.logWarning("provider.assistantCompletion/textMismatch", {
+          provider: input.event.provider,
+          reason:
+            input.fallbackText!.length < streamCommitment.value.codeUnitLength
+              ? "completion-shorter-than-stream"
+              : "completion-prefix-mismatch",
+          streamedCodeUnits: streamCommitment.value.codeUnitLength,
+          completionCodeUnits: input.fallbackText!.length,
+        });
+      }
       const text = completedAssistantTextDelta({
         bufferedText,
         fallbackText: input.fallbackText,
@@ -2646,7 +2741,10 @@ const make = Effect.gen(function* () {
       }
     });
 
-  const processRuntimeEventOnce = (event: ProviderRuntimeEvent) =>
+  const processRuntimeEventOnce = (
+    event: ProviderRuntimeEvent,
+    projectionIsNoop?: Effect.Effect<boolean, ProjectionRepositoryError>,
+  ) =>
     Effect.gen(function* () {
       const eventKey = providerRuntimeEventKey(event);
       const publishTurnIngestionQuiesced = () => {
@@ -2691,7 +2789,9 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      yield* processRuntimeEvent(event);
+      if (projectionIsNoop === undefined || !(yield* projectionIsNoop)) {
+        yield* processRuntimeEvent(event);
+      }
       // Deterministic command IDs protect durable projections. This process-local
       // mark also protects buffered assistant/proposed-plan state that can be
       // mutated before an orchestration command is dispatched.
@@ -2707,13 +2807,14 @@ const make = Effect.gen(function* () {
       yield* publishTurnIngestionQuiesced();
     });
 
-  const processInput = (input: RuntimeIngestionInput) =>
-    input.source === "runtime"
-      ? processRuntimeEventOnce(input.event)
-      : processDomainEvent(input.event);
-
-  const processInputSafely = (input: RuntimeIngestionInput) =>
-    processInput(input).pipe(
+  const processInputSafely = (
+    input: RuntimeIngestionInput,
+    projectionIsNoop?: Effect.Effect<boolean, ProjectionRepositoryError>,
+  ) =>
+    (input.source === "runtime"
+      ? processRuntimeEventOnce(input.event, projectionIsNoop)
+      : processDomainEvent(input.event)
+    ).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.failCause(cause);
@@ -2727,7 +2828,73 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const worker = yield* makeDrainableWorker(processInputSafely);
+  const makeBatchProcessor = (inputs: ReadonlyArray<RuntimeIngestionInput>) => {
+    const stableProjectionSequence = orchestrationEngine.stableProjectionSequence;
+    let groupEnd = 0;
+    let projectionIsNoop: Effect.Effect<boolean, ProjectionRepositoryError> | undefined;
+    return (input: RuntimeIngestionInput, index: number) => {
+      if (index >= groupEnd) {
+        groupEnd = index + 1;
+        projectionIsNoop = undefined;
+        const first = nativeCodexCommandOutput(input);
+        if (first !== undefined && stableProjectionSequence !== undefined) {
+          for (; groupEnd < inputs.length; groupEnd += 1) {
+            const candidate = inputs[groupEnd]!;
+            const next = nativeCodexCommandOutput(candidate);
+            if (
+              next === undefined ||
+              next.threadId !== first.threadId ||
+              next.turnId !== first.turnId ||
+              next.itemId !== first.itemId ||
+              next.providerInstanceId !== first.providerInstanceId
+            ) {
+              break;
+            }
+          }
+          if (groupEnd > index + 1) {
+            let provenSequence: number | false | undefined;
+            // Command output has no chat or work-log projection. It can still
+            // repair lifecycle state, so read the normal shell once for this
+            // contiguous group and only reuse a healthy exact-turn result.
+            // Keep the proof local to already-dequeued records and acquire it
+            // when the first non-duplicate record reaches projection. Check
+            // for intervening commands, including any writer still in flight.
+            // Direct stopped-runtime reconciliation clears the active turn;
+            // these deltas cannot restart a session with no active turn.
+            projectionIsNoop = Effect.gen(function* () {
+              if (provenSequence === false) return false;
+              const sequence = yield* stableProjectionSequence;
+              if (
+                sequence === undefined ||
+                (provenSequence !== undefined && provenSequence !== sequence)
+              ) {
+                provenSequence = false;
+                return false;
+              }
+              if (provenSequence === sequence) return true;
+              const thread = yield* resolveThreadShell(first.threadId);
+              const session = thread?.session;
+              const healthy =
+                session?.status === "running" &&
+                session.lastError === null &&
+                session.providerName === first.provider &&
+                session.providerInstanceId === first.providerInstanceId &&
+                session.activeTurnId === first.turnId;
+              provenSequence =
+                healthy && (yield* stableProjectionSequence) === sequence ? sequence : false;
+              return provenSequence !== false;
+            });
+          }
+        }
+      }
+      return processInputSafely(input, projectionIsNoop);
+    };
+  };
+
+  const worker = yield* makeDrainableWorker(processInputSafely, {
+    name: "provider-runtime-ingestion",
+    batch: { maxSize: RUNTIME_INGESTION_MAX_BATCH_SIZE, makeProcessor: makeBatchProcessor },
+  });
 
   const start: ProviderRuntimeIngestionShape["start"] = () =>
     Effect.gen(function* () {
@@ -2751,10 +2918,11 @@ const make = Effect.gen(function* () {
           }),
         ),
       );
+      const canonicalEvents = providerService.subscribeCanonicalEvents
+        ? yield* providerService.subscribeCanonicalEvents()
+        : providerService.streamEvents;
       yield* Effect.forkScoped(
-        Stream.runForEach(providerService.streamEvents, (event) =>
-          worker.enqueue({ source: "runtime", event }),
-        ),
+        Stream.runForEach(canonicalEvents, (event) => worker.enqueue({ source: "runtime", event })),
       );
       yield* Effect.forkScoped(
         Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {

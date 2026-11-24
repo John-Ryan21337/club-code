@@ -31,6 +31,7 @@ const daemonStream: MutableMetrics<ProviderPipelineDiagnostics["daemonStream"]> 
   queuedLiveRecords: 0,
   queuedLiveBytes: 0,
   laggingDisconnectCount: 0,
+  liveOverflowCatchUpCount: 0,
 };
 const backendBridge: MutableMetrics<ProviderPipelineDiagnostics["backendBridge"]> = {
   pendingBytes: 0,

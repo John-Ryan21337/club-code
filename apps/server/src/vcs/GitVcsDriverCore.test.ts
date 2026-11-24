@@ -262,27 +262,44 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
         const { initialBranch } = yield* initRepoWithCommit(cwd);
-        const pathService = yield* Path.Path;
-        const worktreePath = pathService.join(
-          yield* makeTmpDir("git-worktrees-"),
-          "feature-worktree",
-        );
         const driver = yield* GitVcsDriver.GitVcsDriver;
 
         const created = yield* driver.createWorktree({
           cwd,
-          path: worktreePath,
+          path: null,
           refName: initialBranch,
           newRefName: "feature/worktree",
         });
+        const worktreePath = created.worktree.path;
 
-        assert.equal(created.worktree.path, worktreePath);
+        assert.include(worktreePath, "worktrees");
         assert.equal(created.worktree.refName, "feature/worktree");
         assert.equal(yield* git(worktreePath, ["branch", "--show-current"]), "feature/worktree");
 
         yield* driver.removeWorktree({ cwd, path: worktreePath });
         const fileSystem = yield* FileSystem.FileSystem;
         assert.equal(yield* fileSystem.exists(worktreePath), false);
+      }),
+    );
+
+    it.effect("rejects a worktree outside Club Code's managed directory", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const externalPath = yield* makeTmpDir("external-worktree-");
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+
+        const result = yield* Effect.result(
+          driver.createWorktree({
+            cwd,
+            path: externalPath,
+            refName: initialBranch,
+            newRefName: "feature/external",
+          }),
+        );
+
+        assert.equal(result._tag, "Failure");
+        assert.include(String(result), "must stay inside this release folder");
       }),
     );
   });

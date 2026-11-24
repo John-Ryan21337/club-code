@@ -486,7 +486,10 @@ export function EmbeddedBrowserWorkspace() {
       setStatus("Browser ready. Share an origin once to authorize routine agent actions.");
     });
 
-  const selectTab = async (tab: EmbeddedBrowserState) => {
+  // `reveal: false` changes the selected tab without showing a hidden panel.
+  // Closing the selected tab from the bottom strip must not pop the browser
+  // open over the chat when the operator had minimized it.
+  const selectTab = async (tab: EmbeddedBrowserState, { reveal = true } = {}) => {
     if (!tab.tabId) return;
     const previous = tabIdRef.current;
     if (previous !== tab.tabId) {
@@ -504,6 +507,7 @@ export function EmbeddedBrowserWorkspace() {
     // A retained background tab may have navigated while revocation was pending.
     // Never overwrite its current sharing/origin state with the clicked render.
     updateState(tabsRef.current.find((current) => current.tabId === tab.tabId) ?? tab);
+    if (!reveal) return;
     viewportHiddenRef.current = false;
     setVisible(true);
     await bridge.setEmbeddedBrowserBounds({
@@ -522,29 +526,81 @@ export function EmbeddedBrowserWorkspace() {
       setStatus("New tab ready.");
     });
 
-  const close = () =>
+  /**
+   * Ends the selected tab's session. The agent grant is bound to the selected
+   * tab, so it is revoked before the native view and its partition close.
+   */
+  const closeSelectedTab = async () => {
+    const reveal = visible;
+    const tabId = tabIdRef.current;
+    tabIdRef.current = null;
+    viewportHiddenRef.current = true;
+    setTypeValue("");
+    setSnapshot(null);
+    setSelectedTargetId("");
+    await revokeAgentGrant("tab-closed");
+    if (tabId) {
+      await bridge.closeEmbeddedBrowser({ tabId });
+      tabsRef.current = tabsRef.current.filter((tab) => tab.tabId !== tabId);
+      setTabs(tabsRef.current);
+    }
+    const remaining = tabsRef.current[0];
+    if (remaining) {
+      await selectTab(remaining, { reveal });
+      setStatus("Tab session ended and its site storage cleared.");
+      return;
+    }
+    updateState(CLOSED_STATE);
+    setVisible(false);
+    setStatus("Browser closed and temporary site storage cleared.");
+  };
+
+  const close = () => run(closeSelectedTab);
+
+  /**
+   * Closes one tab from the bottom strip. A background tab holds no agent
+   * authority, so closing it leaves the selection, grant, and panel unchanged.
+   */
+  const closeTab = (tabId: string) =>
     run(async () => {
-      const tabId = tabIdRef.current;
+      if (tabId === tabIdRef.current) {
+        await closeSelectedTab();
+        return;
+      }
+      await bridge.closeEmbeddedBrowser({ tabId });
+      tabsRef.current = tabsRef.current.filter((tab) => tab.tabId !== tabId);
+      setTabs(tabsRef.current);
+      setStatus("Tab session ended and its site storage cleared.");
+    });
+
+  /**
+   * Closes the browser window. Agent access is revoked first, then every
+   * retained tab session ends. A tab whose native close fails stays in the
+   * strip, so the operator can see that its session is still alive and retry.
+   */
+  const closeAll = () =>
+    run(async () => {
       tabIdRef.current = null;
       viewportHiddenRef.current = true;
       setTypeValue("");
       setSnapshot(null);
       setSelectedTargetId("");
       await revokeAgentGrant("tab-closed");
-      if (tabId) {
-        await bridge.closeEmbeddedBrowser({ tabId });
-        tabsRef.current = tabsRef.current.filter((tab) => tab.tabId !== tabId);
-        setTabs(tabsRef.current);
-      }
-      const remaining = tabsRef.current[0];
-      if (remaining) {
-        await selectTab(remaining);
-        setStatus("Tab session ended and its site storage cleared.");
-        return;
-      }
+      const retained = tabsRef.current;
+      const results = await Promise.allSettled(
+        retained.map((tab) =>
+          tab.tabId ? bridge.closeEmbeddedBrowser({ tabId: tab.tabId }) : Promise.resolve(),
+        ),
+      );
+      tabsRef.current = retained.filter((_, index) => results[index]?.status === "rejected");
+      setTabs(tabsRef.current);
       updateState(CLOSED_STATE);
       setVisible(false);
-      setStatus("Browser closed and temporary site storage cleared.");
+      setStatus(
+        tabsRef.current.length === 0
+          ? "Browser closed and temporary site storage cleared."
+          : "Some browser tabs could not be closed. Try again.",
+      );
     });
 
   const minimize = () =>
@@ -727,18 +783,29 @@ export function EmbeddedBrowserWorkspace() {
           <Globe2 className="size-4 shrink-0 text-primary" />
           <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
             {tabs.map((tab) => (
-              <Button
-                key={tab.tabId}
-                aria-label={`${!visible && tab.tabId === state.tabId ? "Resume Agent Browser" : "Open browser tab"}: ${tab.title || "New tab"}`}
-                aria-pressed={tab.tabId === state.tabId}
-                disabled={busy || agentExecuting}
-                className="max-w-60 shrink-0"
-                size="sm"
-                variant={tab.tabId === state.tabId ? "secondary" : "ghost"}
-                onClick={() => run(() => selectTab(tab))}
-              >
-                <span className="truncate">{tab.title || "New tab"}</span>
-              </Button>
+              <div key={tab.tabId} className="flex max-w-64 shrink-0 items-center">
+                <Button
+                  aria-label={`${!visible && tab.tabId === state.tabId ? "Resume Agent Browser" : "Open browser tab"}: ${tab.title || "New tab"}`}
+                  aria-pressed={tab.tabId === state.tabId}
+                  disabled={busy || agentExecuting}
+                  className="max-w-56 min-w-0"
+                  size="sm"
+                  variant={tab.tabId === state.tabId ? "secondary" : "ghost"}
+                  onClick={() => run(() => selectTab(tab))}
+                >
+                  <span className="truncate">{tab.title || "New tab"}</span>
+                </Button>
+                <Button
+                  aria-label={`Close browser tab: ${tab.title || "New tab"}`}
+                  title="Close tab and clear its site storage"
+                  disabled={busy || agentExecuting || !tab.tabId}
+                  onClick={() => (tab.tabId ? closeTab(tab.tabId) : undefined)}
+                  size="icon-xs"
+                  variant="ghost"
+                >
+                  <X />
+                </Button>
+              </div>
             ))}
           </div>
           <Button
@@ -749,6 +816,17 @@ export function EmbeddedBrowserWorkspace() {
             variant="ghost"
           >
             <Plus />
+          </Button>
+          <Button
+            aria-label="Close all browser tabs"
+            title="Close the browser and end every tab session"
+            disabled={busy || agentExecuting}
+            onClick={closeAll}
+            size="sm"
+            variant="ghost"
+          >
+            <X />
+            Close all
           </Button>
         </nav>
       )}
@@ -818,7 +896,7 @@ export function EmbeddedBrowserWorkspace() {
                   {state.title || "Isolated browser"}
                 </div>
                 <div className="truncate text-[11px] text-muted-foreground">
-                  Tabs stay open when hidden
+                  Minimize keeps tabs open; close ends them
                 </div>
               </div>
             </div>
@@ -867,10 +945,10 @@ export function EmbeddedBrowserWorkspace() {
                 {state.shared ? "Shared" : "Private"}
               </Button>
               <Button
-                aria-label="Hide Agent Browser"
-                title="Hide browser and keep tabs open"
-                disabled={busy}
-                onClick={minimize}
+                aria-label="Close Agent Browser"
+                title="Close the browser and end every tab session"
+                disabled={busy || agentExecuting}
+                onClick={closeAll}
                 size="icon-sm"
                 variant="ghost"
               >

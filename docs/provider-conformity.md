@@ -6,8 +6,9 @@ user's binaries.
 
 The tested compatibility boundary lives in
 `packages/shared/src/providerCompatibility.ts`. It pins the Claude Code CLI, Claude Agent SDK,
-Codex CLI, and exact Codex app-server protocol ref. The normal package-age quarantine remains part
-of the review boundary.
+Codex CLI, and exact Codex app-server protocol ref. The operator removed release-age quarantine
+on 2026-10-28. Yarn explicitly uses `npmMinimalAgeGate: 0`. New releases require compatibility
+review and exact pins, without an age delay.
 
 ## Operator check
 
@@ -15,7 +16,7 @@ Run `corepack yarn providers:conform check` from a Club Code source checkout. It
 approved, and registry versions for each installed provider; a missing CLI is reported and skipped.
 Registry discovery is advisory, so an offline or egress-restricted machine can still converge to the
 source-approved local matrix. If upstream is newer than the matrix, the
-workflow reports the quarantined release. Exact-version package-manager installs may still converge
+workflow reports the newer release as pending compatibility review. Exact-version package-manager installs may still converge
 to the approved matrix. Codex's standalone updater has no exact-version argument, so it remains a
 manual update path even when upstream equals the pin. If another provider has a safe exact-version
 path, that provider may still converge while the unsupported layout is reported for manual action;
@@ -60,7 +61,7 @@ machines remains necessary before claiming those exact OS versions as certified.
 1. Create a focused branch named `provider-conformity/<versions>` from the current Cafe Code
    development base.
 2. Audit official provider release notes, SDK types, protocol schemas, lifecycle changes, auth and
-   credential behavior, and new capabilities. Update the matrix only after the package-age gate.
+   credential behavior, and new capabilities. Update the matrix after the compatibility audit; no package-age wait applies.
 3. Add or regenerate source changes and tests. Commit intentionally; the publication command will
    not sweep up a dirty worktree.
 4. Run `corepack yarn providers:conform publish`. It refuses protected or unrelated branches,
@@ -68,7 +69,7 @@ machines remains necessary before claiming those exact OS versions as certified.
    gates, pushes the fork branch, and creates or reuses only an open focused draft PR against Cafe
    Code. The origin must be that target or its direct GitHub fork. Cross-fork reuse is resolved by
    exact fork owner, head branch, base branch, and open state; the generated body includes the
-   provider-conformity review template. A newer quarantined registry release is reported as evidence
+   provider-conformity review template. A newer unreviewed registry release is reported as evidence
    but does not block publishing the tested matrix needed to review that release.
 5. Use `--wait-ci` only when the operator wants the command to wait for required checks and mark the
    draft ready after they pass. A failure leaves the PR draft and reusable code unavailable for

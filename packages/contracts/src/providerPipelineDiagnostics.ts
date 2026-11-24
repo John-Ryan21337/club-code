@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { NonNegativeInt } from "./baseSchemas.ts";
@@ -30,6 +31,11 @@ export const ProviderPipelineDaemonStreamDiagnostics = Schema.Struct({
   queuedLiveRecords: NonNegativeInt,
   queuedLiveBytes: NonNegativeInt,
   laggingDisconnectCount: NonNegativeInt,
+  // Number of times a lagging consumer's finite live queue overflowed and the
+  // stream switched back to paged durable replay instead of disconnecting.
+  // Defaults to 0 so a newer backend can still decode health from an older
+  // detached daemon that predates this counter.
+  liveOverflowCatchUpCount: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
 });
 
 export const ProviderPipelineBackendBridgeDiagnostics = Schema.Struct({

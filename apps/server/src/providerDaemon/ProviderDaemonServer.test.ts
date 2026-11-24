@@ -1,5 +1,6 @@
 import {
   EventId,
+  PROVIDER_DAEMON_HEALTH_PATH,
   PROVIDER_DAEMON_LIVENESS_PATH,
   ProviderDaemonHealth,
   ProviderDaemonLeaseRequest,
@@ -21,6 +22,11 @@ import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { EventEmitter } from "node:events";
+import {
+  resetProviderPipelineDiagnosticsForTest,
+  snapshotProviderPipelineDiagnostics,
+} from "@cafecode/shared/providerPipelineDiagnostics";
+import { PROVIDER_PIPELINE_POLICY } from "@cafecode/shared/providerPipelinePolicy";
 
 import { ProviderAdapterRegistry } from "../provider/Services/ProviderAdapterRegistry.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
@@ -38,7 +44,10 @@ import {
   writeProviderDaemonStreamLine,
   type ProviderDaemonServerOptions,
 } from "./ProviderDaemonServer.ts";
-import type { ProviderDaemonPersistentEventJournal } from "./EventJournal.ts";
+import {
+  makePersistentProviderDaemonEventJournal,
+  type ProviderDaemonPersistentEventJournal,
+} from "./EventJournal.ts";
 import { ProviderRuntimeInventoryLocalLive } from "./ProviderRuntimeInventory.ts";
 
 const TEST_TOKEN = "provider-daemon-test-token-000000000000000000000000";
@@ -137,6 +146,16 @@ const makeProviderDaemonServerTestLayer = (providerService: ProviderServiceShape
   ).pipe(Layer.provideMerge(SqlitePersistenceMemory));
 
 const providerDaemonServerTestLayer = makeProviderDaemonServerTestLayer(mockProviderService);
+
+// Polls a stream-progress predicate with a bounded deadline so a regression
+// fails the test instead of hanging it.
+async function waitForStreamProgress(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 2_000; attempt += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error("timed out waiting for stream progress");
+}
 
 describe("ProviderDaemonServer", () => {
   it("reports active functional RPC count and oldest age without external reads", () => {
@@ -249,6 +268,7 @@ describe("ProviderDaemonServer", () => {
             },
           };
         }),
+      latestCursor: Effect.die("unexpected latestCursor"),
       snapshot: Effect.succeed({
         eventCursor: 300,
         retainedEventCount: 300,
@@ -308,6 +328,7 @@ describe("ProviderDaemonServer", () => {
       replayPageThrough: () => Effect.die("unexpected replayPageThrough"),
       subscribe: () => () => undefined,
       subscribeWithReplayBoundary: () => Effect.die(new Error("boundary snapshot failed")),
+      latestCursor: Effect.die("unexpected latestCursor"),
       snapshot: Effect.die("unexpected snapshot"),
       startupMaintenance: Effect.void,
     } satisfies ProviderDaemonPersistentEventJournal;
@@ -375,6 +396,7 @@ describe("ProviderDaemonServer", () => {
             },
           };
         }),
+      latestCursor: Effect.die("unexpected latestCursor"),
       snapshot: Effect.die("unexpected snapshot"),
       startupMaintenance: Effect.void,
     } satisfies ProviderDaemonPersistentEventJournal;
@@ -401,6 +423,95 @@ describe("ProviderDaemonServer", () => {
     expect(cleanupCount).toBe(1);
     expect(unsubscribeCount).toBe(1);
     expect(response.writableEnded).toBe(true);
+  });
+
+  it("catches a lagging consumer up from the durable journal instead of disconnecting", async () => {
+    // Regression for the 2026-11-18 ingestion stall: a Codex command-output
+    // flood overflowed the 256-record live queue while the backend was still
+    // writing, the daemon disconnected it, and the backend's 500 ms reconnect
+    // plus re-replay cycle repeated about once a second. Every live record is
+    // already durable, so the stream must page the overflow back from SQLite
+    // on the same response, in order, without duplicates.
+    class FakeRequest extends EventEmitter {}
+    class GatedResponse extends EventEmitter {
+      destroyed = false;
+      writableEnded = false;
+      readonly cursors: number[] = [];
+      readonly destroyCauses: unknown[] = [];
+      gated = false;
+      writeHead(): void {}
+      write(line: string): boolean {
+        this.cursors.push((JSON.parse(line) as ProviderDaemonEventRecord).cursor);
+        // While gated, report a full socket buffer and withhold `drain` so
+        // the writer stalls exactly like a slow backend consumer.
+        return !this.gated;
+      }
+      release(): void {
+        this.gated = false;
+        this.emit("drain");
+      }
+      end(): void {
+        this.writableEnded = true;
+      }
+      destroy(cause?: unknown): void {
+        this.destroyed = true;
+        this.destroyCauses.push(cause);
+        this.emit("close");
+      }
+    }
+
+    const burst = PROVIDER_PIPELINE_POLICY.daemonWriterMaxRecords * 3;
+    resetProviderPipelineDiagnosticsForTest();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const journal = yield* makePersistentProviderDaemonEventJournal({ capacity: 10_000 });
+        const services = yield* Effect.context<never>();
+        const run = Effect.runPromiseWith(services);
+        const publish = (index: number) => run(journal.publish(makeDaemonRecord(index).event));
+
+        for (let index = 1; index <= 5; index += 1) yield* Effect.promise(() => publish(index));
+
+        const request = new FakeRequest();
+        const response = new GatedResponse();
+        let cleanupCount = 0;
+        const stream = handleProviderDaemonEventStream(
+          request as unknown as Parameters<typeof handleProviderDaemonEventStream>[0],
+          response as unknown as Parameters<typeof handleProviderDaemonEventStream>[1],
+          journal,
+          0,
+          run,
+          () => {
+            cleanupCount += 1;
+          },
+        );
+
+        yield* Effect.promise(async () => {
+          await waitForStreamProgress(() => response.cursors.length === 5);
+          // Stall the consumer, then publish far more than the live queue holds.
+          response.gated = true;
+          for (let index = 6; index <= 5 + burst; index += 1) await publish(index);
+          expect(response.destroyCauses).toEqual([]);
+          expect(
+            snapshotProviderPipelineDiagnostics().daemonStream.liveOverflowCatchUpCount,
+          ).toBeGreaterThanOrEqual(1);
+          expect(snapshotProviderPipelineDiagnostics().daemonStream.queuedLiveRecords).toBe(0);
+
+          response.release();
+          await waitForStreamProgress(() => response.cursors.length === 5 + burst);
+          // After catching up the stream must resume ordinary live delivery.
+          await publish(6 + burst);
+          await waitForStreamProgress(() => response.cursors.length === 6 + burst);
+          response.emit("close");
+          await stream;
+        });
+
+        expect(response.destroyCauses).toEqual([]);
+        expect(response.cursors).toEqual(Array.from({ length: 6 + burst }, (_, i) => i + 1));
+        expect(cleanupCount).toBe(1);
+        expect(snapshotProviderPipelineDiagnostics().daemonStream.laggingDisconnectCount).toBe(0);
+      }).pipe(Effect.scoped, Effect.provide(SqlitePersistenceMemory)),
+    );
   });
 
   it.effect("serves authenticated liveness without reading provider diagnostics", () => {
@@ -532,6 +643,33 @@ describe("ProviderDaemonServer", () => {
       assert.equal(health.pipelineDiagnostics?.daemonStream.activeStreamCount, 0);
       assert.notInclude(encodeProviderDaemonHealthJson(health), TEST_TOKEN);
     }).pipe(Effect.scoped, Effect.provide(providerDaemonServerTestLayer)),
+  );
+
+  it.effect("serves only the authenticated journal cursor without reading sessions", () =>
+    Effect.gen(function* () {
+      const port = yield* startProviderDaemonServerOnEphemeralPort({
+        host: "127.0.0.1",
+        token: TEST_TOKEN,
+        version: "test",
+      });
+      const url = `http://127.0.0.1:${port}${PROVIDER_DAEMON_HEALTH_PATH}?cursorOnly=1`;
+      const unauthenticated = yield* Effect.promise(() => fetch(url));
+      assert.equal(unauthenticated.status, 401);
+      const authenticated = yield* Effect.promise(() =>
+        fetch(url, { headers: { authorization: `Bearer ${TEST_TOKEN}` } }),
+      );
+      assert.equal(authenticated.status, 200);
+      const body = yield* Effect.promise(() => authenticated.json());
+      assert.deepEqual(body, { eventCursor: 0 });
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(
+        makeProviderDaemonServerTestLayer({
+          ...mockProviderService,
+          listSessions: () => Effect.die("cursor-only health must not read provider sessions"),
+        }),
+      ),
+    ),
   );
 
   it.effect("serves role-aware provider supervisor health", () =>

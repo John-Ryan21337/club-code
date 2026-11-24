@@ -77,6 +77,42 @@ describe("model selection before provider hydration", () => {
 });
 
 describe("instance-scoped model selection", () => {
+  it("keeps newly discovered 6.2 models selectable with older saved model preferences", () => {
+    const instanceId = ProviderInstanceId.make("codex_personal");
+    const providers = [
+      provider({ instanceId: "codex", models: ["gpt-6-astra"] }),
+      provider({
+        instanceId,
+        models: ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6-astra"],
+      }),
+    ];
+    const settings: UnifiedSettings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerModelPreferences: {
+        [instanceId]: {
+          hiddenModels: ["gpt-6-astra"],
+          modelOrder: ["gpt-6.1-sol", "gpt-6-astra"],
+        },
+      },
+    };
+    const entry = deriveProviderInstanceEntries(providers).find(
+      (candidate) => candidate.instanceId === instanceId,
+    )!;
+
+    expect(getAppModelOptionsForInstance(settings, entry).map((option) => option.slug)).toEqual([
+      "gpt-6.1-sol",
+      "gpt-6.2-sol",
+      "gpt-6.2-astra",
+    ]);
+    for (const slug of ["gpt-6.2-sol", "gpt-6.2-astra"]) {
+      expect(resolveAppModelSelectionForInstance(instanceId, settings, providers, slug)).toBe(slug);
+    }
+    const defaultEntry = deriveProviderInstanceEntries(providers)[0]!;
+    expect(
+      getAppModelOptionsForInstance(settings, defaultEntry).map((option) => option.slug),
+    ).toEqual(["gpt-6-astra"]);
+  });
+
   it("keeps custom models on the provider instance that declared them", () => {
     const providers = [
       provider({

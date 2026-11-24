@@ -7,7 +7,7 @@ import {
 } from "./settingsProfiles";
 
 describe("world clock settings profiles", () => {
-  it("captures visual clock configuration without geometry or network consent", () => {
+  it("captures visual clock configuration including the user-selected weather preference", () => {
     const settings = {
       ...DEFAULT_UNIFIED_SETTINGS,
       worldClockEnabled: true,
@@ -22,7 +22,7 @@ describe("world clock settings profiles", () => {
       worldClockLocationIds: ["seoul", "sydney"],
     });
     expect(payload.clientSettings).not.toHaveProperty("worldClockPanelGeometry");
-    expect(payload.clientSettings).not.toHaveProperty("worldClockWeatherEnabled");
+    expect(payload.clientSettings).toHaveProperty("worldClockWeatherEnabled", true);
   });
 
   it("drops malformed persisted clock fields independently", () => {
@@ -35,6 +35,7 @@ describe("world clock settings profiles", () => {
       }),
     ).toEqual({
       worldClockEnabled: true,
+      worldClockWeatherEnabled: true,
     });
   });
 });

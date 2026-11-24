@@ -568,11 +568,16 @@ function SidebarRail({
     const wrapper = rail.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
     if (!wrapper) return;
 
-    const storedWidth = getLocalStorageItem(resolvedResizable.storageKey, Schema.Finite);
-    if (storedWidth === null) return;
-    const clampedWidth = clampSidebarWidth(storedWidth, resolvedResizable);
-    wrapper.style.setProperty("--sidebar-width", `${clampedWidth}px`);
-    resolvedResizable.onResize?.(clampedWidth);
+    const restore = () => {
+      const storedWidth = getLocalStorageItem(resolvedResizable.storageKey!, Schema.Finite);
+      if (storedWidth === null) return;
+      const clampedWidth = clampSidebarWidth(storedWidth, resolvedResizable);
+      wrapper.style.setProperty("--sidebar-width", `${clampedWidth}px`);
+      resolvedResizable.onResize?.(clampedWidth);
+    };
+    restore();
+    window.addEventListener("cafe-code:profile-layout-restored", restore);
+    return () => window.removeEventListener("cafe-code:profile-layout-restored", restore);
   }, [resolvedResizable]);
 
   React.useEffect(() => {

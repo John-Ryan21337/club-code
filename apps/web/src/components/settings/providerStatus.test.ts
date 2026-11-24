@@ -23,7 +23,7 @@ describe("provider version advisory presentation", () => {
     });
   });
 
-  it("labels a quarantined upstream release as awaiting conformity", () => {
+  it("labels an unreviewed upstream release as awaiting conformity", () => {
     expect(
       getProviderVersionAdvisoryPresentation({
         status: "behind_latest",

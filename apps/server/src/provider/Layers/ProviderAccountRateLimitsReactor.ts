@@ -48,6 +48,7 @@ export const ProviderAccountRateLimitsReactorLive = Layer.effectDiscard(
         const checkedAt = yield* Effect.map(DateTime.now, DateTime.formatIso);
         yield* registry.updateProviderAccountRateLimits({
           instanceId: event.providerInstanceId,
+          ...update,
           slot: update.slot,
           window: update.window,
           checkedAt,

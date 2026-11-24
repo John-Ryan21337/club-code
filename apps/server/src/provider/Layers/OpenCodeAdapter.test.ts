@@ -28,6 +28,7 @@ import {
   OpenCodeRuntime,
   OpenCodeRuntimeError,
   type OpenCodeRuntimeShape,
+  type OpenCodeInventory,
 } from "../opencodeRuntime.ts";
 import {
   appendOpenCodeAssistantTextDelta,
@@ -63,6 +64,7 @@ const runtimeMock = {
     closeError: null as Error | null,
     messages: [] as MessageEntry[],
     subscribedEvents: [] as unknown[],
+    inventory: null as OpenCodeInventory | null,
   },
   reset() {
     this.state.startCalls.length = 0;
@@ -76,6 +78,7 @@ const runtimeMock = {
     this.state.closeError = null;
     this.state.messages = [];
     this.state.subscribedEvents = [];
+    this.state.inventory = null;
   },
 };
 
@@ -169,13 +172,15 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
       },
     }) as unknown as ReturnType<OpenCodeRuntimeShape["createOpenCodeSdkClient"]>,
   loadOpenCodeInventory: () =>
-    Effect.fail(
-      new OpenCodeRuntimeError({
-        operation: "loadOpenCodeInventory",
-        detail: "OpenCodeRuntimeTestDouble.loadOpenCodeInventory not used in this test",
-        cause: null,
-      }),
-    ),
+    runtimeMock.state.inventory
+      ? Effect.succeed(runtimeMock.state.inventory)
+      : Effect.fail(
+          new OpenCodeRuntimeError({
+            operation: "loadOpenCodeInventory",
+            detail: "OpenCodeRuntimeTestDouble.loadOpenCodeInventory not used in this test",
+            cause: null,
+          }),
+        ),
 };
 
 const providerSessionDirectoryTestLayer = Layer.succeed(ProviderSessionDirectory, {
@@ -409,6 +414,61 @@ it.layer(IsolatedOpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       assert.equal(sessions[0]?.lastError, "prompt failed");
     }),
   );
+
+  for (const providerID of ["openai", "anthropic", "local-models"]) {
+    it.effect(`defaults ${providerID} to supported High and preserves saved effort`, () =>
+      Effect.gen(function* () {
+        runtimeMock.state.inventory = {
+          providerList: {
+            connected: [providerID],
+            all: [
+              { id: providerID, models: { test: { variants: { low: {}, medium: {}, high: {} } } } },
+            ],
+            default: {},
+          },
+          agents: [],
+        } as unknown as OpenCodeInventory;
+        const adapter = yield* OpenCodeAdapter;
+        const threadId = asThreadId(`thread-high-${providerID}`);
+        yield* adapter.startSession({
+          provider: ProviderDriverKind.make("opencode"),
+          threadId,
+          runtimeMode: "full-access",
+        });
+        for (const saved of [undefined, "low", "default"]) {
+          yield* adapter.sendTurn({
+            threadId,
+            input: "Test default effort",
+            modelSelection: createModelSelection(
+              ProviderInstanceId.make("opencode"),
+              `${providerID}/test`,
+              saved ? [{ id: "variant", value: saved }] : undefined,
+            ),
+          });
+          assert.equal(
+            (runtimeMock.state.promptCalls.at(-1) as { variant?: string }).variant,
+            saved === "low" ? "low" : "high",
+          );
+        }
+        runtimeMock.state.inventory.providerList.all[0]!.models.test!.variants = {
+          low: {},
+          medium: {},
+        };
+        yield* adapter.sendTurn({
+          threadId,
+          input: "No unsupported High",
+          modelSelection: createModelSelection(
+            ProviderInstanceId.make("opencode"),
+            `${providerID}/test`,
+          ),
+        });
+        assert.notEqual(
+          (runtimeMock.state.promptCalls.at(-1) as { variant?: string }).variant,
+          "high",
+        );
+      }).pipe(Effect.provide(OpenCodeAdapterTestLayer)),
+    );
+  }
 
   it.effect("passes agent and variant options for the adapter's bound custom instance id", () => {
     const instanceId = ProviderInstanceId.make("opencode_zen");

@@ -37,6 +37,7 @@ import { applyServerSettingsPatch } from "@cafecode/shared/serverSettings";
 import {
   buildCodexProviderAppServerArgs,
   checkCodexCliProviderStatus,
+  checkCodexOssProviderStatus,
   checkCodexProviderStatus,
   CODEX_CLI_LOGIN_STATUS_TIMEOUT_MESSAGE,
   discoverLmStudioModels,
@@ -333,6 +334,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           "--oss",
           "--local-provider",
           "lmstudio",
+          "-c",
+          'model_provider="lmstudio"',
           "app-server",
         ]);
         assert.deepStrictEqual(buildCodexProviderAppServerArgs(false), ["app-server"]);
@@ -760,6 +763,67 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
 
           assert.strictEqual(status.auth.status, "authenticated");
           assert.strictEqual(status.auth.label, "ChatGPT Business Subscription");
+        }),
+      );
+
+      it.effect("labels the Codex 0.163 Pro Max plan as Pro Max", () =>
+        Effect.gen(function* () {
+          const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+            Effect.succeed(
+              makeCodexProbeSnapshot({
+                account: {
+                  account: {
+                    type: "chatgpt",
+                    email: "promax@example.com",
+                    planType: "promax",
+                  },
+                  requiresOpenaiAuth: false,
+                },
+              }),
+            ),
+          );
+
+          assert.strictEqual(status.auth.status, "authenticated");
+          assert.strictEqual(status.auth.label, "ChatGPT Pro Max Subscription");
+        }),
+      );
+
+      for (const [planType, label] of [
+        ["sci", "Academic Researchers"],
+        ["sci_plus", "Academic Researchers Plus"],
+      ] as const) {
+        it.effect(`labels the Codex ${planType} research plan`, () =>
+          Effect.gen(function* () {
+            const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+              Effect.succeed(
+                makeCodexProbeSnapshot({
+                  account: {
+                    account: { type: "chatgpt", email: "researcher@example.com", planType },
+                    requiresOpenaiAuth: false,
+                  },
+                }),
+              ),
+            );
+            assert.strictEqual(status.auth.label, label);
+            assert.strictEqual(status.auth.status, "authenticated");
+          }),
+        );
+      }
+
+      it.effect("recognizes the native Google Cloud Vertex AI account", () =>
+        Effect.gen(function* () {
+          const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+            Effect.succeed(
+              makeCodexProbeSnapshot({
+                account: {
+                  account: { type: "gcp" },
+                  requiresOpenaiAuth: false,
+                },
+              }),
+            ),
+          );
+          assert.strictEqual(status.auth.label, "Google Cloud Vertex AI");
+          assert.strictEqual(status.auth.status, "authenticated");
         }),
       );
 
@@ -2395,6 +2459,104 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           }),
       );
 
+      describe("checkCodexOssProviderStatus", () => {
+        const lmStudioClient = (chatModel: string) =>
+          HttpClient.make((request) =>
+            Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                request.url.endsWith("/api/v1/models")
+                  ? Response.json({
+                      models: [
+                        {
+                          type: "llm",
+                          key: chatModel,
+                          display_name: "Local Chat Model",
+                          loaded_instances: [{ id: chatModel }],
+                        },
+                        {
+                          type: "embedding",
+                          key: "local/embedder",
+                          display_name: "Local Embedder",
+                          loaded_instances: [{ id: "local/embedder" }],
+                        },
+                      ],
+                    })
+                  : Response.json({ data: [{ id: chatModel }, { id: "local/embedder" }] }),
+              ),
+            ),
+          );
+
+        // Regression: a status probe that starts `codex app-server` blocks on
+        // Codex's one-time state-DB index for a fresh shadow home, times out,
+        // and hides every LM Studio model. Only `--version` may be spawned.
+        it.effect("lists LM Studio chat models without starting codex app-server", () =>
+          Effect.gen(function* () {
+            const { layer, commands } = recordingMockSpawnerLayer(() => ({
+              stdout: "codex-cli 0.166.0\n",
+              stderr: "",
+              code: 0,
+            }));
+            const status = yield* checkCodexOssProviderStatus(
+              decodeCodexSettings({ ossMode: true, customModels: ["cloud-only-model"] }),
+              lmStudioClient("local/chat-model"),
+            ).pipe(Effect.provide(layer));
+
+            assert.deepStrictEqual(
+              commands.map((command) => command.args),
+              [["--version"]],
+            );
+            assert.strictEqual(status.status, "ready");
+            assert.strictEqual(status.version, "0.166.0");
+            assert.strictEqual(status.auth.type, "local");
+            assert.deepStrictEqual(
+              status.models.map((model) => model.slug),
+              ["local/chat-model"],
+            );
+          }),
+        );
+
+        it.effect("reports an offline LM Studio server without listing models", () =>
+          Effect.gen(function* () {
+            const status = yield* Effect.gen(function* () {
+              const offlineClient = yield* HttpClient.HttpClient;
+              return yield* checkCodexOssProviderStatus(
+                decodeCodexSettings({ ossMode: true }),
+                offlineClient,
+              );
+            }).pipe(
+              Effect.provide(FetchHttpClient.layer),
+              Effect.provideService(FetchHttpClient.Fetch, () =>
+                Promise.reject(new TypeError("connect ECONNREFUSED 127.0.0.1:1234")),
+              ),
+              Effect.provide(
+                mockSpawnerLayer(() => ({ stdout: "codex-cli 0.166.0\n", stderr: "", code: 0 })),
+              ),
+            );
+
+            assert.strictEqual(status.status, "error");
+            assert.match(status.message ?? "", /LM Studio did not answer/);
+            assert.deepStrictEqual(status.models, []);
+          }),
+        );
+
+        it.effect("keeps a failed Codex CLI as an error even when LM Studio is ready", () =>
+          Effect.gen(function* () {
+            const status = yield* checkCodexOssProviderStatus(
+              decodeCodexSettings({ ossMode: true }),
+              lmStudioClient("local/chat-model"),
+            ).pipe(
+              Effect.provide(
+                mockSpawnerLayer(() => ({ stdout: "", stderr: "broken install\n", code: 1 })),
+              ),
+            );
+
+            assert.strictEqual(status.status, "error");
+            assert.deepStrictEqual(status.models, []);
+          }),
+        );
+      });
+
       it.effect("uses the Codex CLI login status path for lightweight provider status", () =>
         Effect.gen(function* () {
           const status = yield* checkCodexCliProviderStatus(defaultCodexSettings).pipe(
@@ -2422,6 +2584,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
             status.models.map((model) => model.slug),
             [
               "gpt-6-astra",
+              "gpt-6.1-sol",
+              "gpt-6-sol",
+              "gpt-6-luna",
               "gpt-5.6-sol",
               "gpt-5.6-terra",
               "gpt-5.6-luna",
@@ -2788,6 +2953,23 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
     // ── checkClaudeProviderStatus tests ──────────────────────────
 
     describe("checkClaudeProviderStatus", () => {
+      for (const version of ["2.1.322", "2.1.326", "2.1.327", "2.1.328"]) {
+        it.effect(`checks the secure MCP transport version boundary (${version})`, () =>
+          Effect.gen(function* () {
+            const status = yield* checkClaudeProviderStatus(
+              defaultClaudeSettings,
+              claudeCapabilities(),
+            );
+            const supported = version === "2.1.327" || version === "2.1.328";
+            assert.equal(status.status, supported ? "ready" : "error");
+            if (!supported) assert.match(status.message ?? "", /Upgrade Claude Code to v2\.1\.327/);
+          }).pipe(
+            Effect.provide(
+              mockSpawnerLayer(() => ({ stdout: `${version}\n`, stderr: "", code: 0 })),
+            ),
+          ),
+        );
+      }
       it.effect("returns ready when claude is installed and authenticated", () =>
         Effect.gen(function* () {
           const status = yield* checkClaudeProviderStatus(
@@ -2801,7 +2983,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           Effect.provide(
             mockSpawnerLayer((args) => {
               const joined = args.join(" ");
-              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "--version") return { stdout: "2.1.327\n", stderr: "", code: 0 };
               if (joined === "auth status")
                 return {
                   stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
@@ -2843,7 +3025,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
             version: "2.1.110",
             slugs: [] as Array<string>,
             upgrade:
-              "Claude Code v2.1.110 is too old for Claude Opus 5. Upgrade to v2.1.219 or newer to access it.",
+              "Claude Code v2.1.110 is too old for Claude Opus 5.5. Upgrade to v2.1.280 or newer to access it.",
           },
           { version: "2.1.111", slugs: ["claude-opus-4-7"] },
           { version: "2.1.154", slugs: ["claude-opus-4-7", "claude-opus-4-8"] },
@@ -2856,7 +3038,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
             version: "2.1.218",
             slugs: ["claude-opus-4-7", "claude-opus-4-8", "claude-fable-5", "claude-sonnet-5"],
             upgrade:
-              "Claude Code v2.1.218 is too old for Claude Opus 5. Upgrade to v2.1.219 or newer to access it.",
+              "Claude Code v2.1.218 is too old for Claude Opus 5.5. Upgrade to v2.1.280 or newer to access it.",
           },
           {
             version: "2.1.219",
@@ -2868,8 +3050,80 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
               "claude-sonnet-5",
             ],
           },
+          {
+            version: "2.1.257",
+            slugs: [
+              "claude-fable-5-1",
+              "claude-opus-5",
+              "claude-opus-4-7",
+              "claude-opus-4-8",
+              "claude-fable-5",
+              "claude-sonnet-5",
+            ],
+          },
+          {
+            version: "2.1.280",
+            slugs: [
+              "claude-opus-5-5",
+              "claude-fable-5-1",
+              "claude-opus-5",
+              "claude-opus-4-7",
+              "claude-opus-4-8",
+              "claude-fable-5",
+              "claude-sonnet-5",
+            ],
+          },
+          {
+            version: "2.1.284",
+            slugs: [
+              "claude-opus-5-5",
+              "claude-fable-5-1",
+              "claude-sonnet-5-5",
+              "claude-opus-5",
+              "claude-opus-4-7",
+              "claude-opus-4-8",
+              "claude-fable-5",
+              "claude-sonnet-5",
+            ],
+          },
+          {
+            version: "2.1.303",
+            slugs: [
+              "claude-opus-5-5",
+              "claude-fable-5-1",
+              "claude-sonnet-5-5",
+              "claude-haiku-5-5",
+              "claude-opus-5",
+              "claude-opus-4-7",
+              "claude-opus-4-8",
+              "claude-fable-5",
+              "claude-sonnet-5",
+            ],
+            upgrade:
+              "Claude Code v2.1.303 is too old for Claude Fable 5.2. Upgrade to v2.1.321 or newer to access it.",
+          },
+          {
+            version: "2.1.321",
+            slugs: [
+              "claude-opus-5-5",
+              "claude-fable-5-2",
+              "claude-fable-5-1",
+              "claude-sonnet-5-5",
+              "claude-haiku-5-5",
+              "claude-opus-5",
+              "claude-opus-4-7",
+              "claude-opus-4-8",
+              "claude-fable-5",
+              "claude-sonnet-5",
+            ],
+          },
         ];
         const gatedSlugs = [
+          "claude-opus-5-5",
+          "claude-fable-5-2",
+          "claude-fable-5-1",
+          "claude-sonnet-5-5",
+          "claude-haiku-5-5",
           "claude-opus-5",
           "claude-opus-4-7",
           "claude-opus-4-8",
@@ -2962,8 +3216,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           opus5Context?.type === "select"
             ? opus5Context.options.map((option) => option.id)
             : undefined,
-          ["1m"],
+          ["200k", "1m"],
         );
+        assert.equal(opus5Context?.currentValue, "200k");
         assert.equal(
           opus5Descriptors.some(
             (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",
@@ -2979,6 +3234,45 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           )
           .map((model) => model.slug);
         assert.deepStrictEqual(fastModeSlugs, ["claude-opus-5", "claude-opus-4-8"]);
+
+        // Fable 5.2 (Claude Code 2.1.321+) supports adaptive effort through
+        // `max`, opt-in fast mode, and a 1M native context. Club defaults it to
+        // High effort and the 200K budget like the other current models.
+        const fable52 = getBuiltInClaudeModelsForVersion("2.1.322").find(
+          (model) => model.slug === "claude-fable-5-2",
+        );
+        assert.strictEqual(fable52?.name, "Claude Fable 5.2");
+        const fable52Descriptors = fable52?.capabilities?.optionDescriptors ?? [];
+        const fable52Effort = fable52Descriptors.find(
+          (descriptor) => descriptor.type === "select" && descriptor.id === "effort",
+        );
+        assert.deepStrictEqual(
+          fable52Effort?.type === "select"
+            ? fable52Effort.options.map((option) => option.id)
+            : undefined,
+          ["low", "medium", "high", "xhigh", "max", "ultrathink"],
+        );
+        assert.equal(fable52Effort?.currentValue, "high");
+        const fable52Context = fable52Descriptors.find(
+          (descriptor) => descriptor.type === "select" && descriptor.id === "contextWindow",
+        );
+        assert.equal(fable52Context?.currentValue, "200k");
+        assert.strictEqual(
+          fable52Descriptors.some(
+            (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",
+          ),
+          true,
+        );
+        // Fable 5.1 does not support fast mode upstream.
+        const fable51 = getBuiltInClaudeModelsForVersion("2.1.322").find(
+          (model) => model.slug === "claude-fable-5-1",
+        );
+        assert.strictEqual(
+          fable51?.capabilities?.optionDescriptors?.some(
+            (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",
+          ),
+          false,
+        );
 
         const latestSlugs = getBuiltInClaudeModelsForVersion("2.1.219").map((model) => model.slug);
         assert.strictEqual(
@@ -3019,7 +3313,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           Effect.provide(
             mockSpawnerLayer((args) => {
               const joined = args.join(" ");
-              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "--version") return { stdout: "2.1.327\n", stderr: "", code: 0 };
               if (joined === "auth status")
                 return {
                   stdout:
@@ -3036,7 +3330,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
       it.effect("runs Claude status probes with the configured Claude HOME", () => {
         const recorded = recordingMockSpawnerLayer((args) => {
           const joined = args.join(" ");
-          if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+          if (joined === "--version") return { stdout: "2.1.327\n", stderr: "", code: 0 };
           if (joined === "auth status")
             return {
               stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
@@ -3091,7 +3385,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           Effect.provide(
             mockSpawnerLayer((args) => {
               const joined = args.join(" ");
-              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "--version") return { stdout: "2.1.327\n", stderr: "", code: 0 };
               if (joined === "auth status")
                 return {
                   stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
@@ -3134,7 +3428,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           Effect.provide(
             mockSpawnerLayer((args) => {
               const joined = args.join(" ");
-              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "--version") return { stdout: "2.1.327\n", stderr: "", code: 0 };
               if (joined === "auth status")
                 return {
                   stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
@@ -3161,7 +3455,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           Effect.provide(
             mockSpawnerLayer((args) => {
               const joined = args.join(" ");
-              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "--version") return { stdout: "2.1.327\n", stderr: "", code: 0 };
               if (joined === "auth status")
                 return {
                   stdout: '{"loggedIn":true,"authMethod":"api-key"}\n',
@@ -3214,6 +3508,26 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
         ),
       );
 
+      for (const version of ["2.1.326", "unparseable"]) {
+        it.effect(
+          `requires the secure transport upgrade when initialization is unavailable (${version})`,
+          () =>
+            Effect.gen(function* () {
+              const status = yield* checkClaudeProviderStatus(
+                defaultClaudeSettings,
+                noClaudeCapabilities,
+              );
+              assert.strictEqual(status.status, "error");
+              assert.strictEqual(status.auth.status, "unknown");
+              assert.match(status.message ?? "", /Upgrade Claude Code to v2\.1\.327/);
+            }).pipe(
+              Effect.provide(
+                mockSpawnerLayer(() => ({ stdout: `${version}\n`, stderr: "", code: 0 })),
+              ),
+            ),
+        );
+      }
+
       it.effect("returns warning when the Claude initialization result is unavailable", () =>
         Effect.gen(function* () {
           const status = yield* checkClaudeProviderStatus(
@@ -3231,7 +3545,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           Effect.provide(
             mockSpawnerLayer((args) => {
               const joined = args.join(" ");
-              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "--version") return { stdout: "2.1.327\n", stderr: "", code: 0 };
               if (joined === "auth status")
                 return {
                   stdout: '{"loggedIn":false}\n',

@@ -27,6 +27,7 @@ export const MIN_CODEX_SUBAGENT_THREAD_LIMIT = 1;
 export const MAX_CODEX_SUBAGENT_THREAD_LIMIT = 128;
 export const DEFAULT_CODEX_SUBAGENT_THREAD_LIMIT = 16;
 export const CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID = "codexSubagentThreadLimit";
+export const CODEX_AUTO_DELEGATE_OPTION_ID = "codexAutoDelegate";
 
 /**
  * Maximum concurrently open Codex spawned-agent threads for one provider

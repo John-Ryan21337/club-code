@@ -12,6 +12,8 @@ import {
   ProviderInstanceId,
   type ProviderOptionDescriptor,
   type ProviderOptionSelection,
+  type ServerProviderModel,
+  type ServerProviderPaidUsagePolicy,
 } from "@cafecode/contracts";
 
 const DEFAULT_PROVIDER_DRIVER_KIND = ProviderDriverKind.make("codex");
@@ -27,6 +29,52 @@ export function createModelCapabilities(input: {
   return {
     optionDescriptors: input.optionDescriptors.map(cloneDescriptor),
   };
+}
+
+/**
+ * Model option ids whose non-default values route a send onto a paid tier:
+ * Claude `fastMode` bills extra usage and Codex `fastMode`/`serviceTier`
+ * select the `priority` (Fast) or `ultrafast` (Ultra Fast) service tiers.
+ * Every other descriptor (effort, context window, worker limits) stays within
+ * the included plan.
+ */
+export const PAID_USAGE_OPTION_IDS: ReadonlySet<string> = new Set(["fastMode", "serviceTier"]);
+
+export function isPaidUsageOptionId(id: string): boolean {
+  return PAID_USAGE_OPTION_IDS.has(id);
+}
+
+/**
+ * Project the operator's per-instance paid-usage policy onto an advertised
+ * model inventory. When the policy is `blocked`, every paid speed descriptor is
+ * removed so no composer, traits, or sticky-preference surface can offer a
+ * route the server will refuse; descriptors that stay within the plan are
+ * untouched. `allowed` (and the legacy absent policy) returns the input
+ * unchanged. Server adapters still enforce the policy on each send, so this is
+ * presentation hygiene, not the only gate.
+ */
+export function applyPaidUsagePolicyToProviderModels(
+  models: ReadonlyArray<ServerProviderModel>,
+  policy: ServerProviderPaidUsagePolicy | undefined,
+): ReadonlyArray<ServerProviderModel> {
+  if (policy !== "blocked") {
+    return models;
+  }
+  return models.map((model) => {
+    const descriptors = model.capabilities?.optionDescriptors;
+    if (!descriptors || !descriptors.some((descriptor) => isPaidUsageOptionId(descriptor.id))) {
+      return model;
+    }
+    return {
+      ...model,
+      capabilities: {
+        ...model.capabilities,
+        optionDescriptors: descriptors
+          .filter((descriptor) => !isPaidUsageOptionId(descriptor.id))
+          .map(cloneDescriptor),
+      },
+    };
+  });
 }
 
 function getRawSelectionValueById(

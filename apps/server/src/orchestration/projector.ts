@@ -18,6 +18,7 @@ import {
 } from "@cafecode/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { isStaleInactiveSessionSnapshot } from "./sessionSnapshot.ts";
 
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
 import {
@@ -993,11 +994,7 @@ export function projectEvent(
           event.type,
           "session",
         );
-        if (
-          thread.session !== null &&
-          session.status === "starting" &&
-          session.updatedAt < thread.session.updatedAt
-        ) {
+        if (isStaleInactiveSessionSnapshot(session, thread.session)) {
           return nextBase;
         }
         const existingActiveTurnId =
@@ -1033,7 +1030,15 @@ export function projectEvent(
         return {
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
-            session: staleRunningSession ? thread.session : session,
+            session: staleRunningSession
+              ? thread.session
+              : {
+                  ...session,
+                  updatedAt:
+                    thread.session !== null && thread.session.updatedAt > session.updatedAt
+                      ? thread.session.updatedAt
+                      : session.updatedAt,
+                },
             latestTurn: staleRunningSession
               ? thread.latestTurn
               : session.status === "running" && session.activeTurnId !== null

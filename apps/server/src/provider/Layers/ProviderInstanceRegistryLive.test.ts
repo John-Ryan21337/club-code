@@ -56,12 +56,14 @@ const makeCodexConfig = (overrides: Partial<CodexSettings>): CodexSettings => ({
   binaryPath: "codex",
   runtimeSource: "system",
   ossMode: false,
+  modelProvider: "openai",
   ossBaseUrl: DEFAULT_LM_STUDIO_BASE_URL,
   homePath: "",
   shadowHomePath: "",
   customModels: [],
   autoCompactTokenLimit: CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
   ultraCaching: false,
+  allowPaidUsage: false,
   ...overrides,
 });
 
@@ -73,6 +75,7 @@ const makeClaudeConfig = (overrides: Partial<ClaudeSettings>): ClaudeSettings =>
   customModels: [],
   launchArgs: "",
   ultraCaching: false,
+  allowPaidUsage: false,
   ...overrides,
 });
 

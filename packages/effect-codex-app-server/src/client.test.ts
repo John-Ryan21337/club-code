@@ -1,3 +1,5 @@
+import * as Stream from "effect/Stream";
+import * as Fiber from "effect/Fiber";
 import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -25,6 +27,33 @@ const encoder = new TextEncoder();
 const encodeJsonl = (value: unknown) => encoder.encode(`${encodeUnknownJsonString(value)}\n`);
 
 it.layer(NodeServices.layer)("effect-codex-app-server client", (it) => {
+  it.effect("passes lossless notification delivery through to the protocol", () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const client = yield* CodexClient.make(stdio, { losslessNotifications: true });
+      const pending = yield* client.raw.request("test/barrier").pipe(Effect.forkScoped);
+      yield* Queue.take(output);
+      const notifications = Array.from({ length: 2050 }, (_, index) => ({
+        method: "test/delta",
+        params: { index },
+      }));
+      yield* Queue.offer(
+        input,
+        encoder.encode(
+          [...notifications, { id: 1, result: {} }]
+            .map((message) => encodeUnknownJsonString(message))
+            .join("\n") + "\n",
+        ),
+      );
+      yield* Fiber.join(pending);
+      const received = yield* client.raw.notifications.pipe(
+        Stream.take(notifications.length),
+        Stream.runCollect,
+      );
+      assert.deepEqual(Array.from(received), notifications);
+    }).pipe(Effect.scoped),
+  );
+
   const makeHandle = () =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;

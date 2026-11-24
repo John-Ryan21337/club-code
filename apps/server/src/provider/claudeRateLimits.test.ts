@@ -18,6 +18,7 @@ describe("parseClaudeRateLimitUpdate", () => {
     expect(update).toEqual({
       slot: "primary",
       window: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1782274800 },
+      reachedType: null,
     });
   });
 
@@ -33,6 +34,7 @@ describe("parseClaudeRateLimitUpdate", () => {
     expect(update).toEqual({
       slot: "primary",
       window: { windowDurationMins: 300, resetsAt: 1782274800 },
+      reachedType: null,
     });
     expect(update?.window.usedPercent).toBeUndefined();
   });
@@ -50,6 +52,15 @@ describe("parseClaudeRateLimitUpdate", () => {
       expect(update?.slot).toBe("secondary");
       expect(update?.window.windowDurationMins).toBe(10_080);
       expect(update?.window.resetsAt).toBe(1782800000);
+      if (rateLimitType !== "seven_day")
+        expect(update?.limitId).toBe(
+          rateLimitType === "seven_day_opus"
+            ? "claude-opus"
+            : rateLimitType === "seven_day_sonnet"
+              ? "claude-sonnet"
+              : rateLimitType,
+        );
+      else expect(update?.limitId).toBeUndefined();
     }
   });
 
@@ -63,7 +74,7 @@ describe("parseClaudeRateLimitUpdate", () => {
 
   it("skips windows we do not surface and malformed payloads", () => {
     expect(
-      parseClaudeRateLimitUpdate({ rate_limit_info: { rateLimitType: "overage" } }),
+      parseClaudeRateLimitUpdate({ rate_limit_info: { rateLimitType: "unknown_future_limit" } }),
     ).toBeNull();
     expect(parseClaudeRateLimitUpdate({ rate_limit_info: { status: "allowed" } })).toBeNull();
     expect(parseClaudeRateLimitUpdate(null)).toBeNull();
@@ -87,5 +98,20 @@ describe("parseClaudeRateLimitUpdate", () => {
       rate_limit_info: { rateLimitType: "five_hour", resetsAt: 1782274800, utilization: 1 },
     });
     expect(update?.window.usedPercent).toBe(100);
+  });
+  it("reports extra-usage exhaustion and reset without inventing a session duration", () => {
+    expect(
+      parseClaudeRateLimitUpdate({
+        rateLimitType: "overage",
+        overageStatus: "rejected",
+        overageResetsAt: 1792500000,
+      }),
+    ).toEqual({
+      slot: "primary",
+      limitId: "overage",
+      limitName: "Extra usage",
+      reachedType: "overage",
+      window: { resetsAt: 1792500000 },
+    });
   });
 });

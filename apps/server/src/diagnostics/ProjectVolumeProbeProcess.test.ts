@@ -2,8 +2,9 @@
 
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { join } from "node:path";
+import { join, parse } from "node:path";
 import { PassThrough } from "node:stream";
+import { runInNewContext } from "node:vm";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -28,10 +29,17 @@ describe("ProjectVolumeProbeProcess", () => {
     }
   });
 
-  it("returns a bounded sanitized failure for a missing private path", async () => {
+  it("reads the drive for a missing Windows project and preserves other platform failures", async () => {
     const probe = makeProjectVolumeProbeProcess();
     const privatePath = join(process.cwd(), "private-telemetry-path-that-does-not-exist");
     try {
+      if (process.platform === "win32") {
+        const counters = await probe.read(privatePath, 2_000);
+        const driveCounters = await probe.read(parse(privatePath).root, 2_000);
+        expect(counters.blockSize).toBe(driveCounters.blockSize);
+        expect(counters.blocks).toBe(driveCounters.blocks);
+        return;
+      }
       const error = await probe.read(privatePath, 2_000).catch((cause: unknown) => cause);
 
       expect(error).toBeInstanceOf(Error);
@@ -41,6 +49,100 @@ describe("ProjectVolumeProbeProcess", () => {
     } finally {
       await probe.close();
     }
+  });
+
+  describe("missing project fallback boundary", () => {
+    async function runProbe(platform: string, workspaceRoot: string, errors: string[]) {
+      let script = "";
+      const probe = makeProjectVolumeProbeProcessForTest({
+        spawnProcess: ((_executable: string, args: string[]) => {
+          script = args[1]!;
+          throw new Error("Capture helper without starting a process.");
+        }) as never,
+      });
+      await expect(probe.read(workspaceRoot, 2_000)).rejects.toThrow(
+        "Project-volume probe failed.",
+      );
+      await probe.close();
+      expect(script).toContain("statfs");
+
+      const statfs = vi.fn(async () => {
+        const code = errors.shift();
+        if (code) throw Object.assign(new Error("private path detail"), { code });
+        return { bsize: 4096n, blocks: 100n, bfree: 40n, bavail: 30n };
+      });
+      const setDeadline = vi.fn(() => 1);
+      const clearDeadline = vi.fn();
+      const output = await new Promise<string | null>((resolve) => {
+        runInNewContext(script, {
+          require: (name: string) => {
+            expect(name).toBe("node:fs");
+            return {
+              readFileSync: () => JSON.stringify({ workspaceRoot, timeoutMs: 2_000 }),
+              promises: { statfs },
+            };
+          },
+          process: {
+            platform,
+            stdout: { write: resolve },
+            exit: () => resolve(null),
+            set exitCode(_value: number) {
+              resolve(null);
+            },
+          },
+          setTimeout: setDeadline,
+          clearTimeout: clearDeadline,
+        });
+      });
+      expect(setDeadline).toHaveBeenCalledTimes(1);
+      expect(clearDeadline).toHaveBeenCalledTimes(1);
+      return { output, paths: statfs.mock.calls.map((args) => (args as unknown[])[0]) };
+    }
+
+    it.each(["ENOENT", "ENOTDIR"])(
+      "retries the drive once for %s within the same deadline",
+      async (code) => {
+        const result = await runProbe("win32", "M:\\deleted\\project", [code]);
+        expect(result.paths).toEqual(["M:\\deleted\\project", "M:\\"]);
+        expect(JSON.parse(result.output!)).toEqual(["4096", "100", "40", "30"]);
+      },
+    );
+
+    it("accepts forward slashes without changing the drive", async () => {
+      const result = await runProbe("win32", "m:/deleted/project", ["ENOENT"]);
+      expect(result.paths).toEqual(["m:/deleted/project", "m:/"]);
+      expect(result.output).not.toBeNull();
+    });
+
+    it("keeps existing projects on their exact volume", async () => {
+      const result = await runProbe("win32", "M:\\mounted\\project", []);
+      expect(result.paths).toEqual(["M:\\mounted\\project"]);
+      expect(result.output).not.toBeNull();
+    });
+
+    it.each([
+      ["linux", "M:/deleted/project", "ENOENT"],
+      ["darwin", "/deleted/project", "ENOENT"],
+      ["win32", "M:\\deleted", "EACCES"],
+      ["win32", "M:\\deleted", "EIO"],
+      ["win32", "M:relative", "ENOENT"],
+      ["win32", "\\relative", "ENOENT"],
+      ["win32", "\\\\server\\share\\deleted", "ENOENT"],
+      ["win32", "\\\\?\\M:\\deleted", "ENOENT"],
+      ["win32", "\\\\.\\M:\\deleted", "ENOENT"],
+      ["win32", "M:\\deleted:stream", "ENOENT"],
+      ["win32", "M:\\deleted\u0000path", "ENOENT"],
+    ])("does not fall back for %s %s %s", async (platform, path, code) => {
+      const result = await runProbe(platform, path, [code]);
+      expect(result.paths).toEqual([path]);
+      expect(result.output).toBeNull();
+    });
+
+    it("returns no private detail when the drive read also fails", async () => {
+      const result = await runProbe("win32", "M:\\deleted", ["ENOENT", "EIO"]);
+      expect(result.paths).toEqual(["M:\\deleted", "M:\\"]);
+      expect(result.output).toBeNull();
+    });
   });
 
   it("passes only the runtime environment needed by a packaged helper", () => {

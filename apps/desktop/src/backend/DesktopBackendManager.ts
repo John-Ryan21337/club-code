@@ -13,7 +13,7 @@ import * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import * as Semaphore from "effect/Semaphore";
+import * as Semaphore from "@cafecode/shared/InterruptSafeSemaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/unstable/http";

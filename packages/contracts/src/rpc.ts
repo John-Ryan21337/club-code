@@ -1,6 +1,7 @@
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
+import { ThreadId, TurnId } from "./baseSchemas.ts";
 import {
   CodexExperimentalInput,
   CodexExperimentalResult,
@@ -220,6 +221,7 @@ export const WS_METHODS = {
   serverGetRuntimeLayerDiagnostics: "server.getRuntimeLayerDiagnostics",
   serverSignalProcess: "server.signalProcess",
   serverInterpretAtmosphereCommand: "server.interpretAtmosphereCommand",
+  serverSuggestNextPrompt: "server.suggestNextPrompt",
   hardwareLightingGetStatus: "hardwareLighting.getStatus",
   hardwareLightingRefresh: "hardwareLighting.refresh",
   hardwareLightingApplyFrame: "hardwareLighting.applyFrame",
@@ -268,6 +270,14 @@ export const WsServerInterpretAtmosphereCommandRpc = Rpc.make(
     error: TextGenerationError,
   },
 );
+
+export const WsServerSuggestNextPromptRpc = Rpc.make(WS_METHODS.serverSuggestNextPrompt, {
+  payload: Schema.Struct({ threadId: ThreadId, turnId: TurnId }),
+  success: Schema.Struct({
+    suggestion: Schema.NullOr(Schema.String.check(Schema.isMaxLength(500))),
+  }),
+  error: TextGenerationError,
+});
 
 export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, {
   payload: Schema.Struct({
@@ -761,6 +771,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsAgentBrowserCompleteRpc,
   WsServerGetConfigRpc,
   WsServerInterpretAtmosphereCommandRpc,
+  WsServerSuggestNextPromptRpc,
   WsServerRefreshProvidersRpc,
   WsServerCheckProviderAccessRpc,
   WsServerConsumeProviderRateLimitResetCreditRpc,

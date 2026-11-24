@@ -27,9 +27,11 @@ import {
   MenuSeparator as MenuDivider,
   MenuTrigger,
 } from "../ui/menu";
-import { useComposerDraftStore, DraftId } from "../../composerDraftStore";
+import { useComposerDraftStore, type DraftId } from "../../composerDraftStore";
 import { getProviderModelCapabilities } from "../../providerModels";
 import { cn } from "~/lib/utils";
+import { getProviderThreadOptions } from "./providerThreadOptions";
+import { normalizeComposerSpeedDescriptors } from "./modelSpeedOptions";
 
 type ProviderOptions = ReadonlyArray<ProviderOptionSelection>;
 
@@ -85,10 +87,13 @@ function getSelectedTraits(
   allowPromptInjectedEffort: boolean,
 ) {
   const caps = getProviderModelCapabilities(models, model, provider);
-  const descriptors = getProviderOptionDescriptors({
-    caps,
-    selections: modelOptions,
-  });
+  const descriptors = normalizeComposerSpeedDescriptors(
+    getProviderOptionDescriptors({
+      caps,
+      selections: modelOptions,
+    }),
+    modelOptions,
+  );
   const selectDescriptors = descriptors.filter(
     (descriptor): descriptor is Extract<ProviderOptionDescriptor, { type: "select" }> =>
       descriptor.type === "select",
@@ -97,7 +102,10 @@ function getSelectedTraits(
     (descriptor): descriptor is Extract<ProviderOptionDescriptor, { type: "boolean" }> =>
       descriptor.type === "boolean",
   );
-  const primarySelectDescriptor = selectDescriptors[0] ?? null;
+  const primarySelectDescriptor =
+    selectDescriptors.find((descriptor) =>
+      ["reasoningEffort", "effort", "variant"].includes(descriptor.id),
+    ) ?? null;
   const contextWindowDescriptor =
     selectDescriptors.find((descriptor) => descriptor.id === "contextWindow") ?? null;
   const agentDescriptor = selectDescriptors.find((descriptor) => descriptor.id === "agent") ?? null;
@@ -255,7 +263,11 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     allowPromptInjectedEffort,
   });
   const updateDescriptors = (nextDescriptors: ReadonlyArray<ProviderOptionDescriptor>) => {
-    updateModelOptions(buildProviderOptionSelectionsFromDescriptors(nextDescriptors));
+    const nextOptions = [
+      ...(buildProviderOptionSelectionsFromDescriptors(nextDescriptors) ?? []),
+      ...getProviderThreadOptions(provider, modelOptions),
+    ];
+    updateModelOptions(nextOptions.length > 0 ? nextOptions : undefined);
   };
 
   const handleSelectChange = (
@@ -316,6 +328,13 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
                   {option.isDefault ? " (default)" : ""}
                 </MenuRadioItem>
               ))}
+              {provider === "codex" &&
+              descriptor.id === "serviceTier" &&
+              !descriptor.options.some((option) => option.id === "ultrafast") ? (
+                <MenuRadioItem value="ultrafast" disabled>
+                  Ultra Fast (unavailable for this account or model)
+                </MenuRadioItem>
+              ) : null}
             </MenuRadioGroup>
           </MenuGroup>
         </div>
@@ -327,6 +346,13 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
             <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
               {descriptor.label}
             </div>
+            {descriptor.id === "fastMode" ? (
+              <p className="max-w-64 px-2 pb-2 text-xs text-muted-foreground">
+                {provider === "claudeAgent"
+                  ? "Uses paid usage credits on Claude subscriptions. Account access is required."
+                  : "Uses more allowance or credits. Account access is required."}
+              </p>
+            ) : null}
             <MenuRadioGroup
               value={descriptor.currentValue === true ? "on" : "off"}
               onValueChange={(value) => {
@@ -388,11 +414,12 @@ export const TraitsPicker = memo(function TraitsPicker({
         }
         if (descriptor.type === "boolean") {
           if (descriptor.id === "fastMode") {
-            return descriptor.currentValue === true ? "Fast" : "Normal";
+            return `Fast ${descriptor.currentValue === true ? "On" : "Off"}`;
           }
           return `${descriptor.label} ${descriptor.currentValue === true ? "On" : "Off"}`;
         }
-        return getProviderOptionCurrentLabel(descriptor);
+        const label = getProviderOptionCurrentLabel(descriptor);
+        return descriptor.id === "contextWindow" && label ? `Context ${label}` : label;
       })
       .filter((label): label is string => typeof label === "string" && label.length > 0)
       .join(" · ") || "";

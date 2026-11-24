@@ -733,6 +733,12 @@ export const ClientSettingsSchema = Schema.Struct({
   completionAlertSpeechEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
+  // Original synthesized station-style pre-announcement chime played before
+  // the spoken alert. It is audible only while the spoken alert itself is
+  // enabled, so defaulting it on does not make a fresh install noisy.
+  completionAlertSpeechChimeEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(true)),
+  ),
   completionAlertLanguage: Schema.Literals(["en", "ja", "dual"]).pipe(
     Schema.withDecodingDefault(Effect.succeed("en" as const)),
   ),
@@ -969,6 +975,7 @@ export const ClientSettingsSchema = Schema.Struct({
   showComposerThreadAutomationControls: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SHOW_COMPOSER_THREAD_AUTOMATION_CONTROLS)),
   ),
+  promptSuggestionsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   brandWordmarkPrefix: TrimmedString.check(
     Schema.isMaxLength(MAX_BRAND_WORDMARK_PREFIX_LENGTH),
   ).pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_BRAND_WORDMARK_PREFIX))),
@@ -1545,6 +1552,9 @@ export type LmStudioBaseUrl = typeof LmStudioBaseUrl.Type;
 export const CodexAutoCompactTokenLimit = Schema.Int.check(Schema.isGreaterThan(0));
 export type CodexAutoCompactTokenLimit = typeof CodexAutoCompactTokenLimit.Type;
 
+export const CodexModelProvider = Schema.Literals(["openai", "gcp"]);
+export type CodexModelProvider = typeof CodexModelProvider.Type;
+
 export const CodexSettings = makeProviderSettingsSchema(
   {
     enabled: Schema.Boolean.pipe(
@@ -1576,6 +1586,22 @@ export const CodexSettings = makeProviderSettingsSchema(
         description:
           "Launch Codex with its LM Studio provider instead of the OpenAI cloud provider.",
         providerSettingsForm: { control: "switch" },
+      }),
+    ),
+    modelProvider: CodexModelProvider.pipe(
+      Schema.withDecodingDefault(Effect.succeed("openai" as const)),
+      Schema.annotateKey({
+        title: "Cloud provider",
+        description:
+          "Google Cloud requires native Codex Vertex AI authentication and project configuration. LM Studio mode takes precedence.",
+        providerSettingsForm: {
+          control: "select",
+          options: [
+            { value: "openai", label: "OpenAI / ChatGPT" },
+            { value: "gcp", label: "Google Cloud Vertex AI" },
+          ],
+          clearWhenEmpty: "omit",
+        },
       }),
     ),
     ossBaseUrl: LmStudioBaseUrl.pipe(
@@ -1641,17 +1667,28 @@ export const CodexSettings = makeProviderSettingsSchema(
         providerSettingsForm: { control: "switch" },
       }),
     ),
+    allowPaidUsage: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "Allow paid usage",
+        description:
+          "Let this instance request Codex Fast and Ultra Fast speed tiers, which spend credits or extra allowance beyond the included plan. Off (default) keeps every send on the standard tier. Club Code cannot change account-level billing; manage credits in your ChatGPT account.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
   },
   {
     order: [
       "runtimeSource",
       "binaryPath",
       "ossMode",
+      "modelProvider",
       "ossBaseUrl",
       "homePath",
       "shadowHomePath",
       "autoCompactTokenLimit",
       "ultraCaching",
+      "allowPaidUsage",
     ],
   },
 );
@@ -1714,9 +1751,25 @@ export const ClaudeSettings = makeProviderSettingsSchema(
         providerSettingsForm: { control: "switch" },
       }),
     ),
+    allowPaidUsage: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "Allow paid usage",
+        description:
+          "Let this instance request Claude Fast mode, which bills extra usage outside the included subscription limits. Off (default) sends every turn at standard speed. Club Code cannot change account-level extra-usage settings; manage them in your Claude account.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
   },
   {
-    order: ["runtimeSource", "binaryPath", "homePath", "launchArgs", "ultraCaching"],
+    order: [
+      "runtimeSource",
+      "binaryPath",
+      "homePath",
+      "launchArgs",
+      "ultraCaching",
+      "allowPaidUsage",
+    ],
   },
 );
 export type ClaudeSettings = typeof ClaudeSettings.Type;
@@ -1867,12 +1920,14 @@ const CodexSettingsPatch = Schema.Struct({
   binaryPath: Schema.optionalKey(TrimmedString),
   runtimeSource: Schema.optionalKey(ProviderCliRuntimeSource),
   ossMode: Schema.optionalKey(Schema.Boolean),
+  modelProvider: Schema.optionalKey(CodexModelProvider),
   ossBaseUrl: Schema.optionalKey(LmStudioBaseUrl),
   homePath: Schema.optionalKey(TrimmedString),
   shadowHomePath: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
   autoCompactTokenLimit: Schema.optionalKey(CodexAutoCompactTokenLimit),
   ultraCaching: Schema.optionalKey(Schema.Boolean),
+  allowPaidUsage: Schema.optionalKey(Schema.Boolean),
 });
 
 const ClaudeSettingsPatch = Schema.Struct({
@@ -1883,6 +1938,7 @@ const ClaudeSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
   launchArgs: Schema.optionalKey(TrimmedString),
   ultraCaching: Schema.optionalKey(Schema.Boolean),
+  allowPaidUsage: Schema.optionalKey(Schema.Boolean),
 });
 
 const OpenCodeSettingsPatch = Schema.Struct({
@@ -1932,6 +1988,7 @@ export const ClientSettingsPatch = Schema.Struct({
   notificationsEnabled: Schema.optionalKey(Schema.Boolean),
   completionAlertSoundEnabled: Schema.optionalKey(Schema.Boolean),
   completionAlertSpeechEnabled: Schema.optionalKey(Schema.Boolean),
+  completionAlertSpeechChimeEnabled: Schema.optionalKey(Schema.Boolean),
   completionAlertLanguage: Schema.optionalKey(Schema.Literals(["en", "ja", "dual"])),
   completionAlertEnglishVoiceGender: Schema.optionalKey(Schema.Literals(["female", "male"])),
   completionAlertJapaneseVoiceGender: Schema.optionalKey(Schema.Literals(["female", "male"])),
@@ -2018,6 +2075,7 @@ export const ClientSettingsPatch = Schema.Struct({
   showSidebarMascot: Schema.optionalKey(Schema.Boolean),
   showSidebarAttribution: Schema.optionalKey(Schema.Boolean),
   showComposerThreadAutomationControls: Schema.optionalKey(Schema.Boolean),
+  promptSuggestionsEnabled: Schema.optionalKey(Schema.Boolean),
   brandWordmarkPrefix: Schema.optionalKey(
     TrimmedString.check(Schema.isMaxLength(MAX_BRAND_WORDMARK_PREFIX_LENGTH)),
   ),

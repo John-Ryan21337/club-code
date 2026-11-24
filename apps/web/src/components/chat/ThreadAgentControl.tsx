@@ -1,5 +1,6 @@
 import {
   CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID,
+  CODEX_AUTO_DELEGATE_OPTION_ID,
   DEFAULT_CODEX_SUBAGENT_THREAD_LIMIT,
   MAX_CODEX_SUBAGENT_THREAD_LIMIT,
   MIN_CODEX_SUBAGENT_THREAD_LIMIT,
@@ -9,7 +10,11 @@ import {
   type ProviderOptionSelection,
   type ScopedThreadRef,
 } from "@cafecode/contracts";
-import { createModelSelection, resolveCodexSubagentThreadLimit } from "@cafecode/shared/model";
+import {
+  createModelSelection,
+  resolveCodexSubagentThreadLimit,
+  getProviderOptionBooleanSelectionValue,
+} from "@cafecode/shared/model";
 import { ChevronDownIcon, UsersRoundIcon } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { type DraftId, useComposerDraftStore } from "../../composerDraftStore";
@@ -54,6 +59,9 @@ export const ThreadAgentControl = memo(function ThreadAgentControl(props: {
     [props.model, props.modelOptions, props.providerInstanceId],
   );
   const [draft, setDraft] = useState(String(currentLimit));
+  const autoDelegate =
+    getProviderOptionBooleanSelectionValue(props.modelOptions, CODEX_AUTO_DELEGATE_OPTION_ID) !==
+    false;
   const [saving, setSaving] = useState(false);
   const saveInFlightRef = useRef(false);
   const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
@@ -64,14 +72,21 @@ export const ThreadAgentControl = memo(function ThreadAgentControl(props: {
 
   if (props.provider !== "codex") return null;
 
-  const save = async () => {
+  const save = async (nextAutoDelegate?: boolean) => {
     if (saveInFlightRef.current) return;
     const nextLimit = clampLimit(Number(draft));
-    if (nextLimit === currentLimit) {
+    if (nextLimit === currentLimit && nextAutoDelegate === undefined) {
       setDraft(String(nextLimit));
       return;
     }
-    const nextOptions = withLimit(props.modelOptions, nextLimit);
+    const limitOptions = withLimit(props.modelOptions, nextLimit);
+    const nextOptions =
+      nextAutoDelegate === undefined
+        ? limitOptions
+        : [
+            ...limitOptions.filter((option) => option.id !== CODEX_AUTO_DELEGATE_OPTION_ID),
+            { id: CODEX_AUTO_DELEGATE_OPTION_ID, value: nextAutoDelegate },
+          ];
     saveInFlightRef.current = true;
     setDraft(String(nextLimit));
     setProviderModelOptions(props.threadTarget, props.provider, nextOptions, {
@@ -92,7 +107,7 @@ export const ThreadAgentControl = memo(function ThreadAgentControl(props: {
     }
   };
 
-  const label = `Codex workers for this thread: ${currentLimit}`;
+  const label = `Codex workers for this thread: ${currentLimit}; automatic delegation ${autoDelegate ? "on" : "off"}`;
   return (
     <Popover>
       <PopoverTrigger
@@ -116,12 +131,13 @@ export const ThreadAgentControl = memo(function ThreadAgentControl(props: {
             render={<span className={cn("tabular-nums", props.compact && "sr-only")} />}
           >
             {currentLimit}
+            {!props.compact && (autoDelegate ? " Auto" : " Manual")}
           </TooltipTrigger>
           <TooltipPopup side="top">{label}</TooltipPopup>
         </Tooltip>
         <ChevronDownIcon aria-hidden="true" className={cn("size-3", props.compact && "hidden")} />
       </PopoverTrigger>
-      <PopoverPopup align="start" side="top" className="w-80 p-3">
+      <PopoverPopup align="start" side="top" className="w-80 max-w-[calc(100vw-2rem)]">
         <div className="space-y-3" data-thread-agent-settings="true">
           <div>
             <h3 className="text-sm font-semibold">Codex workers for this thread</h3>
@@ -130,6 +146,20 @@ export const ThreadAgentControl = memo(function ThreadAgentControl(props: {
               coordinator. This is a ceiling, not a target.
             </p>
           </div>
+          <label className="flex items-center gap-2 text-xs font-medium">
+            <input
+              type="checkbox"
+              checked={autoDelegate}
+              disabled={saving}
+              onChange={(event) => void save(event.currentTarget.checked)}
+            />
+            Delegate independent work automatically
+          </label>
+          <p className="text-xs text-muted-foreground">
+            Ask Codex to use parallel workers when they improve speed or quality. Simple tasks can
+            use one agent. This request applies on your next send and keeps your existing
+            permissions.
+          </p>
           <label htmlFor="thread-codex-worker-limit" className="block text-xs font-medium">
             Worker limit
           </label>

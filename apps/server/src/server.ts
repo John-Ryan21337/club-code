@@ -39,6 +39,7 @@ import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
+import { AutomaticDatabaseBackupLive } from "./persistence/AutomaticDatabaseBackup.ts";
 import { ServerLifecycleEventsLive } from "./serverLifecycleEvents.ts";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory.ts";
 import { ProviderSessionRuntimeRepositoryLive } from "./persistence/Layers/ProviderSessionRuntime.ts";
@@ -114,6 +115,7 @@ import {
   authWebSocketTokenRouteLayer,
 } from "./auth/http.ts";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
+import { researchRoutesLayer } from "./research/http.ts";
 import { ServerAuthLive } from "./auth/Layers/ServerAuth.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
@@ -148,6 +150,7 @@ const HttpServerLive = Layer.unwrap(
 const PlatformServicesLive = NodeServices.layer;
 
 const ReactorLayerLive = Layer.empty.pipe(
+  Layer.provideMerge(AutomaticDatabaseBackupLive),
   Layer.provideMerge(OrchestrationReactorLive),
   Layer.provideMerge(ProviderRuntimeIngestionLive),
   Layer.provideMerge(ProviderCommandReactorLive),
@@ -372,6 +375,7 @@ export const youTubeAccountRoutesLayer = Layer.mergeAll(
 );
 
 export const makeRoutesLayer = Layer.mergeAll(
+  researchRoutesLayer,
   baseRoutesLayer,
   Layer.mergeAll(
     ambientImageServeRouteLayer,

@@ -33,10 +33,9 @@ browser keyboard copy/paste of salary ranges and italic prose. Currency unit
 tests also cover hourly rates, table cells, adjacent streaming prices, formulas,
 and literal examples. Fixtures contain synthetic text only.
 
-Validation on the live release checkout passed formatting, lint, typechecking,
-all nine repository test tasks (4,742 passed; three existing skips), all 500
-Chromium browser tests, and the desktop build. The three new browser regressions
-failed before the repair and passed
+Formatting, lint, typechecking, all nine repository test tasks (4,742 passed;
+three existing skips), all 500 Chromium browser tests, and the desktop build
+passed. The three new browser regressions failed before the repair and passed
 afterward. Desktop and phone previews used synthetic text and showed no page
 overflow. The affected Jobsearch messages were checked read-only: accidental
 math spans changed from three to zero, while a formula control still parsed.
@@ -48,10 +47,10 @@ Press Ctrl+R in Club Code once to load it. The automated reload stopped because
 foreground-window ownership did not validate; no key was sent. No backend or
 provider process was stopped. A full application restart is unnecessary.
 
-This focused branch is based on the table component in PR #123 at `03e14be5`.
-It contains only the Markdown repair, regression tests, and related documentation.
-The larger pending CLI, profile, and suggestion changes remain separate.
-Publication checks for this isolated branch are recorded in its pull request.
-The live checkout validation and served asset above include other pending local
-changes; they are not an artifact built from this focused branch.
-No remote CI or other-platform result is claimed here.
+Evidence, preview images, and the served-asset record are in
+`M:/Cafe-Code/.maintenance/markdown-stream-20261023/`. The focused repair is published in [PR #126](https://github.com/John-Ryan21337/club-code/pull/126)
+at commit `5f3afec76f2d55c6711d2095f0cc3ef3c0c22948`, based on PR #123.
+It contains only the Markdown repair, tests, and related documentation. The live
+checkout and served artifact also include other pending local work. Exact
+publication-branch validation is recorded in the PR. No remote CI or
+other-platform result is claimed.

@@ -28,6 +28,7 @@ import {
 import { parseCliArgs } from "@cafecode/shared/cliArgs";
 import {
   ApprovalRequestId,
+  DEFAULT_MODEL_BY_PROVIDER,
   type CanonicalItemType,
   type CanonicalRequestType,
   type ClaudeSettings,
@@ -78,6 +79,8 @@ import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { readSystemPromptFileForInjection } from "../../systemPromptFile.ts";
+import { composeNativeCustomInstructions } from "../NativeCustomInstructions.ts";
 import { getAgentBrowserBridge } from "../AgentBrowserBridge.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import { spawnProviderProcessAtLowerPriority } from "../ProviderProcessPriority.ts";
@@ -113,9 +116,12 @@ export const CLAUDE_ULTRA_CACHING_APPEND_PROMPT = [
 function runtimeModeToClaudePermissionMode(runtimeMode: RuntimeMode): PermissionMode | undefined {
   switch (runtimeMode) {
     case "approval-required":
-      // Omitting the initial flag lets Claude Code use its standard/manual
-      // permission behavior and matches the Agent SDK's documented default.
-      return undefined;
+      // Claude Code 2.1.283-2.1.302 churned the no-mode default between
+      // manual and classifier-backed auto depending on provider, telemetry,
+      // and install freshness. Approval-required is an explicit Cafe access
+      // policy, so request `default` (manual/ask) instead of relying on the
+      // CLI's ambient default-mode selection.
+      return "default";
     case "auto-accept-edits":
       return "acceptEdits";
     case "full-access":
@@ -265,11 +271,61 @@ interface ClaudeTurnState {
   promptAttachmentCount?: number;
   watchdogWarningsEmitted: number;
   nextSyntheticAssistantBlockIndex: number;
+  /**
+   * The exact SDK user message submitted by `sendTurn`. Retained only so a
+   * proven-undelivered prompt can be retried byte-for-byte once after an
+   * automatic compaction; it is never logged or copied into diagnostics.
+   */
+  originalPromptMessage?: SDKUserMessage;
+  /**
+   * Claude Code emitted its synthetic, zero-usage "Prompt is too long"
+   * assistant refusal for the current segment. This is one of the proofs that
+   * the refused prompt never reached the Messages API.
+   */
+  promptTooLongRefusalObserved: boolean;
+  /**
+   * A real (non-refusal) assistant message arrived during this turn. Model
+   * output or tool use means the prompt was delivered, so a later refusal can
+   * never be retried automatically. (`items` is not usable here because Claude
+   * may echo the submitted user message back into it.)
+   */
+  assistantOutputObserved: boolean;
+  /** One-shot context-window recovery; defined once recovery was attempted. */
+  contextRecovery?: ClaudeContextRecoveryState;
+}
+
+/**
+ * State of the single automatic compact-and-retry attempt for a user turn that
+ * Claude Code refused locally because the conversation exceeded the selected
+ * context window.
+ *
+ * Flow: refusal result -> queue host `/compact` (stage `compacting`) -> compact
+ * result succeeds -> re-queue the original prompt once (stage `retrying`) ->
+ * the retry's result settles the canonical turn normally. A second refusal,
+ * a failed compaction, or an explicit Stop ends recovery; it never loops.
+ * The whole object lives on the turn state, so completing the turn, stopping
+ * the session, or closing it discards recovery with no separate cleanup.
+ */
+interface ClaudeContextRecoveryState {
+  readonly compactUuid: string;
+  stage: "compacting" | "retrying";
+  /** Set by an explicit interrupt; no retry may be queued afterwards. */
+  cancelled: boolean;
+  /** Outcome reported by `system/status.compact_result` or `compact_boundary`. */
+  compactOutcome?: "success" | "failed";
+  /**
+   * Recovery advanced on the compact command's terminal lifecycle frame before
+   * its result arrived. The late compact result must then be absorbed rather
+   * than mistaken for the retry's result.
+   */
+  awaitingLateCompactResult: boolean;
+  retryUuid?: string;
 }
 
 interface ClaudeDeferredTurnResult {
   readonly status: ProviderRuntimeTurnStatus;
-  readonly result: SDKResultMessage;
+  /** Absent only when context recovery failed from a lifecycle frame. */
+  readonly result?: SDKResultMessage;
   readonly errorMessage?: string;
 }
 
@@ -322,6 +378,8 @@ interface ClaudeSessionContext {
   readonly query: ClaudeQueryRuntime;
   readonly runFork: RuntimeFork;
   streamFiber: Fiber.Fiber<void, Error> | undefined;
+  /** Retain the exact query until close and reader retirement both succeed. */
+  queryClosureUncertain: boolean;
   readonly startedAt: string;
   readonly basePermissionMode: PermissionMode | undefined;
   currentPermissionMode: PermissionMode;
@@ -343,6 +401,12 @@ interface ClaudeSessionContext {
   readonly fastModeRequested: boolean;
   turnState: ClaudeTurnState | undefined;
   deferredTurnResult: ClaudeDeferredTurnResult | undefined;
+  /**
+   * A context-recovery `/compact` whose turn was already settled from its
+   * lifecycle frame. Its late result (if Claude emits one) is absorbed instead
+   * of being treated as a result for a turn that no longer exists.
+   */
+  lateRecoveryCompactUuid: string | undefined;
   lastFastModeNoticeKey: string | undefined;
   lastKnownContextWindow: number | undefined;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
@@ -401,6 +465,86 @@ function isZeroTurnClaudeExecutionFailure(message: SDKMessage): boolean {
     message.subtype !== "success" &&
     message.is_error === true &&
     message.num_turns === 0
+  );
+}
+
+/**
+ * User-facing failure for a conversation that no longer fits Claude's selected
+ * context window even after one automatic compaction attempt. The text is
+ * fixed product prose: it never quotes the provider's refusal or the prompt.
+ */
+const CLAUDE_CONTEXT_RECOVERY_FAILED_MESSAGE =
+  "This conversation no longer fits in Claude's selected context window and automatic compaction failed. Select the 1M context window or start a new thread.";
+
+const CLAUDE_PROMPT_TOO_LONG_TEXT = /^\s*prompt is too long/i;
+
+/**
+ * True when every reported token counter in a Claude usage record is zero.
+ *
+ * Claude Code writes its locally generated "Prompt is too long" refusal with
+ * all-zero usage because no Messages API request was made. A missing usage
+ * record is deliberately *not* zero: absence proves nothing about delivery.
+ */
+function isZeroClaudeUsage(usage: unknown): boolean {
+  const record = recordValue(usage);
+  if (record === undefined || record.input_tokens !== 0 || record.output_tokens !== 0) {
+    return false;
+  }
+  return [record.cache_creation_input_tokens, record.cache_read_input_tokens].every(
+    (value) => value === undefined || value === null || value === 0,
+  );
+}
+
+function claudeContentStartsWithPromptTooLong(content: unknown): boolean {
+  if (typeof content === "string") {
+    return CLAUDE_PROMPT_TOO_LONG_TEXT.test(content);
+  }
+  return (
+    Array.isArray(content) &&
+    content.some((block) => {
+      const text = recordValue(block)?.text;
+      return typeof text === "string" && CLAUDE_PROMPT_TOO_LONG_TEXT.test(text);
+    })
+  );
+}
+
+/**
+ * Detect Claude Code's synthetic "Prompt is too long" assistant refusal.
+ *
+ * When a resumed conversation plus the instructions Claude Code re-attaches on
+ * each turn exceeds the selected context window, the CLI refuses locally
+ * without calling the API and writes an assistant record with
+ * `error: "invalid_request"`, model `<synthetic>`, all-zero usage, and the bare
+ * text "Prompt is too long". `isApiErrorMessage` is a transcript-only field,
+ * so the stream form is identified by the error tag plus any synthetic marker.
+ */
+function isClaudePromptTooLongRefusalAssistantMessage(message: SDKMessage): boolean {
+  if (message.type !== "assistant") {
+    return false;
+  }
+  const record = message as Record<string, unknown>;
+  if (record.error !== "invalid_request") {
+    return false;
+  }
+  const inner = recordValue(record.message);
+  const syntheticMarker =
+    inner?.model === "<synthetic>" ||
+    record.isApiErrorMessage === true ||
+    isZeroClaudeUsage(inner?.usage);
+  return syntheticMarker && claudeContentStartsWithPromptTooLong(inner?.content);
+}
+
+/**
+ * Detect a result that ended because the prompt exceeded the context window.
+ * Prefer the typed `terminal_reason`; older or error-shaped results only carry
+ * the refusal text as their primary error / result string.
+ */
+function isClaudePromptTooLongResult(result: SDKResultMessage): boolean {
+  if ((result as Record<string, unknown>).terminal_reason === "prompt_too_long") {
+    return true;
+  }
+  return (
+    result.is_error === true && CLAUDE_PROMPT_TOO_LONG_TEXT.test(resultPrimaryError(result) ?? "")
   );
 }
 
@@ -693,9 +837,13 @@ export function resolveClaudeModelSessionOptions(modelSelection: ModelSelection 
   readonly effectiveEffort: ClaudeSdkEffort | null;
   readonly settings: {
     readonly alwaysThinkingEnabled?: boolean;
-    readonly fastMode?: true;
+    readonly fastMode?: boolean;
   };
 } {
+  modelSelection ??= {
+    instanceId: ProviderInstanceId.make("claudeAgent"),
+    model: DEFAULT_MODEL_BY_PROVIDER[PROVIDER] ?? "claude-sonnet-5-5",
+  };
   const caps = getClaudeModelCapabilities(modelSelection?.model);
   const descriptors = getProviderOptionDescriptors({ caps });
   const rawEffort = getModelSelectionStringOptionValue(modelSelection, "effort");
@@ -718,7 +866,7 @@ export function resolveClaudeModelSessionOptions(modelSelection: ModelSelection 
     effectiveEffort: getEffectiveClaudeAgentEffort(effort),
     settings: {
       ...(typeof thinking === "boolean" ? { alwaysThinkingEnabled: thinking } : {}),
-      ...(fastMode ? { fastMode: true as const } : {}),
+      fastMode,
     },
   };
 }
@@ -1540,7 +1688,87 @@ function makeClaudeTurnState(input: {
     sdkMessageCount: 0,
     watchdogWarningsEmitted: 0,
     nextSyntheticAssistantBlockIndex: -1,
+    promptTooLongRefusalObserved: false,
+    assistantOutputObserved: false,
   };
+}
+
+/**
+ * Prove that a "Prompt is too long" refusal happened before the prompt reached
+ * the Messages API, which is the only condition under which Cafe may resend a
+ * user prompt automatically (AGENTS.md: never resend after a crash unless it is
+ * durably proven the provider never received it).
+ *
+ * Accepted proofs, each requiring that this turn produced no model output:
+ * - Claude Code emitted its synthetic refusal (model `<synthetic>`, all-zero
+ *   usage), which the CLI writes 30-odd ms after the user record without any
+ *   API request; or
+ * - the result itself reports all-zero token usage, so no request was billed
+ *   or processed.
+ * `terminal_reason: "prompt_too_long"` alone identifies the refusal but is not
+ * delivery proof: a turn whose tool results grow past the window mid-turn ends
+ * the same way after the model already acted, and replaying it would repeat
+ * those actions.
+ */
+function claudeContextRecoveryDeliveryProof(
+  turnState: ClaudeTurnState,
+  result: SDKResultMessage,
+): "synthetic-refusal" | "zero-usage-result" | undefined {
+  if (turnState.assistantOutputObserved) {
+    return undefined;
+  }
+  if (turnState.promptTooLongRefusalObserved) {
+    return "synthetic-refusal";
+  }
+  return isZeroClaudeUsage(result.usage) ? "zero-usage-result" : undefined;
+}
+
+/**
+ * Identify the result produced by the recovery `/compact` command. Results
+ * carry `user_message_uuid` on current runtimes; without it, the result that
+ * arrives while compaction is pending is the compact's, because recovery only
+ * starts when no other Cafe input is queued ahead of it. After recovery has
+ * already advanced on the compact's lifecycle frame, only a result marked as a
+ * local slash command can be the late compact result.
+ */
+function isClaudeContextRecoveryCompactResult(
+  result: SDKResultMessage,
+  recovery: ClaudeContextRecoveryState,
+): boolean {
+  const correlatedUuid = claudeResultUserMessageUuid(result);
+  if (correlatedUuid !== undefined) {
+    return correlatedUuid === recovery.compactUuid;
+  }
+  if (recovery.awaitingLateCompactResult) {
+    return typeof (result as Record<string, unknown>).local_command === "string";
+  }
+  return recovery.stage === "compacting";
+}
+
+/**
+ * Build the host-generated `/compact` command used by context recovery.
+ *
+ * This is deliberately NOT stamped `origin: { kind: "human" }`: Agent SDK
+ * 0.3.211+ reserves that attestation for input a person typed, and Cafe
+ * generated this command. It also omits `client_composed` (which disables
+ * slash-command dispatch per the 0.3.317 SDK types) and `isSynthetic`/
+ * `shouldQuery`, so the CLI parses it as an ordinary streamed slash command,
+ * matching the SDK's documented `prompt: "/compact"` usage. Assumption that
+ * could not be verified from the bundled native CLI: unattributed origin does
+ * not block built-in local slash commands. If it did, the command would fail
+ * or be discarded and recovery fails closed with the actionable message.
+ */
+function buildClaudeCompactCommandMessage(messageUuid: string): SDKUserMessage {
+  return {
+    type: "user",
+    session_id: "",
+    parent_tool_use_id: null,
+    uuid: messageUuid,
+    message: {
+      role: "user",
+      content: "/compact",
+    },
+  } as SDKUserMessage;
 }
 
 function sanitizeDiagnosticLine(value: string): string {
@@ -2097,7 +2325,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               }
             : {}),
           ...(itemId ? { itemId: ProviderItemId.make(itemId) } : {}),
-          payload: message,
+          payload:
+            message.type === "system" && message.subtype === "session_writes_lost"
+              ? { type: "system", subtype: "session_writes_lost" }
+              : message,
         },
       },
       context.session.threadId,
@@ -2835,6 +3066,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     const { event } = message;
+    if (event.type === "message_start" && context.turnState !== undefined) {
+      // A streamed Messages API response proves the prompt reached the API, so
+      // a later context-window refusal in this turn must not be auto-retried.
+      context.turnState.assistantOutputObserved = true;
+    }
     // A non-empty `parent_tool_use_id` means these blocks belong to a
     // sub-agent's turn, not the orchestrator's. Treat only a non-empty string
     // as attribution so a malformed value degrades to "unattributed" rather
@@ -3226,6 +3462,180 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
   });
 
+  /**
+   * End a context-window recovery (or a refusal that cannot be recovered) with
+   * the fixed actionable failure. Callers finalize segment-local state first.
+   * If unrelated Cafe input is still queued, follow the normal deferred-result
+   * path so that input keeps its own lifecycle instead of being orphaned.
+   */
+  const failClaudeContextRecovery = Effect.fn("failClaudeContextRecovery")(function* (
+    context: ClaudeSessionContext,
+    reason: "compact-failed" | "compact-not-run" | "queue-unavailable",
+    result?: SDKResultMessage,
+  ) {
+    yield* Effect.logWarning("claude.contextRecovery.failed", {
+      threadId: context.session.threadId,
+      providerInstanceId: boundInstanceId,
+      reason,
+      pendingPromptCount: context.promptLifecycleByUuid.size,
+    });
+    if (context.promptLifecycleByUuid.size > 0) {
+      yield* emitRuntimeWarning(
+        context,
+        "Claude context-window recovery failed; an already-queued follow-up remains active.",
+        { reason, pendingPromptCount: context.promptLifecycleByUuid.size },
+      );
+      context.deferredTurnResult = {
+        status: "failed",
+        ...(result !== undefined ? { result } : {}),
+        errorMessage: CLAUDE_CONTEXT_RECOVERY_FAILED_MESSAGE,
+      };
+      return;
+    }
+    yield* emitRuntimeError(context, CLAUDE_CONTEXT_RECOVERY_FAILED_MESSAGE);
+    yield* completeTurn(context, "failed", CLAUDE_CONTEXT_RECOVERY_FAILED_MESSAGE, result, {
+      segmentAlreadyFinalized: true,
+    });
+  });
+
+  /**
+   * Begin the single compact-and-retry attempt for a refused user prompt.
+   *
+   * The canonical Cafe turn stays active: only segment-local stream/tool state
+   * is finalized, exactly as for a Claude result that precedes a queued steer.
+   * Callers must already have established delivery proof
+   * (`claudeContextRecoveryDeliveryProof`).
+   */
+  const startClaudeContextRecovery = Effect.fn("startClaudeContextRecovery")(function* (
+    context: ClaudeSessionContext,
+    turnState: ClaudeTurnState,
+    result: SDKResultMessage,
+    deliveryProof: "synthetic-refusal" | "zero-usage-result",
+  ) {
+    const compactUuid = yield* Random.nextUUIDv4;
+    const recovery: ClaudeContextRecoveryState = {
+      compactUuid,
+      stage: "compacting",
+      cancelled: false,
+      awaitingLateCompactResult: false,
+    };
+    turnState.contextRecovery = recovery;
+    turnState.promptTooLongRefusalObserved = false;
+    context.deferredTurnResult = undefined;
+    yield* finalizeTurnSegment(context, "failed", result);
+    yield* emitRuntimeWarning(
+      context,
+      "Claude refused the prompt because the conversation exceeded the selected context window; compacting and retrying once.",
+      {
+        deliveryProof,
+        ...(context.selectedContextWindowTokens !== undefined
+          ? { selectedContextWindowTokens: context.selectedContextWindowTokens }
+          : {}),
+      },
+    );
+    yield* Effect.logInfo("claude.contextRecovery.compactQueued", {
+      threadId: context.session.threadId,
+      providerInstanceId: boundInstanceId,
+      deliveryProof,
+    });
+
+    context.promptLifecycleByUuid.set(compactUuid, "submitted");
+    const offered = yield* Queue.offer(context.promptQueue, {
+      type: "message",
+      message: buildClaudeCompactCommandMessage(compactUuid),
+    });
+    if (!offered) {
+      context.promptLifecycleByUuid.delete(compactUuid);
+      yield* failClaudeContextRecovery(context, "queue-unavailable", result);
+    }
+  });
+
+  /**
+   * After a successful recovery compaction, resubmit the refused prompt exactly
+   * once. The message is the original SDK user message object with only a fresh
+   * UUID: content (text, images, attachments) is byte-identical and the
+   * `origin: { kind: "human" }` stamp is preserved because this is still the
+   * operator's own input, merely delivered for the first time.
+   */
+  const queueClaudeContextRecoveryRetry = Effect.fn("queueClaudeContextRecoveryRetry")(function* (
+    context: ClaudeSessionContext,
+    turnState: ClaudeTurnState,
+    recovery: ClaudeContextRecoveryState,
+    result?: SDKResultMessage,
+  ) {
+    const originalPromptMessage = turnState.originalPromptMessage;
+    if (recovery.cancelled || recovery.stage !== "compacting" || !originalPromptMessage) {
+      return;
+    }
+    const retryUuid = yield* Random.nextUUIDv4;
+    recovery.stage = "retrying";
+    recovery.retryUuid = retryUuid;
+    turnState.promptTooLongRefusalObserved = false;
+
+    context.promptLifecycleByUuid.set(retryUuid, "submitted");
+    const retryMessage: SDKUserMessage = {
+      ...originalPromptMessage,
+      uuid: retryUuid as NonNullable<SDKUserMessage["uuid"]>,
+    };
+    const offered = yield* Queue.offer(context.promptQueue, {
+      type: "message",
+      message: retryMessage,
+    });
+    if (!offered) {
+      context.promptLifecycleByUuid.delete(retryUuid);
+      yield* failClaudeContextRecovery(context, "queue-unavailable", result);
+      return;
+    }
+    yield* emitRuntimeWarning(
+      context,
+      "Claude compacted the conversation; retrying the refused prompt once.",
+      { compactOutcome: recovery.compactOutcome ?? "unreported" },
+    );
+    yield* Effect.logInfo("claude.contextRecovery.retryQueued", {
+      threadId: context.session.threadId,
+      providerInstanceId: boundInstanceId,
+      compactOutcome: recovery.compactOutcome ?? "unreported",
+    });
+  });
+
+  /** Settle the result produced by the recovery `/compact` command. */
+  const handleClaudeContextRecoveryCompactResult = Effect.fn(
+    "handleClaudeContextRecoveryCompactResult",
+  )(function* (
+    context: ClaudeSessionContext,
+    turnState: ClaudeTurnState,
+    recovery: ClaudeContextRecoveryState,
+    result: SDKResultMessage,
+  ) {
+    context.promptLifecycleByUuid.delete(recovery.compactUuid);
+    if (recovery.awaitingLateCompactResult) {
+      // Recovery already advanced on the compact's lifecycle frame and the
+      // retry is queued; this late result carries no further decision.
+      recovery.awaitingLateCompactResult = false;
+      yield* Effect.logInfo("claude.contextRecovery.lateCompactResultAbsorbed", {
+        threadId: context.session.threadId,
+        providerInstanceId: boundInstanceId,
+        isError: result.is_error === true,
+      });
+      return;
+    }
+
+    yield* finalizeTurnSegment(context, result.is_error === true ? "failed" : "completed", result);
+    if (recovery.cancelled || isInterruptedResult(result)) {
+      // An explicit Stop arrived while compaction was pending or running. Stop
+      // is authoritative: never queue the retry afterwards.
+      yield* completeTurn(context, "interrupted", undefined, result, {
+        segmentAlreadyFinalized: true,
+      });
+      return;
+    }
+    if (result.is_error === true || recovery.compactOutcome === "failed") {
+      yield* failClaudeContextRecovery(context, "compact-failed", result);
+      return;
+    }
+    yield* queueClaudeContextRecoveryRetry(context, turnState, recovery, result);
+  });
+
   const handleCommandLifecycleMessage = Effect.fn("handleCommandLifecycleMessage")(function* (
     context: ClaudeSessionContext,
     message: ClaudeCommandLifecycleMessage,
@@ -3268,6 +3678,38 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       yield* completeTurn(context, deferred.status, deferred.errorMessage, deferred.result, {
         segmentAlreadyFinalized: true,
       });
+    }
+
+    const turnState = context.turnState;
+    const recovery = turnState?.contextRecovery;
+    if (
+      turnState !== undefined &&
+      recovery !== undefined &&
+      recovery.stage === "compacting" &&
+      !recovery.cancelled &&
+      message.command_uuid === recovery.compactUuid &&
+      isTerminalClaudeCommandLifecycleState(message.state)
+    ) {
+      // The compact command's terminal lifecycle frame can precede (or replace)
+      // its result. Advance only when the outcome is known; an unreported
+      // outcome waits for the compact result instead.
+      if (message.state === "cancelled" || message.state === "discarded") {
+        yield* finalizeTurnSegment(context, "failed");
+        yield* failClaudeContextRecovery(context, "compact-not-run");
+        return;
+      }
+      if (recovery.compactOutcome === "failed") {
+        context.lateRecoveryCompactUuid = recovery.compactUuid;
+        yield* finalizeTurnSegment(context, "failed");
+        yield* failClaudeContextRecovery(context, "compact-failed");
+        return;
+      }
+      if (recovery.compactOutcome === "success") {
+        recovery.awaitingLateCompactResult = true;
+        yield* finalizeTurnSegment(context, "completed");
+        yield* queueClaudeContextRecoveryRetry(context, turnState, recovery);
+        return;
+      }
     }
 
     if (message.state === "discarded") {
@@ -3318,6 +3760,22 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           payload: message,
         },
       );
+      return;
+    }
+
+    if (context.turnState !== undefined && isClaudePromptTooLongRefusalAssistantMessage(message)) {
+      // Claude Code's local "Prompt is too long" refusal is not model output.
+      // The matching result either starts one compact-and-retry attempt or
+      // fails the turn with actionable guidance, so the bare synthetic text
+      // must never become assistant chat content (nor its all-zero usage a
+      // context-window update). Unlike an access failure, the session and its
+      // credentials stay healthy: no auth notification and no retirement.
+      context.turnState.promptTooLongRefusalObserved = true;
+      yield* Effect.logInfo("claude.contextRecovery.syntheticRefusalSuppressed", {
+        threadId: context.session.threadId,
+        providerInstanceId: boundInstanceId,
+        recoveryAttempted: context.turnState.contextRecovery !== undefined,
+      });
       return;
     }
 
@@ -3396,6 +3854,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     if (context.turnState) {
+      context.turnState.assistantOutputObserved = true;
       context.turnState.items.push(message.message);
       // Agent SDK 0.3.215 can mark this snapshot `aborted` when interruption
       // truncates it before stop_reason. The partial text is still user-visible
@@ -3418,7 +3877,44 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     yield* reportClaudeFastModeStatus(context, message);
 
-    const status = turnStatusFromResult(message);
+    if (context.lateRecoveryCompactUuid !== undefined) {
+      const correlatedUuid = claudeResultUserMessageUuid(message);
+      const isLateCompactResult =
+        correlatedUuid !== undefined
+          ? correlatedUuid === context.lateRecoveryCompactUuid
+          : context.turnState === undefined &&
+            typeof (message as Record<string, unknown>).local_command === "string";
+      if (isLateCompactResult) {
+        // The recovery turn was already settled from the compact command's
+        // lifecycle frame; do not settle anything a second time.
+        context.lateRecoveryCompactUuid = undefined;
+        return;
+      }
+    }
+
+    const activeRecovery = context.turnState?.contextRecovery;
+    if (
+      context.turnState !== undefined &&
+      activeRecovery !== undefined &&
+      isClaudeContextRecoveryCompactResult(message, activeRecovery) &&
+      (activeRecovery.stage === "compacting" || activeRecovery.awaitingLateCompactResult)
+    ) {
+      yield* handleClaudeContextRecoveryCompactResult(
+        context,
+        context.turnState,
+        activeRecovery,
+        message,
+      );
+      return;
+    }
+
+    // Claude Code refuses locally, before any Messages API request, when the
+    // resumed conversation plus the new prompt exceeds the selected context
+    // window. That refusal is never a successful turn, and its raw provider
+    // text ("Prompt is too long") is replaced by actionable guidance.
+    const promptTooLong = isClaudePromptTooLongResult(message);
+    const resultStatus = turnStatusFromResult(message);
+    const status = promptTooLong && resultStatus === "completed" ? "failed" : resultStatus;
     const resultErrors = "errors" in message && Array.isArray(message.errors) ? message.errors : [];
     const terminalAccessError: ClaudeTerminalAccessError | undefined =
       context.terminalAccessError ??
@@ -3430,13 +3926,64 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       status !== "completed"
         ? terminalAccessError === "account_on_hold"
           ? "Claude account is on hold. Review the account status before trying again."
-          : (resultPrimaryError(message) ?? resultErrors[0] ?? "Claude turn failed.")
+          : promptTooLong
+            ? CLAUDE_CONTEXT_RECOVERY_FAILED_MESSAGE
+            : (resultPrimaryError(message) ?? resultErrors[0] ?? "Claude turn failed.")
         : undefined;
     const completedPromptUuid = consumeClaudeResultPrompt(context, message);
     const hasQueuedCafeInput = context.promptLifecycleByUuid.size > 0;
 
+    if (promptTooLong && status !== "interrupted" && !terminalAccessFailure) {
+      const turnState = context.turnState;
+      // Automatic resend is an exception to the rule that Cafe never resends a
+      // user prompt unless it is durably proven the provider never received
+      // it. It is allowed here ONLY because Claude Code's synthetic refusal
+      // (model `<synthetic>`, all-zero usage, written ~30 ms after the user
+      // record with no API call) or an all-zero-usage result proves the
+      // Messages API never received this prompt, and no model output or tool
+      // activity was observed in the turn. `terminal_reason` alone only
+      // identifies the refusal; it is not delivery proof. The resend is
+      // further limited to: the user's own original prompt (the result
+      // correlates to the turn's prompt UUID), no other Cafe input queued
+      // behind it (queued steers make the refused input ambiguous), and one
+      // attempt per turn.
+      const deliveryProof =
+        turnState !== undefined
+          ? claudeContextRecoveryDeliveryProof(turnState, message)
+          : undefined;
+      if (
+        turnState !== undefined &&
+        turnState.origin === "user" &&
+        turnState.contextRecovery === undefined &&
+        turnState.originalPromptMessage !== undefined &&
+        completedPromptUuid === turnState.turnId &&
+        !hasQueuedCafeInput &&
+        deliveryProof !== undefined
+      ) {
+        yield* startClaudeContextRecovery(context, turnState, message, deliveryProof);
+        return;
+      }
+      yield* Effect.logWarning("claude.contextRecovery.notAttempted", {
+        threadId: context.session.threadId,
+        providerInstanceId: boundInstanceId,
+        hasTurn: turnState !== undefined,
+        userTurn: turnState?.origin === "user",
+        recoveryAlreadyAttempted: turnState?.contextRecovery !== undefined,
+        refusedPromptIdentified:
+          turnState !== undefined && completedPromptUuid === turnState.turnId,
+        pendingPromptCount: context.promptLifecycleByUuid.size,
+        deliveryProven: deliveryProof !== undefined,
+      });
+    }
+
     if (status === "failed") {
-      if (isZeroTurnClaudeExecutionFailure(message)) {
+      if (promptTooLong && !terminalAccessFailure && !hasQueuedCafeInput) {
+        // Unrecoverable context-window refusal (a second refusal after the one
+        // recovery attempt, unproven delivery, or an ambiguous prompt). The
+        // user must act — select the 1M window or start a new thread — so this
+        // is a real error rather than a zero-turn work-log diagnostic.
+        yield* emitRuntimeError(context, CLAUDE_CONTEXT_RECOVERY_FAILED_MESSAGE);
+      } else if (isZeroTurnClaudeExecutionFailure(message)) {
         const detail = {
           errors: resultErrors,
           resumeSessionId: context.resumeSessionId,
@@ -3611,6 +4158,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     switch (message.subtype) {
+      case "session_writes_lost":
+        yield* emitRuntimeWarning(
+          context,
+          "Claude could not save session data because the disk is full or its quota is used up. Free disk space before resuming.",
+          { subtype: "session_writes_lost" },
+        );
+        return;
       case "api_retry":
         if (isClaudeAuthFailureSystemMessage(message)) {
           context.terminalAccessError = "authentication_failed";
@@ -3654,7 +4208,19 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           },
         });
         return;
-      case "status":
+      case "status": {
+        // Agent SDK 0.3.317 reports a compaction outcome on the status message
+        // (`compact_result: "success" | "failed"`). Record it for a pending
+        // context-window recovery; a failure always overrides a success.
+        const recovery = context.turnState?.contextRecovery;
+        const compactResult = (message as Record<string, unknown>).compact_result;
+        if (recovery !== undefined && recovery.stage === "compacting") {
+          if (compactResult === "failed") {
+            recovery.compactOutcome = "failed";
+          } else if (compactResult === "success" && recovery.compactOutcome === undefined) {
+            recovery.compactOutcome = "success";
+          }
+        }
         yield* offerRuntimeEvent({
           ...base,
           type: "session.state.changed",
@@ -3665,7 +4231,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           },
         });
         return;
-      case "compact_boundary":
+      }
+      case "compact_boundary": {
+        // A compact boundary means the transcript was actually compacted.
+        const recovery = context.turnState?.contextRecovery;
+        if (
+          recovery !== undefined &&
+          recovery.stage === "compacting" &&
+          recovery.compactOutcome === undefined
+        ) {
+          recovery.compactOutcome = "success";
+        }
         yield* offerRuntimeEvent({
           ...base,
           type: "thread.state.changed",
@@ -3675,6 +4251,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           },
         });
         return;
+      }
       case "thinking_tokens":
         // Claude Agent SDK 0.3.153 added this system subtype as live,
         // approximate progress telemetry digested from redacted thinking
@@ -4313,16 +4890,21 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     yield* stopSessionInternal(context, {
       emitExitEvent: true,
-    });
+    }).pipe(
+      Effect.catch((cause) =>
+        emitRuntimeError(context, "Failed to close Claude runtime query.", cause),
+      ),
+    );
   });
 
   const stopSessionInternal = Effect.fn("stopSessionInternal")(function* (
     context: ClaudeSessionContext,
     options?: { readonly emitExitEvent?: boolean; readonly interruptStreamFiber?: boolean },
   ) {
-    if (context.stopped) return;
+    if (context.stopped && !context.queryClosureUncertain) return;
 
     context.stopped = true;
+    context.queryClosureUncertain = true;
 
     for (const [requestId, pending] of context.pendingApprovals) {
       yield* Deferred.succeed(pending.decision, "cancel");
@@ -4352,28 +4934,41 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     yield* Queue.shutdown(context.promptQueue);
 
     const streamFiber = context.streamFiber;
-    context.streamFiber = undefined;
-    if (
-      options?.interruptStreamFiber !== false &&
-      streamFiber &&
-      streamFiber.pollUnsafe() === undefined
-    ) {
-      yield* Fiber.interrupt(streamFiber);
-    }
-
-    yield* Effect.try({
-      try: () => context.query.close(),
-      catch: (cause) =>
-        new ProviderAdapterProcessError({
-          provider: PROVIDER,
-          threadId: context.session.threadId,
-          detail: toMessage(cause, "Failed to close Claude runtime query."),
-          cause,
-        }),
+    yield* Effect.gen(function* () {
+      // Query.close releases a pending SDK next(). Joining its reader first
+      // can wait forever because async-generator return() queues behind next().
+      yield* Effect.try({
+        try: () => context.query.close(),
+        catch: (cause) =>
+          new ProviderAdapterProcessError({
+            provider: PROVIDER,
+            threadId: context.session.threadId,
+            detail: toMessage(cause, "Failed to close Claude runtime query."),
+            cause,
+          }),
+      });
+      if (
+        options?.interruptStreamFiber !== false &&
+        streamFiber &&
+        streamFiber.pollUnsafe() === undefined
+      ) {
+        yield* Fiber.interrupt(streamFiber).pipe(Effect.interruptible);
+      }
+      if (context.streamFiber === streamFiber) context.streamFiber = undefined;
+      context.queryClosureUncertain = false;
     }).pipe(
-      Effect.catch((cause) =>
-        emitRuntimeError(context, "Failed to close Claude runtime query.", cause),
-      ),
+      Effect.timeoutOrElse({
+        duration: 10_000,
+        orElse: () =>
+          Effect.fail(
+            new ProviderAdapterProcessError({
+              provider: PROVIDER,
+              threadId: context.session.threadId,
+              detail:
+                "Claude session closure is not confirmed. Stop the session again before starting another session.",
+            }),
+          ),
+      }),
     );
 
     const updatedAt = yield* nowIso;
@@ -4436,6 +5031,19 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         });
       }
 
+      const customInstructions = composeNativeCustomInstructions(
+        yield* readSystemPromptFileForInjection(serverConfig.systemPromptPath).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.mapError(
+            () =>
+              new ProviderAdapterProcessError({
+                provider: PROVIDER,
+                threadId: input.threadId,
+                detail: "Unable to read custom instructions.",
+              }),
+          ),
+        ),
+      );
       const existingContext = sessions.get(input.threadId);
       if (existingContext) {
         yield* Effect.logWarning("claude.session.replacing", {
@@ -4445,16 +5053,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         });
         yield* stopSessionInternal(existingContext, {
           emitExitEvent: false,
-        }).pipe(
-          // Replacement cleanup is best-effort: never block the new session on
-          // either typed failures or unexpected defects from tearing down the old one.
-          Effect.catchCause((cause) =>
-            Effect.logWarning("claude.session.replace.stop-failed", {
-              threadId: input.threadId,
-              cause,
-            }),
-          ),
-        );
+        });
       }
 
       const startedAt = yield* nowIso;
@@ -4494,6 +5093,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           readonly toolUseID?: string;
         },
       ) {
+        if (callbackOptions.signal.aborted) {
+          return {
+            behavior: "deny",
+            message: "User cancelled tool execution.",
+          } satisfies PermissionResult;
+        }
         const requestId = ApprovalRequestId.make(yield* Random.nextUUIDv4);
 
         // Parse questions from the SDK's AskUserQuestion input.
@@ -4566,10 +5171,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         callbackOptions.signal.addEventListener("abort", onAbort, {
           once: true,
         });
+        if (callbackOptions.signal.aborted) onAbort();
 
         // Block until the user provides answers.
-        const answers = yield* Deferred.await(answersDeferred);
-        pendingUserInputs.delete(requestId);
+        const answers = yield* Deferred.await(answersDeferred).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              callbackOptions.signal.removeEventListener("abort", onAbort);
+              pendingUserInputs.delete(requestId);
+            }),
+          ),
+        );
 
         // Emit user-input.resolved so the UI knows the interaction completed.
         const resolvedStamp = yield* makeEventStamp();
@@ -4663,14 +5275,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         // of being silently auto-approved. Do not persist ruleContent here: it
         // can contain sensitive project policy and is not needed to honor the
         // upstream decision.
-        // Only true bypass mode may skip Cafe's callback. Auto mode can be
-        // layered over a historical full-access runtime policy, but upstream's
-        // classifier must remain authoritative. If Auto falls back to a human
-        // prompt, silently allowing it here would defeat the safety model.
-        if (context.currentPermissionMode === "bypassPermissions" && !matchedAskRule) {
+        // Claude Code 2.1.304 adds mod tool.check asks with decider: "person".
+        // SDK 0.3.308 has no public callback field that identifies those asks.
+        // Upstream applies bypassPermissions before invoking this callback;
+        // any remaining ask must reach the user, even in Bypass mode. Applying
+        // a second blanket allow here would defeat plugin-required consent.
+        // Auto-mode classifier fallbacks follow the same human approval path.
+
+        if (callbackOptions.signal.aborted) {
           return {
-            behavior: "allow",
-            updatedInput: toolInput,
+            behavior: "deny",
+            message: "User cancelled tool execution.",
           } satisfies PermissionResult;
         }
 
@@ -4736,9 +5351,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         callbackOptions.signal.addEventListener("abort", onAbort, {
           once: true,
         });
+        // The signal may have fired while the approval event was being emitted.
+        if (callbackOptions.signal.aborted) onAbort();
 
-        const decision = yield* Deferred.await(decisionDeferred);
-        pendingApprovals.delete(requestId);
+        const decision = yield* Deferred.await(decisionDeferred).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              callbackOptions.signal.removeEventListener("abort", onAbort);
+              pendingApprovals.delete(requestId);
+            }),
+          ),
+        );
 
         const resolvedStamp = yield* makeEventStamp();
         yield* offerRuntimeEvent({
@@ -4795,7 +5418,22 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
       const { apiModelId, selectedContextWindowTokens, effectiveEffort, settings } =
         resolveClaudeModelSessionOptions(modelSelection);
-      const fastMode = settings.fastMode === true;
+      // Claude Fast mode bills extra usage, so the selection is honored only
+      // when this instance's `allowPaidUsage` provider setting is on (default
+      // off). A blocked selection sends an explicit `fastMode: false` instead
+      // of omitting the key so the native Claude Code default can never route
+      // a Club session onto a paid tier behind the operator's back.
+      const fastModeRequested = settings.fastMode === true;
+      const fastMode = fastModeRequested && claudeSettings.allowPaidUsage;
+      if (fastModeRequested && !fastMode) {
+        yield* Effect.logInfo("claude.fastMode/paidUsageBlocked", {
+          threadId: input.threadId,
+          requestedFastMode: true,
+          effectiveFastMode: false,
+          reason: "provider_setting_allowPaidUsage_off",
+        });
+      }
+      const sessionSettings = fastMode ? settings : { ...settings, fastMode: false };
       const permissionMode = runtimeModeToClaudePermissionMode(input.runtimeMode);
       const initialPermissionMode = resolveClaudePermissionMode({
         interactionMode: input.interactionMode,
@@ -4942,6 +5580,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             );
           },
         });
+      const promptAppend = [
+        ...(claudeSettings.ultraCaching ? [CLAUDE_ULTRA_CACHING_APPEND_PROMPT] : []),
+        ...(customInstructions !== undefined ? [customInstructions] : []),
+      ].join("\n\n");
       const queryOptions: ClaudeQueryOptions = {
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
@@ -4951,10 +5593,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               type: "preset",
               preset: "claude_code",
               excludeDynamicSections: true,
-              append: CLAUDE_ULTRA_CACHING_APPEND_PROMPT,
+              append: promptAppend,
             }
-          : { type: "preset", preset: "claude_code" },
+          : {
+              type: "preset",
+              preset: "claude_code",
+              ...(promptAppend ? { append: promptAppend } : {}),
+            },
         settingSources: [...CLAUDE_SETTING_SOURCES],
+        // SDK 0.3.327 sends MCP headers over stdin with this option. Keep the
+        // browser capability off process arguments; older CLIs fail closed.
+        mcpServersDelivery: "initialize",
         mcpServers: {
           club_browser: {
             type: "http",
@@ -4982,7 +5631,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(permissionMode === "bypassPermissions"
           ? { allowDangerouslySkipPermissions: true }
           : {}),
-        ...(Object.keys(settings).length > 0 ? { settings } : {}),
+        settings: {
+          ...sessionSettings,
+          ...(selectedContextWindowTokens !== undefined
+            ? {
+                env: {
+                  CLAUDE_CODE_DISABLE_1M_CONTEXT:
+                    selectedContextWindowTokens <= 200_000 ? "1" : "0",
+                },
+              }
+            : {}),
+        },
         ...(existingResumeSessionId ? { resume: existingResumeSessionId } : {}),
         // Let upstream Claude Code allocate fresh session IDs. The Agent SDK
         // documents `sessionId` as an optional override whose default is an
@@ -5006,7 +5665,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         // process because the SDK only wires it for its default spawner.
         spawnClaudeCodeProcess,
         stderr: handleClaudeStderr,
-        env: claudeEnvironment,
+        env: {
+          ...claudeEnvironment,
+          ...(selectedContextWindowTokens !== undefined
+            ? { CLAUDE_CODE_DISABLE_1M_CONTEXT: selectedContextWindowTokens <= 200_000 ? "1" : "0" }
+            : {}),
+        },
         ...(claudeAdditionalDirectories.length > 0
           ? { additionalDirectories: [...claudeAdditionalDirectories] }
           : {}),
@@ -5091,6 +5755,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         query: queryRuntime,
         runFork,
         streamFiber: undefined,
+        queryClosureUncertain: false,
         startedAt,
         basePermissionMode: permissionMode,
         currentPermissionMode: initialPermissionMode ?? "default",
@@ -5109,6 +5774,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         fastModeRequested: fastMode,
         turnState: undefined,
         deferredTurnResult: undefined,
+        lateRecoveryCompactUuid: undefined,
         lastFastModeNoticeKey: undefined,
         lastKnownContextWindow: selectedContextWindowTokens,
         lastKnownTokenUsage: undefined,
@@ -5285,6 +5951,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     });
     turnState.promptTextBytes = Buffer.byteLength(buildPromptText(input, boundInstanceId), "utf8");
     turnState.promptAttachmentCount = input.attachments?.length ?? 0;
+    turnState.originalPromptMessage = message;
 
     const updatedAt = yield* nowIso;
     context.turnState = turnState;
@@ -5338,6 +6005,49 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const interruptTurn: ClaudeAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
     function* (threadId, _turnId) {
       const context = yield* requireSession(threadId);
+
+      // An explicit Stop always ends context-window recovery. Mark it cancelled
+      // before awaiting the interrupt so a compact result racing this call can
+      // never queue the prompt retry. If the pending recovery command (the
+      // `/compact` or the retry) is confirmed cancelled while still queued,
+      // Claude has nothing running to report a result for, so Cafe settles the
+      // canonical turn as interrupted itself below. A command that already
+      // started reports its own interrupted result instead.
+      const recoveryTurnState = context.turnState;
+      const recovery = recoveryTurnState?.contextRecovery;
+      const pendingRecoveryUuid =
+        recovery === undefined || recovery.cancelled
+          ? undefined
+          : recovery.stage === "compacting"
+            ? recovery.compactUuid
+            : recovery.retryUuid;
+      if (recovery !== undefined) {
+        recovery.cancelled = true;
+      }
+      const confirmedCancelledUuids = new Set<string>();
+      const settleCancelledContextRecovery = Effect.fn("settleCancelledContextRecovery")(
+        function* () {
+          if (
+            pendingRecoveryUuid === undefined ||
+            !confirmedCancelledUuids.has(pendingRecoveryUuid) ||
+            context.turnState === undefined ||
+            context.turnState !== recoveryTurnState ||
+            context.turnState.contextRecovery !== recovery
+          ) {
+            return;
+          }
+          yield* Effect.logInfo("claude.contextRecovery.cancelledByInterrupt", {
+            threadId,
+            providerInstanceId: boundInstanceId,
+            stage: recovery?.stage ?? "unknown",
+          });
+          yield* finalizeTurnSegment(context, "interrupted");
+          yield* completeTurn(context, "interrupted", undefined, undefined, {
+            segmentAlreadyFinalized: true,
+          });
+        },
+      );
+
       const receipt = yield* Effect.tryPromise({
         try: () => context.query.interrupt(),
         catch: (cause) => toRequestError(threadId, "turn/interrupt", cause),
@@ -5352,6 +6062,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       for (const messageUuid of receipt?.cancelled ?? []) {
         if (context.promptLifecycleByUuid.delete(messageUuid)) {
           cancelledByInterruptCount += 1;
+          confirmedCancelledUuids.add(messageUuid);
         }
       }
 
@@ -5383,6 +6094,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             receiptCount: receipt?.still_queued.length ?? 0,
           });
         }
+        yield* settleCancelledContextRecovery();
         return;
       }
 
@@ -5398,6 +6110,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           if (Exit.isSuccess(cancellation) && cancellation.value === true) {
             confirmedCancellationCount += 1;
             context.promptLifecycleByUuid.delete(messageUuid);
+            confirmedCancelledUuids.add(messageUuid);
           } else {
             unconfirmedCancellationCount += 1;
           }
@@ -5414,6 +6127,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           cancelledByInterruptCount,
           receiptCount: receipt?.still_queued.length ?? 0,
         });
+        yield* settleCancelledContextRecovery();
         return;
       }
 
@@ -5493,7 +6207,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const stopSession: ClaudeAdapterShape["stopSession"] = Effect.fn("stopSession")(
     function* (threadId) {
-      const context = yield* requireSession(threadId);
+      const context = sessions.get(threadId) ?? (yield* requireSession(threadId));
       yield* stopSessionInternal(context, {
         emitExitEvent: true,
       });
@@ -5592,7 +6306,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       ([, context]) =>
         stopSessionInternal(context, {
           emitExitEvent: false,
-        }),
+        }).pipe(
+          Effect.catch((cause) =>
+            emitRuntimeError(context, "Failed to close Claude runtime query.", cause),
+          ),
+        ),
       { discard: true },
     ).pipe(Effect.tap(() => Queue.shutdown(runtimeEventQueue))),
   );

@@ -12,6 +12,8 @@ import * as Crypto from "node:crypto";
 import * as NodeFs from "node:fs";
 
 import {
+  CODEX_AUTO_DELEGATE_OPTION_ID,
+  DEFAULT_MODEL_BY_PROVIDER,
   AsyncUserInputQuestions,
   type CanonicalItemType,
   type CanonicalRequestType,
@@ -45,7 +47,7 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as Semaphore from "effect/Semaphore";
+import * as Semaphore from "@cafecode/shared/InterruptSafeSemaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -55,6 +57,7 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 import {
   getModelSelectionBooleanOptionValue,
   getModelSelectionStringOptionValue,
+  resolveCodexSubagentThreadLimit,
 } from "@cafecode/shared/model";
 import { resolveCodexAutoCompactTokenLimit } from "@cafecode/shared/codexCompaction";
 
@@ -70,9 +73,14 @@ import { type CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { getAgentBrowserBridge } from "../AgentBrowserBridge.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { readSystemPromptFileForInjection } from "../../systemPromptFile.ts";
+import { resolveCodexContextWindow } from "../CodexContextWindow.ts";
+import { withCodexDelegationRequest } from "../CodexDelegation.ts";
+import { codexSafetyBlockMessage, readCodexSafetyBlock } from "../CodexSafetyBlock.ts";
 import {
   CodexResumeCursorSchema,
   CodexSessionRuntimeThreadIdMissingError,
+  isCodexPrivateAccountNotification,
   makeCodexSessionRuntime,
   type CodexSessionRuntimeError,
   type CodexSessionRuntimeOptions,
@@ -108,19 +116,101 @@ const CODEX_TURN_DIFF_PREVIEW_CHARS = 4_096;
 const CODEX_HOOK_OUTPUT_PREVIEW_CHARS = 4_096;
 const CODEX_PLUGIN_ATTRIBUTION_MAX_CHARS = 512;
 
-function codexServiceTierOverride(
+type CodexServiceTier = NonNullable<CodexSessionRuntimeOptions["serviceTier"]>;
+
+/**
+ * The service tier the operator's model selection asks for, before the
+ * per-instance paid-usage policy is applied.
+ */
+function codexRequestedServiceTier(
   modelSelection: ProviderSendTurnInput["modelSelection"],
   instanceId: ProviderInstanceId,
-): Pick<CodexSessionRuntimeOptions, "serviceTier"> {
+): CodexServiceTier {
   if (modelSelection?.instanceId !== instanceId) {
-    return {};
+    return "default";
+  }
+  const tier = getModelSelectionStringOptionValue(modelSelection, "serviceTier");
+  if (tier === "default" || tier === "priority" || tier === "ultrafast") {
+    return tier;
+  }
+  if (modelSelection?.options?.some((option) => option.id === "serviceTier")) {
+    return "default";
   }
   const fastMode = getModelSelectionBooleanOptionValue(modelSelection, "fastMode");
   // Codex 0.154.0 uses `priority` for Fast and `default` for an explicit
-  // standard route. Omission preserves the session's existing default. A
+  // standard route. An unset preference explicitly selects standard speed. A
   // backend-advertised `ultrafast` tier is a distinct paid route and is never
   // selected by this boolean.
-  return fastMode === undefined ? {} : { serviceTier: fastMode ? "priority" : "default" };
+  return fastMode === true ? "priority" : "default";
+}
+
+/**
+ * Resolve the service tier Club sends to app-server. `priority` (Fast) and
+ * `ultrafast` (Ultra Fast) spend credits or extra allowance beyond the
+ * included plan, so they are honored only when the instance's `allowPaidUsage`
+ * provider setting is on (default off). A blocked request falls back to the
+ * explicit standard tier rather than omitting the field, so the native CLI
+ * default can never re-enable a paid route behind the operator's back.
+ */
+function codexServiceTierOverride(
+  modelSelection: ProviderSendTurnInput["modelSelection"],
+  instanceId: ProviderInstanceId,
+  allowPaidUsage: boolean,
+): Pick<CodexSessionRuntimeOptions, "serviceTier"> {
+  const requested = codexRequestedServiceTier(modelSelection, instanceId);
+  return { serviceTier: allowPaidUsage || requested === "default" ? requested : "default" };
+}
+
+/**
+ * Diagnostic companion to `codexServiceTierOverride`: the paid tier that the
+ * selection asked for but the paid-usage policy refused, or `undefined` when
+ * nothing was blocked. Logged (tier name only, never prompt text) so an
+ * operator wondering why a Fast selection ran at standard speed can find the
+ * policy decision in the backend log.
+ */
+function codexBlockedPaidServiceTier(
+  modelSelection: ProviderSendTurnInput["modelSelection"],
+  instanceId: ProviderInstanceId,
+  allowPaidUsage: boolean,
+): Exclude<CodexServiceTier, "default"> | undefined {
+  if (allowPaidUsage) {
+    return undefined;
+  }
+  const requested = codexRequestedServiceTier(modelSelection, instanceId);
+  return requested === "default" ? undefined : requested;
+}
+
+function logCodexBlockedPaidServiceTier(input: {
+  readonly phase: "thread/start" | "turn/start";
+  readonly threadId: ThreadId;
+  readonly blockedServiceTier: Exclude<CodexServiceTier, "default"> | undefined;
+}): Effect.Effect<void> {
+  if (input.blockedServiceTier === undefined) {
+    return Effect.void;
+  }
+  return Effect.logInfo("codex.serviceTier/paidUsageBlocked", {
+    phase: input.phase,
+    threadId: input.threadId,
+    requestedServiceTier: input.blockedServiceTier,
+    effectiveServiceTier: "default",
+    reason: "provider_setting_allowPaidUsage_off",
+  });
+}
+
+function codexEffortOverride(
+  modelSelection: ProviderSendTurnInput["modelSelection"],
+  instanceId: ProviderInstanceId,
+  ossMode: boolean,
+): CodexSessionRuntimeOptions["effort"] {
+  const selection = modelSelection?.instanceId === instanceId ? modelSelection : undefined;
+  const explicit = getModelSelectionStringOptionValue(selection, "reasoningEffort");
+  if (explicit && !/^(?:cli[\s_-]*)?default$/i.test(explicit)) {
+    return explicit as CodexSessionRuntimeOptions["effort"];
+  }
+  // Native/local custom models may not support reasoning effort.
+  return !ossMode && (!selection || /^gpt-[56](?:[.-]|$)/.test(selection.model))
+    ? "high"
+    : undefined;
 }
 
 class CodexTransportPolicyFileError extends Data.TaggedError("CodexTransportPolicyFileError")<{
@@ -165,6 +255,9 @@ function mapCodexRuntimeError(
   method: string,
   error: CodexSessionRuntimeError,
 ): ProviderAdapterError {
+  // Keep the finite mutation-outcome tag intact through ProviderService and
+  // the daemon envelope so checkpoint compensation can fail closed.
+  if (error._tag === "ProviderAdapterRewindOutcomeUnknownError") return error;
   if (
     isCodexAppServerProcessExitedError(error) ||
     isCodexAppServerTransportError(error) ||
@@ -1749,7 +1842,9 @@ function mapToRuntimeEvents(
         type: "turn.completed",
         payload: {
           state: toTurnStatus(payload.turn.status),
-          ...(errorMessage ? { errorMessage } : {}),
+          ...(errorMessage
+            ? { errorMessage: codexSafetyBlockMessage(errorMessage, payload.turn.error) }
+            : {}),
         },
       },
     ];
@@ -2062,6 +2157,16 @@ function mapToRuntimeEvents(
     return [];
   }
 
+  if (event.method === "thread/section/changed") {
+    // Codex rust-v0.167.0 broadcasts this after a provider thread moves into,
+    // within, or out of a provider sidebar section. Club decodes it for wire
+    // compatibility but never uses provider sections as sidebar truth: one
+    // Club thread can switch provider instances or hold several provider
+    // identities, and Club orders its own durable thread list.
+    readPayload(EffectCodexSchema.V2ThreadSectionChangedNotification, event.payload);
+    return [];
+  }
+
   if (event.method === "turn/moderationMetadata") {
     // Upstream Codex rust-v0.143.0 marks this notification experimental and the
     // TUI routes it to the thread but does not render it in chat. Do the same
@@ -2303,16 +2408,31 @@ function mapToRuntimeEvents(
   if (event.method === "error" || event.method === "codex.subagent/error") {
     const payload = readPayload(EffectCodexSchema.V2ErrorNotification, event.payload);
     const message = payload?.error.message ?? event.message ?? "Provider runtime error";
-    const willRetry = payload?.willRetry === true;
+    const safetyBlock = readCodexSafetyBlock(event.payload);
+    const willRetry = payload?.willRetry === true && !safetyBlock;
     const isSubagentError = event.method === "codex.subagent/error";
     return [
       {
         type: willRetry || isSubagentError ? "runtime.warning" : "runtime.error",
         ...runtimeEventBase(event, canonicalThreadId),
         payload: {
-          message,
+          message: codexSafetyBlockMessage(message, event.payload),
           ...(!willRetry && !isSubagentError ? { class: "provider_error" as const } : {}),
-          ...(event.payload !== undefined ? { detail: event.payload } : {}),
+          ...(event.payload !== undefined
+            ? {
+                detail: safetyBlock
+                  ? {
+                      error: {
+                        codexErrorInfo: "misalignmentPolicyViolation",
+                        ...(safetyBlock.explanation
+                          ? { misalignment: { detailedExplanation: safetyBlock.explanation } }
+                          : {}),
+                      },
+                      willRetry: false,
+                    }
+                  : event.payload,
+              }
+            : {}),
         },
       },
     ];
@@ -2544,17 +2664,20 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const transportPolicyPersistenceEnabled =
     isCodexTransportPolicyPersistenceEnabled(adapterEnvironment);
   const responsesWebsocketsAllowed = isCodexResponsesWebsocketsAllowed(adapterEnvironment);
-  const initialTransportPolicy: CodexTransportPolicyEntry | undefined = responsesWebsocketsAllowed
-    ? transportPolicyPersistenceEnabled
-      ? yield* loadCodexTransportPolicy(transportPolicyPath, transportPolicyKey)
-      : undefined
-    : {
-        responsesWebsockets: "disabled",
-        reason: CODEX_HTTPS_ONLY_POLICY_REASON,
-        observedAt: DateTime.formatIso(yield* DateTime.now),
-        source: "cafe.operator-policy",
-      };
-  if (!responsesWebsocketsAllowed) {
+  const initialTransportPolicy: CodexTransportPolicyEntry | undefined =
+    codexConfig.modelProvider === "gcp"
+      ? undefined
+      : responsesWebsocketsAllowed
+        ? transportPolicyPersistenceEnabled
+          ? yield* loadCodexTransportPolicy(transportPolicyPath, transportPolicyKey)
+          : undefined
+        : {
+            responsesWebsockets: "disabled",
+            reason: CODEX_HTTPS_ONLY_POLICY_REASON,
+            observedAt: DateTime.formatIso(yield* DateTime.now),
+            source: "cafe.operator-policy",
+          };
+  if (!responsesWebsocketsAllowed && codexConfig.modelProvider !== "gcp") {
     yield* Effect.logInfo("codex.transportPolicy.httpsOnly", {
       instanceId: boundInstanceId,
       reason: CODEX_HTTPS_ONLY_POLICY_REASON,
@@ -2812,7 +2935,47 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             providerInstanceId: boundInstanceId,
           }),
         );
+        const customInstructions = yield* readSystemPromptFileForInjection(
+          serverConfig.systemPromptPath,
+        ).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.mapError(
+            () =>
+              new ProviderAdapterProcessError({
+                provider: PROVIDER,
+                threadId: input.threadId,
+                detail: "Unable to read custom instructions.",
+              }),
+          ),
+        );
+        const contextModelSelection =
+          input.modelSelection?.instanceId === boundInstanceId
+            ? input.modelSelection
+            : input.modelSelection === undefined && !codexConfig.ossMode
+              ? {
+                  instanceId: boundInstanceId,
+                  model: DEFAULT_MODEL_BY_PROVIDER[PROVIDER] ?? "gpt-6-astra",
+                }
+              : undefined;
+        const modelContextWindow = resolveCodexContextWindow(
+          contextModelSelection,
+          codexConfig.ossMode,
+        );
+        const sessionAutoCompactTokenLimit =
+          modelContextWindow === undefined
+            ? effectiveAutoCompactTokenLimit
+            : Math.min(effectiveAutoCompactTokenLimit, Math.floor(modelContextWindow * 0.9));
+        yield* logCodexBlockedPaidServiceTier({
+          phase: "thread/start",
+          threadId: input.threadId,
+          blockedServiceTier: codexBlockedPaidServiceTier(
+            input.modelSelection,
+            boundInstanceId,
+            codexConfig.allowPaidUsage,
+          ),
+        });
         const runtimeInput: CodexSessionRuntimeOptions = {
+          ...(customInstructions !== undefined ? { customInstructions } : {}),
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
           cwd: input.cwd ?? process.cwd(),
@@ -2834,14 +2997,19 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(input.codexSubagentThreadLimit !== undefined
             ? { codexSubagentThreadLimit: input.codexSubagentThreadLimit }
             : {}),
-          autoCompactTokenLimit: effectiveAutoCompactTokenLimit,
+          ...(modelContextWindow !== undefined ? { modelContextWindow } : {}),
+          autoCompactTokenLimit: sessionAutoCompactTokenLimit,
           ultraCaching: codexConfig.ultraCaching,
           ossMode: codexConfig.ossMode,
+          modelProvider: codexConfig.modelProvider,
           agentBrowserMcp,
-          ...(input.modelSelection?.instanceId === boundInstanceId
-            ? { model: input.modelSelection.model }
-            : {}),
-          ...codexServiceTierOverride(input.modelSelection, boundInstanceId),
+          ...(contextModelSelection !== undefined ? { model: contextModelSelection.model } : {}),
+          ...codexServiceTierOverride(
+            input.modelSelection,
+            boundInstanceId,
+            codexConfig.allowPaidUsage,
+          ),
+          effort: codexEffortOverride(input.modelSelection, boundInstanceId, codexConfig.ossMode),
           ...(currentTransportPolicy !== undefined
             ? { transportPolicy: currentTransportPolicy }
             : {}),
@@ -2868,6 +3036,14 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
 
         const eventFiber = yield* Stream.runForEach(runtime.events, (event) =>
           Effect.gen(function* () {
+            // Defense in depth for injected runtimes and historical daemon
+            // replay. The current runtime drops gateway login notifications
+            // before emitting a provider event; their authorization URLs and
+            // provider-authored errors must not reach the native log or
+            // canonical mapping here either.
+            if (event.kind === "notification" && isCodexPrivateAccountNotification(event.method)) {
+              return;
+            }
             yield* writeNativeEvent(event).pipe(
               Effect.catchCause((cause) =>
                 Effect.logWarning("codex.runtime.bridge.native-log-write-failed", {
@@ -2880,7 +3056,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             );
 
             const runtimeEvents = yield* Effect.sync(() =>
-              mapToRuntimeEvents(event, event.threadId, effectiveAutoCompactTokenLimit),
+              mapToRuntimeEvents(event, event.threadId, sessionAutoCompactTokenLimit),
             ).pipe(
               Effect.catchCause((cause) =>
                 Effect.logWarning("codex.runtime.bridge.map-failed", {
@@ -3064,22 +3240,43 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     );
 
     const session = yield* requireSession(input.threadId);
-    const reasoningEffort =
+    const reasoningEffort = codexEffortOverride(
+      input.modelSelection,
+      boundInstanceId,
+      codexConfig.ossMode,
+    );
+    yield* logCodexBlockedPaidServiceTier({
+      phase: "turn/start",
+      threadId: input.threadId,
+      blockedServiceTier: codexBlockedPaidServiceTier(
+        input.modelSelection,
+        boundInstanceId,
+        codexConfig.allowPaidUsage,
+      ),
+    });
+    const turnInput =
       input.modelSelection?.instanceId === boundInstanceId
-        ? getModelSelectionStringOptionValue(input.modelSelection, "reasoningEffort")
-        : undefined;
+        ? withCodexDelegationRequest(
+            input.input,
+            getModelSelectionBooleanOptionValue(
+              input.modelSelection,
+              CODEX_AUTO_DELEGATE_OPTION_ID,
+            ) !== false,
+            resolveCodexSubagentThreadLimit(input.modelSelection),
+          )
+        : input.input;
     return yield* session.runtime
       .sendTurn({
-        ...(input.input !== undefined ? { input: input.input } : {}),
+        ...(turnInput !== undefined ? { input: turnInput } : {}),
         ...(input.modelSelection?.instanceId === boundInstanceId
           ? { model: input.modelSelection.model }
           : {}),
-        ...(reasoningEffort
-          ? {
-              effort: reasoningEffort as EffectCodexSchema.V2TurnStartParams__ReasoningEffort,
-            }
-          : {}),
-        ...codexServiceTierOverride(input.modelSelection, boundInstanceId),
+        ...(reasoningEffort ? { effort: reasoningEffort } : {}),
+        ...codexServiceTierOverride(
+          input.modelSelection,
+          boundInstanceId,
+          codexConfig.allowPaidUsage,
+        ),
         ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
         ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
       })
@@ -3260,12 +3457,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     );
 
   const rollbackThread: CodexAdapterShape["rollbackThread"] = (threadId, numTurns) => {
-    if (!Number.isInteger(numTurns) || numTurns < 1) {
+    if (!Number.isSafeInteger(numTurns) || numTurns < 1) {
       return Effect.fail(
         new ProviderAdapterValidationError({
           provider: PROVIDER,
           operation: "rollbackThread",
-          issue: "numTurns must be an integer >= 1.",
+          issue: "numTurns must be a safe integer >= 1.",
         }),
       );
     }
@@ -3275,7 +3472,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       Effect.mapError((cause) =>
         cause._tag === "ProviderAdapterSessionNotFoundError"
           ? cause
-          : mapCodexRuntimeError(threadId, "thread/rollback", cause),
+          : mapCodexRuntimeError(threadId, "thread/revert", cause),
       ),
       Effect.map((snapshot) => ({
         threadId,

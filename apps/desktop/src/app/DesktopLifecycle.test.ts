@@ -1,4 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
+import { EventEmitter } from "node:events";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -62,9 +63,16 @@ function makeProviderDaemonHealth(activeSessionCount: number): ProviderDaemonHea
 function makeLifecycleHarness(options?: {
   readonly activeProviderSessionCount?: number;
   readonly providerDaemonDialogResponse?: number;
+  readonly platform?: "win32" | "darwin" | "linux";
+  readonly healthUnavailable?: boolean;
 }) {
   let beforeQuitListener: BeforeQuitListener | undefined;
+  let windowCreatedListener:
+    | ((event: Electron.Event, window: Electron.BrowserWindow) => void)
+    | undefined;
   let secondInstanceListener: SecondInstanceListener | undefined;
+  let windowAllClosedListener: (() => void) | undefined;
+  let recoveredWindowCount = 0;
   let activateCount = 0;
   let quitCount = 0;
   let shutdownOverlayCount = 0;
@@ -97,6 +105,10 @@ function makeLifecycleHarness(options?: {
             beforeQuitListener = listener as unknown as BeforeQuitListener;
           } else if (eventName === "second-instance") {
             secondInstanceListener = listener as unknown as SecondInstanceListener;
+          } else if (eventName === "browser-window-created") {
+            windowCreatedListener = listener as unknown as typeof windowCreatedListener;
+          } else if (eventName === "window-all-closed") {
+            windowAllClosedListener = listener as () => void;
           }
         }),
     } satisfies ElectronApp.ElectronAppShape);
@@ -146,7 +158,10 @@ function makeLifecycleHarness(options?: {
     const desktopWindowLayer = Layer.succeed(DesktopWindow.DesktopWindow, {
       createMain: Effect.die("unexpected createMain"),
       ensureMain: Effect.die("unexpected ensureMain"),
-      revealOrCreateMain: Effect.die("unexpected revealOrCreateMain"),
+      revealOrCreateMain: Effect.sync(() => {
+        recoveredWindowCount += 1;
+        return {} as Electron.BrowserWindow;
+      }),
       activate: Effect.sync(() => {
         activateCount += 1;
       }),
@@ -165,7 +180,7 @@ function makeLifecycleHarness(options?: {
     } satisfies DesktopWindow.DesktopWindowShape);
 
     const desktopEnvironmentLayer = Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
-      platform: "darwin",
+      platform: options?.platform ?? "darwin",
       isDevelopment: false,
     } as DesktopEnvironment.DesktopEnvironmentShape);
 
@@ -177,7 +192,9 @@ function makeLifecycleHarness(options?: {
         currentConfig: Effect.succeed(Option.none()),
         probeLiveness: Effect.succeed(Option.none()),
         refreshHealth: Effect.succeed(
-          Option.some(makeProviderDaemonHealth(options?.activeProviderSessionCount ?? 0)),
+          options?.healthUnavailable
+            ? Option.none()
+            : Option.some(makeProviderDaemonHealth(options?.activeProviderSessionCount ?? 0)),
         ),
         snapshot: Effect.die("unexpected snapshot"),
         stop: Effect.sync(() => {
@@ -204,6 +221,9 @@ function makeLifecycleHarness(options?: {
       layer,
       overlaySent,
       getBeforeQuitListener: () => beforeQuitListener,
+      getWindowCreatedListener: () => windowCreatedListener,
+      getWindowAllClosedListener: () => windowAllClosedListener,
+      getRecoveredWindowCount: () => recoveredWindowCount,
       getSecondInstanceListener: () => secondInstanceListener,
       getActivateCount: () => activateCount,
       getQuitCount: () => quitCount,
@@ -215,6 +235,131 @@ function makeLifecycleHarness(options?: {
 }
 
 describe("DesktopLifecycle", () => {
+  it.effect("restores unexpected Windows window loss without quitting, with a recovery limit", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeLifecycleHarness({ platform: "win32" });
+      yield* Effect.gen(function* () {
+        yield* (yield* DesktopLifecycle.DesktopLifecycle).register;
+        for (let index = 0; index < 4; index += 1) {
+          harness.getWindowAllClosedListener()!();
+          yield* flushMicrotasks;
+        }
+        assert.equal(harness.getRecoveredWindowCount(), 3);
+        assert.equal(harness.getQuitCount(), 0);
+        assert.equal(harness.getProviderDaemonStopCount(), 0);
+      }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("keeps the quit decision available when provider health cannot be read", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeLifecycleHarness({
+        platform: "win32",
+        healthUnavailable: true,
+        providerDaemonDialogResponse: 2,
+      });
+      yield* Effect.gen(function* () {
+        yield* (yield* DesktopLifecycle.DesktopLifecycle).register;
+        const window = new EventEmitter();
+        harness.getWindowCreatedListener()!(
+          makeEvent().event,
+          window as unknown as Electron.BrowserWindow,
+        );
+        const close = makeEvent();
+        window.emit("close", close.event);
+        assert.equal(close.preventDefaultCount(), 1);
+        yield* flushMicrotasks;
+        assert.equal(harness.getProviderDaemonDialogCount(), 1);
+        assert.equal(harness.getShutdownOverlayCount(), 0);
+        assert.equal(harness.getProviderDaemonStopCount(), 0);
+        assert.equal(harness.getQuitCount(), 0);
+      }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("preserves a Windows window on Cancel Quit and permits a later close request", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeLifecycleHarness({
+        platform: "win32",
+        activeProviderSessionCount: 1,
+        providerDaemonDialogResponse: 2,
+      });
+      const window = new EventEmitter();
+      yield* Effect.gen(function* () {
+        yield* (yield* DesktopLifecycle.DesktopLifecycle).register;
+        const created = harness.getWindowCreatedListener();
+        assert.isDefined(created);
+        created!(makeEvent().event, window as unknown as Electron.BrowserWindow);
+        const close = makeEvent();
+        window.emit("close", close.event);
+        // Electron requires synchronous prevention before its close callback returns.
+        assert.equal(close.preventDefaultCount(), 1);
+        yield* flushMicrotasks;
+        assert.equal(harness.getProviderDaemonDialogCount(), 1);
+        assert.equal(harness.getShutdownOverlayCount(), 0);
+        assert.equal(harness.getProviderDaemonStopCount(), 0);
+        assert.equal(harness.getQuitCount(), 0);
+
+        const retry = makeEvent();
+        window.emit("close", retry.event);
+        assert.equal(retry.preventDefaultCount(), 1);
+        yield* flushMicrotasks;
+        assert.equal(harness.getProviderDaemonDialogCount(), 2);
+      }).pipe(Effect.scoped, Effect.provide(harness.layer));
+      assert.equal(window.listenerCount("close"), 0);
+    }),
+  );
+
+  it.effect("coalesces Windows close requests and releases the window only after shutdown", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeLifecycleHarness({
+        platform: "win32",
+        activeProviderSessionCount: 1,
+        providerDaemonDialogResponse: 0,
+      });
+      yield* Effect.gen(function* () {
+        yield* (yield* DesktopLifecycle.DesktopLifecycle).register;
+        const window = new EventEmitter();
+        harness.getWindowCreatedListener()!(
+          makeEvent().event,
+          window as unknown as Electron.BrowserWindow,
+        );
+        const first = makeEvent();
+        const duplicate = makeEvent();
+        window.emit("close", first.event);
+        window.emit("close", duplicate.event);
+        yield* Deferred.await(harness.overlaySent);
+        assert.equal(first.preventDefaultCount(), 1);
+        assert.equal(duplicate.preventDefaultCount(), 1);
+        assert.equal(harness.getProviderDaemonDialogCount(), 1);
+        assert.equal(harness.getQuitCount(), 0);
+        harness.getWindowAllClosedListener()!();
+        yield* flushMicrotasks;
+        assert.equal(harness.getRecoveredWindowCount(), 0);
+        yield* (yield* DesktopLifecycle.DesktopShutdown).markComplete;
+        yield* TestClock.adjust(DesktopLifecycle.DESKTOP_SHUTDOWN_OVERLAY_MINIMUM_DWELL);
+        yield* flushMicrotasks;
+        assert.equal(harness.getQuitCount(), 1);
+        assert.equal(harness.getProviderDaemonStopCount(), 0);
+        const finalClose = makeEvent();
+        window.emit("close", finalClose.event);
+        assert.equal(finalClose.preventDefaultCount(), 0);
+      }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    }),
+  );
+
+  for (const platform of ["darwin", "linux"] as const) {
+    it.effect(`preserves native window closing on ${platform}`, () =>
+      Effect.gen(function* () {
+        const harness = yield* makeLifecycleHarness({ platform });
+        yield* Effect.gen(function* () {
+          yield* (yield* DesktopLifecycle.DesktopLifecycle).register;
+          assert.isUndefined(harness.getWindowCreatedListener());
+        }).pipe(Effect.scoped, Effect.provide(harness.layer));
+      }),
+    );
+  }
+
   it.effect("keeps the shutdown overlay visible for the minimum dwell before quitting", () =>
     Effect.gen(function* () {
       const harness = yield* makeLifecycleHarness();

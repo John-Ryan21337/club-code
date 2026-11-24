@@ -110,15 +110,24 @@ function parsePaidUsage(value: unknown): ParsedOptional<ServerProviderPaidUsage>
   }
 
   const utilizationPercent = typeof utilization.value === "number" ? utilization.value : undefined;
+  const decimalPlaces = record.decimal_places ?? 2;
+  if (
+    typeof decimalPlaces !== "number" ||
+    !Number.isInteger(decimalPlaces) ||
+    decimalPlaces < 0 ||
+    decimalPlaces > 6
+  )
+    return { valid: false };
+  const divisor = 10 ** decimalPlaces;
   return {
     valid: true,
     value: {
       status: record.is_enabled ? "enabled" : "disabled",
       ...(typeof usedCredits.value === "number"
-        ? { used: canonicalDecimal(usedCredits.value) }
+        ? { used: canonicalDecimal(usedCredits.value / divisor) }
         : {}),
       ...(typeof monthlyLimit.value === "number"
-        ? { limit: canonicalDecimal(monthlyLimit.value) }
+        ? { limit: canonicalDecimal(monthlyLimit.value / divisor) }
         : {}),
       ...(utilizationPercent !== undefined
         ? {
@@ -153,6 +162,8 @@ function makeWeeklySnapshot(input: {
 export function parseClaudeAccountUsage(
   raw: unknown,
   checkedAt: string,
+  subscriptionType?: string,
+  previous?: ServerProviderAccountRateLimits,
 ): ServerProviderAccountRateLimits | undefined {
   const root = asRecord(raw);
   if (!root || typeof root.rate_limits_available !== "boolean") return undefined;
@@ -170,7 +181,11 @@ export function parseClaudeAccountUsage(
     ) {
       return undefined;
     }
-    planType = normalizedPlanType;
+    // The usage endpoint still reports legacy "max" for Ultra accounts.
+    // Use the same disposable query's account plan to distinguish them.
+    const accountPlan = normalizeClaudeSubscriptionType(subscriptionType);
+    planType =
+      accountPlan === "ultra" && normalizedPlanType === "max" ? "ultra" : normalizedPlanType;
   }
 
   const baseSnapshot: ServerProviderAccountRateLimitSnapshot = {
@@ -204,6 +219,25 @@ export function parseClaudeAccountUsage(
     return undefined;
   }
 
+  // Anthropic documents no Current session bar as the verification signal.
+  // Require Ultra identity, explicit null, and a valid weekly utilization.
+  // An omitted field, failed request, or API-key session proves nothing.
+  const isUltra = planType === "ultra";
+  const removed =
+    isUltra && rateLimits.five_hour === null && typeof sevenDay.value?.usedPercent === "number";
+  const claudeAccount = {
+    plan: planType as "pro" | "max" | "ultra" | "team" | "enterprise",
+    verification: isUltra
+      ? removed
+        ? "verified"
+        : fiveHour.value
+          ? "pending"
+          : "unknown"
+      : "unknown",
+    fiveHourLimit: removed ? "removed" : fiveHour.value ? "applies" : "unknown",
+    checkedAt,
+  } as const;
+
   const primarySnapshot: ServerProviderAccountRateLimitSnapshot = {
     ...baseSnapshot,
     ...(fiveHour.value ? { primary: fiveHour.value } : {}),
@@ -228,6 +262,11 @@ export function parseClaudeAccountUsage(
     }
   }
 
+  if (rateLimits.model_scoped === undefined && previous?.rateLimits.planType === planType) {
+    for (const [id, snapshot] of Object.entries(previous.rateLimitsByLimitId ?? {})) {
+      if (id.startsWith("claude-model-")) byLimitId[id] = snapshot;
+    }
+  }
   if (rateLimits.model_scoped !== undefined) {
     if (!Array.isArray(rateLimits.model_scoped)) return undefined;
     for (const [index, entry] of rateLimits.model_scoped
@@ -251,6 +290,7 @@ export function parseClaudeAccountUsage(
   }
 
   return {
+    ...(isUltra ? { claudeAccount } : {}),
     rateLimits: primarySnapshot,
     rateLimitsByLimitId: byLimitId,
     ...(paidUsage.value ? { paidUsage: { ...paidUsage.value, checkedAt } } : {}),

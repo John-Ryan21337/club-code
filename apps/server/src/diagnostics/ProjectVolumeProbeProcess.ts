@@ -47,7 +47,24 @@ try {
     throw new Error("invalid input");
   }
   deadline = setTimeout(() => process.exit(1), input.timeoutMs);
-  fs.promises.statfs(input.workspaceRoot, { bigint: true }).then(
+  // Keep existing folders on their actual volume, including mounted volumes.
+  // A removed Windows project can still report its drive's capacity. Restrict
+  // that retry to missing local drive paths; never mask access or device errors.
+  const readVolume = async () => {
+    try {
+      return await fs.promises.statfs(input.workspaceRoot, { bigint: true });
+    } catch (error) {
+      if (
+        process.platform !== "win32" ||
+        (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") ||
+        !/^[a-zA-Z]:[\\/][^<>:"|?*\x00-\x1f]*$/.test(input.workspaceRoot)
+      ) {
+        throw error;
+      }
+      return fs.promises.statfs(input.workspaceRoot.slice(0, 3), { bigint: true });
+    }
+  };
+  readVolume().then(
     (stats) => {
       clearTimeout(deadline);
       process.stdout.write(JSON.stringify([

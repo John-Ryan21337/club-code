@@ -17,7 +17,7 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import * as Semaphore from "effect/Semaphore";
+import * as Semaphore from "@cafecode/shared/InterruptSafeSemaphore";
 
 import type { ServerProviderShape } from "./Services/ServerProvider.ts";
 import { ServerSettingsError } from "@cafecode/contracts";

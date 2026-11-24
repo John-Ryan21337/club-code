@@ -70,6 +70,7 @@ import {
 } from "../../persistence/Layers/Sqlite.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
+import { withTaskContinuityGuidance } from "../TaskContinuity.ts";
 
 const defaultServerSettingsLayer = ServerSettingsService.layerTest();
 
@@ -1165,8 +1166,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.deepEqual(routing.codex.steerTurn.mock.calls[0]?.[0], {
           threadId: session.threadId,
           expectedTurnId: asTurnId("turn-active"),
-          input: "this must be steered or queued",
+          input: withTaskContinuityGuidance("this must be steered or queued"),
         });
+        assert.deepEqual(routing.codex.interruptTurn.mock.calls, []);
 
         const runningRuntime = yield* runtimeRepository.getByThreadId({
           threadId: session.threadId,
@@ -1220,9 +1222,131 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.deepEqual(routing.claude.steerTurn.mock.calls[0]?.[0], {
           threadId: session.threadId,
           expectedTurnId: asTurnId("turn-claude-active"),
-          input: "queue this without interrupting Claude",
+          input: withTaskContinuityGuidance("queue this without interrupting Claude"),
         });
+        assert.deepEqual(routing.claude.interruptTurn.mock.calls, []);
       }),
+  );
+
+  it.effect(
+    "adds continuity guidance once for normal sends and direct steers across providers",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        for (const [driver, instance, adapter] of [
+          [CODEX_DRIVER, codexInstanceId, routing.codex],
+          [CLAUDE_AGENT_DRIVER, claudeAgentInstanceId, routing.claude],
+          [TEST_DRIVER, ProviderInstanceId.make("testDriver"), routing.testDriver],
+        ] as const) {
+          const threadId = asThreadId(`thread-continuity-${driver}`);
+          yield* provider.startSession(threadId, {
+            provider: driver,
+            providerInstanceId: instance,
+            threadId,
+            runtimeMode: "full-access",
+          });
+          const attachments = [
+            {
+              type: "image" as const,
+              id: "continuity-image",
+              name: "example.png",
+              mimeType: "image/png",
+              sizeBytes: 12,
+            },
+          ];
+          const sendInput: ProviderSendTurnInput = {
+            threadId,
+            input: "Also check this image.\nKeep the current task going.",
+            attachments,
+          };
+          const original = JSON.stringify(sendInput);
+          adapter.sendTurn.mockClear();
+          yield* provider.sendTurn(sendInput);
+          assert.deepEqual(adapter.sendTurn.mock.calls[0]?.[0], {
+            ...sendInput,
+            input: withTaskContinuityGuidance(sendInput.input),
+          });
+          assert.equal(JSON.stringify(sendInput), original);
+
+          if (adapter.adapter.capabilities.liveSteer !== "supported") {
+            continue;
+          }
+
+          const steerInput: ProviderSteerTurnInput = {
+            threadId,
+            expectedTurnId: asTurnId("continuity-active-turn"),
+            input: "Instead, pause the deployment and check the failure.",
+            attachments,
+          };
+          adapter.steerTurn.mockClear();
+          yield* provider.steerTurn(steerInput);
+          const outgoing = adapter.steerTurn.mock.calls[0]?.[0];
+          assert.deepEqual(outgoing, {
+            ...steerInput,
+            input: withTaskContinuityGuidance(steerInput.input),
+          });
+          assert.equal(outgoing?.input?.split("<club-code-task-continuity>").length, 2);
+          assert.deepEqual(adapter.interruptTurn.mock.calls, []);
+          assert.deepEqual(adapter.stopSession.mock.calls, []);
+        }
+      }),
+  );
+
+  it.effect("keeps attachments when adding guidance to attachment-only requests", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-continuity-attachment");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      const attachments = [
+        {
+          type: "image" as const,
+          id: "attachment-only-image",
+          name: "example.png",
+          mimeType: "image/png",
+          sizeBytes: 12,
+        },
+      ];
+      yield* provider.sendTurn({ threadId, attachments });
+      assert.deepEqual(routing.codex.sendTurn.mock.calls.at(-1)?.[0], {
+        threadId,
+        input: withTaskContinuityGuidance(undefined),
+        attachments,
+      });
+      yield* provider.steerTurn({
+        threadId,
+        expectedTurnId: asTurnId("attachment-active"),
+        attachments,
+      });
+      assert.deepEqual(routing.codex.steerTurn.mock.calls.at(-1)?.[0], {
+        threadId,
+        expectedTurnId: asTurnId("attachment-active"),
+        input: withTaskContinuityGuidance(undefined),
+        attachments,
+      });
+    }),
+  );
+
+  it.effect("rejects empty requests before adding continuity guidance", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-empty-continuity");
+      const sendFailure = yield* Effect.flip(provider.sendTurn({ threadId }));
+      const steerFailure = yield* Effect.flip(
+        provider.steerTurn({
+          threadId,
+          expectedTurnId: asTurnId("empty-active-turn"),
+        }),
+      );
+      assert.equal(sendFailure._tag, "ProviderValidationError");
+      assert.equal(steerFailure._tag, "ProviderValidationError");
+      assert.deepEqual(routing.codex.sendTurn.mock.calls, []);
+      assert.deepEqual(routing.codex.steerTurn.mock.calls, []);
+    }),
   );
 
   it.effect("recovers stale persisted sessions for rollback by resuming thread identity", () =>
@@ -1749,7 +1873,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.deepEqual(routing.codex.steerTurn.mock.calls[0]?.[0], {
         threadId,
         expectedTurnId: asTurnId("turn-active"),
-        input: "adjust course",
+        input: withTaskContinuityGuidance("adjust course"),
         attachments: [],
       });
 

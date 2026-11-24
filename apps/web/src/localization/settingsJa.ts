@@ -480,6 +480,10 @@ export const SETTINGS_JA: Readonly<Record<string, string>> = {
     "カスタムファイルはありません。同梱のチャイムを使います。",
   "Spoken alert": "音声通知",
   "Enable spoken completion alert": "完了時の音声通知を有効化",
+  "Station announcement chime": "駅の案内チャイム",
+  "Before the spoken alert, play an original rising four-note chime in the style of a Japanese station announcement.":
+    "音声通知の前に、日本の駅の案内放送風のオリジナルの上昇4音チャイムを再生します。",
+  "Play station announcement chime before spoken alert": "音声通知の前に駅の案内チャイムを再生",
   "Speech language": "音声言語",
   "Completion speech language": "完了音声の言語",
   "Choose English, Japanese, or dual-language completion speech.":
