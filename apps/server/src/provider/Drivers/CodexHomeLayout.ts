@@ -1,17 +1,21 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeOS from "node:os";
+import { constants } from "node:fs";
 import {
   chmod as chmodFile,
   copyFile,
   link as createHardLink,
   lstat,
+  mkdtemp,
   rename,
   rm,
+  rmdir,
   stat as statFile,
   symlink as createNodeSymlink,
   writeFile,
 } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { ProviderDriverKind, type CodexSettings } from "@cafecode/contracts";
 import * as Effect from "effect/Effect";
@@ -234,10 +238,32 @@ function isSameFile(left: { dev: number; ino: number }, right: { dev: number; in
   return left.dev === right.dev && left.ino === right.ino && left.ino !== 0;
 }
 
+async function publishWindowsSharedFile(stagedFile: string, destination: string): Promise<void> {
+  // Windows can briefly refuse to replace a file another writer or reader has open.
+  for (const waitMs of [10, 30, 60]) {
+    try {
+      await rename(stagedFile, destination);
+      return;
+    } catch (error) {
+      if (
+        typeof error !== "object" ||
+        error === null ||
+        !("code" in error) ||
+        (error.code !== "EACCES" && error.code !== "EPERM" && error.code !== "EBUSY")
+      ) {
+        throw error;
+      }
+      await delay(waitMs);
+    }
+  }
+  await rename(stagedFile, destination);
+}
+
 const ensureWindowsFileLink = Effect.fn("CodexHomeLayout.ensureWindowsFileLink")(function* (
   target: string,
   link: string,
 ) {
+  const path = yield* Path.Path;
   const existing = yield* runNodeFs(() =>
     lstat(link).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return null;
@@ -245,28 +271,32 @@ const ensureWindowsFileLink = Effect.fn("CodexHomeLayout.ensureWindowsFileLink")
     }),
   );
 
-  if (existing) {
-    if (existing.isDirectory() && !existing.isSymbolicLink()) {
+  if (existing && !existing.isSymbolicLink()) {
+    if (existing.isDirectory()) {
       return yield* new CodexShadowHomeError({
         detail: `Cannot create Codex shadow home because '${link}' already exists and is not a file.`,
       });
     }
 
-    const [targetStat, linkStat] = yield* runNodeFs(() =>
-      Promise.all([statFile(target), statFile(link)]),
-    );
-    if (isSameFile(targetStat, linkStat)) {
+    const targetStat = yield* runNodeFs(() => statFile(target));
+    if (isSameFile(targetStat, existing)) {
       return;
     }
-
-    yield* runNodeFs(() => rm(link, { force: true }));
   }
 
   yield* runNodeFs(async () => {
+    const stagingDirectory = await mkdtemp(path.join(path.dirname(link), ".club-codex-shared-"));
+    const stagingFile = path.join(stagingDirectory, "entry");
     try {
-      await createHardLink(target, link);
-    } catch {
-      await copyFile(target, link);
+      try {
+        await createHardLink(target, stagingFile);
+      } catch {
+        await copyFile(target, stagingFile, constants.COPYFILE_EXCL);
+      }
+      await publishWindowsSharedFile(stagingFile, link);
+    } finally {
+      await rm(stagingFile, { force: true }).catch(() => undefined);
+      await rmdir(stagingDirectory).catch(() => undefined);
     }
   });
 });
@@ -317,7 +347,6 @@ const ensureSymlink = Effect.fn("CodexHomeLayout.ensureSymlink")(function* (inpu
       if (areSameResolvedPath(path, resolvedExisting, target)) {
         return;
       }
-      yield* runNodeFs(() => rm(link, { force: true }));
     }
     return yield* ensureWindowsFileLink(target, link);
   }

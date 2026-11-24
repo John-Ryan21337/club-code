@@ -22,6 +22,79 @@ const makeLogCapture = () => {
 };
 
 describe("makeDrainableWorker", () => {
+  it.live(
+    "processes bounded batches in FIFO order and waits for a batch after item failures",
+    () => {
+      const logs = makeLogCapture();
+
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const firstStarted = yield* Deferred.make<void>();
+          const releaseFirst = yield* Deferred.make<void>();
+          const heldStarted = yield* Deferred.make<void>();
+          const releaseHeld = yield* Deferred.make<void>();
+          const drained = yield* Deferred.make<void>();
+          const batches: Array<ReadonlyArray<string>> = [];
+          const attempted: Array<readonly [string, number]> = [];
+          const worker = yield* makeDrainableWorker(
+            (_item: string): Effect.Effect<void, string> =>
+              Effect.die("expected a batch processor"),
+            {
+              name: "test-batch-worker",
+              batch: {
+                maxSize: 3,
+                makeProcessor: (items) => {
+                  batches.push(items);
+                  return (item, index) => {
+                    attempted.push([item, index]);
+                    if (item === "defect") throw new Error("synchronous processor defect");
+                    if (item === "failure") return Effect.fail("processor failure");
+                    if (item === "first") {
+                      return Deferred.succeed(firstStarted, undefined).pipe(
+                        Effect.andThen(Deferred.await(releaseFirst)),
+                      );
+                    }
+                    if (item === "held") {
+                      return Deferred.succeed(heldStarted, undefined).pipe(
+                        Effect.andThen(Deferred.await(releaseHeld)),
+                      );
+                    }
+                    return Effect.void;
+                  };
+                },
+              },
+            },
+          );
+
+          yield* worker.enqueue("first");
+          yield* Deferred.await(firstStarted);
+          for (const item of ["failure", "defect", "held", "last"]) yield* worker.enqueue(item);
+          yield* Effect.forkChild(
+            worker.drain.pipe(Effect.andThen(Deferred.succeed(drained, undefined))),
+          );
+          yield* Deferred.succeed(releaseFirst, undefined);
+          yield* Deferred.await(heldStarted);
+          expect(yield* Deferred.isDone(drained)).toBe(false);
+          expect(batches).toEqual([["first"], ["failure", "defect", "held"]]);
+
+          yield* Deferred.succeed(releaseHeld, undefined);
+          yield* Deferred.await(drained);
+          expect(batches).toEqual([["first"], ["failure", "defect", "held"], ["last"]]);
+          expect(attempted).toEqual([
+            ["first", 0],
+            ["failure", 0],
+            ["defect", 1],
+            ["held", 2],
+            ["last", 0],
+          ]);
+          expect(
+            logs.messages.filter((message) => message.includes("drainable worker item failed")),
+          ).toHaveLength(2);
+        }),
+      ).pipe(Effect.provide(logs.layer));
+    },
+  );
+
   it.live("waits for work enqueued during active processing before draining", () =>
     Effect.scoped(
       Effect.gen(function* () {
